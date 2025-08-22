@@ -1,11 +1,8 @@
 import sys
 import win32api
-import win32con
-import win32gui
-import win32print
 from PySide6.QtWidgets import QApplication, QLabel
 from PySide6.QtCore import Qt, QTimer, QPoint
-from PySide6.QtGui import QPalette, QFont, QColor
+from PySide6.QtGui import QPalette, QFont, QColor, QGuiApplication
 
 class Cursor_Position(QLabel):
     def __init__(self):
@@ -38,26 +35,26 @@ class Cursor_Position(QLabel):
         self.setVisible(True)
 
 def Print_Screen_Scale():
-    # 获取屏幕的宽度和高度
-    hDC = win32gui.GetDC(0)
-    screen_width = win32print.GetDeviceCaps(hDC, win32con.DESKTOPHORZRES)
-    screen_height = win32print.GetDeviceCaps(hDC, win32con.DESKTOPVERTRES)
-    print(f"屏幕尺寸: {screen_width}x{screen_height}")
-    # 获取逻辑的宽度和高度
-    logical_width = win32api.GetSystemMetrics(win32con.SM_CXVIRTUALSCREEN)
-    logical_height = win32api.GetSystemMetrics(win32con.SM_CYVIRTUALSCREEN)
-    print(f"逻辑尺寸: {logical_width}x{logical_height}")
-    # 计算缩放比例
+    """打印屏幕信息（多显示器友好）。"""
+    screen = QGuiApplication.primaryScreen()
+    if screen is None:
+        raise RuntimeError("No primary screen available")
+    vrect = screen.virtualGeometry()
+    logical_width = int(vrect.width())
+    logical_height = int(vrect.height())
+    print(f"逻辑尺寸(虚拟桌面): {logical_width}x{logical_height}")
+
+    dpi_x = float(getattr(screen, "logicalDotsPerInchX", lambda: screen.logicalDotsPerInch())())
+    dpi_y = float(getattr(screen, "logicalDotsPerInchY", lambda: screen.logicalDotsPerInch())())
+
     global scale_x, scale_y
-    scale_x = screen_width / logical_width
-    scale_y = screen_height / logical_height
-    print(f"屏幕缩放比例: {scale_x}, {scale_y}")
+    scale_x = dpi_x / 96.0 if dpi_x else 1.0
+    scale_y = dpi_y / 96.0 if dpi_y else 1.0
+    print(f"主屏缩放比例: {scale_x:.2f}, {scale_y:.2f}")
 
 if __name__ == "__main__":
-
-    Print_Screen_Scale()
-
     app = QApplication(sys.argv)
+    Print_Screen_Scale()
     window = Cursor_Position()
     window.setWindowTitle("Cursor Position Follower")
     window.show()

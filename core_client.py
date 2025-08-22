@@ -54,8 +54,6 @@ async def main_mic():
     Cosmic.queue_in = asyncio.Queue()
     Cosmic.queue_out = asyncio.Queue()
 
-    show_mic_tips()
-
     # 打开音频流
     Cosmic.stream = stream_open()
 

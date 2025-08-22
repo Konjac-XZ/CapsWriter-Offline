@@ -1,8 +1,17 @@
-/* Global: pure black background, white text, and Segoe UI font */
+/*
+ Global: pure black background, white text.
+ Force a CN‑first CJK font stack to avoid JP glyph fallbacks on Windows.
+ Order matters: Qt will pick the first available family for rendering.
+*/
 QWidget {{
     background-color: #000000;
     color: #FFFFFF;
-    font-family: "Segoe UI";
+    /* Prefer Simplified Chinese fonts to ensure CN glyph shapes for CJK */
+    font-family: "Microsoft YaHei UI", "Microsoft YaHei",
+                 "Noto Sans CJK SC", "Noto Sans SC",
+                 "Source Han Sans SC", "PingFang SC",
+                 SimSun,
+                 "Segoe UI"; /* fallback for Latin UI glyphs */
 }}
 
 /* Buttons use MDL2 icon font for icons; keep transparent background */
@@ -27,10 +36,22 @@ QTextEdit {{
     color: #FFFFFF;
     border: none;
     padding: 0px;
+    /* Ensure editor inherits Chinese-preferred font stack */
+    font-family: "Microsoft YaHei UI", "Microsoft YaHei",
+                 "Noto Sans CJK SC", "Noto Sans SC",
+                 "Source Han Sans SC", "PingFang SC",
+                 SimSun,
+                 "Segoe UI";
 }}
 
 /* Labels: white text; keep default Segoe UI from QWidget */
 QLabel {{
     color: #FFFFFF;
     font-size: 14px;
+    /* Ensure labels also use the CN-first font preference */
+    font-family: "Microsoft YaHei UI", "Microsoft YaHei",
+                 "Noto Sans CJK SC", "Noto Sans SC",
+                 "Source Han Sans SC", "PingFang SC",
+                 SimSun,
+                 "Segoe UI";
 }}

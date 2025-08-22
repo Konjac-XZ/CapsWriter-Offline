@@ -13,8 +13,8 @@ import win32api
 import win32con
 import win32gui
 import win32print
-from PySide6.QtCore import QPoint, Qt, QTimer
-from PySide6.QtGui import QAction, QFont, QIcon, QWheelEvent
+from PySide6.QtCore import QPoint, Qt, QTimer, QLocale
+from PySide6.QtGui import QAction, QFont, QIcon, QWheelEvent, QFontDatabase
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -100,6 +100,29 @@ class GUI(QMainWindow):
         # Set the central widget
         self.setCentralWidget(central_widget)
         self.clear_text_box()
+
+    def _preferred_cn_font_family() -> str:
+        """Return a CN-first font family available on this system.
+
+        Prioritizes common Simplified Chinese UI fonts to avoid JP glyph fallbacks.
+        """
+        preferred = [
+            "Microsoft YaHei UI",
+            "Microsoft YaHei",
+            "Noto Sans CJK SC",
+            "Noto Sans SC",
+            "Source Han Sans SC",
+            "PingFang SC",
+            "SimSun",
+        ]
+        try:
+            families = set(QFontDatabase.families())
+            for name in preferred:
+                if name in families:
+                    return name
+        except Exception:
+            pass
+        return "Microsoft YaHei UI"
 
     def create_custom_title_bar(self):
         # 创建自定义标题栏
@@ -606,7 +629,6 @@ class GUI(QMainWindow):
 
 
 def start_client_gui():
-    Print_Screen_Scale()
     if Config.only_run_once and check_process("pythonw_CapsWriter_Client.exe"):
         raise Exception(
             "已经有一个客户端在运行了！（用户配置了 只允许运行一次，禁止多开；而且检测到 pythonw_CapsWriter_Client.exe 进程已在运行。如果你确定需要启动多个客户端同时运行，请先修改 config.py  class ClientConfig:  Only_run_once = False 。）"
@@ -621,9 +643,14 @@ def start_client_gui():
             ["hint_while_recording.exe"], creationflags=subprocess.CREATE_NO_WINDOW
         )
     app = QApplication(sys.argv)
+    # Force CN locale to influence font fallback toward Simplified Chinese glyphs
+    try:
+        QLocale.setDefault(QLocale(QLocale.Chinese, QLocale.China))
+    except Exception:
+        pass
     # Set global font to Segoe UI with anti-aliasing and full hinting
     try:
-        app_font = QFont("Segoe UI")
+        app_font = QFont(_preferred_cn_font_family())
         # Prefer anti-aliased rendering
         if hasattr(QFont, "StyleStrategy") and hasattr(QFont.StyleStrategy, "PreferAntialias"):
             app_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
@@ -649,6 +676,12 @@ def start_client_gui():
     apply_stylesheet(
         app, theme="dark_teal.xml", css_file="util\\client_gui_theme_custom.css"
     )
+    # Print screen info after Qt app is initialized (accurate in multi-monitor setups)
+    try:
+        Print_Screen_Scale()
+    except Exception as e:
+        # Don't block startup if printing screen info fails
+        print(f"Print_Screen_Scale error: {e}")
     global gui
     gui = GUI()
     if not Config.shrink_automatically_to_tray:
@@ -657,20 +690,46 @@ def start_client_gui():
 
 
 def Print_Screen_Scale():
-    # 获取屏幕的宽度和高度
-    hDC = win32gui.GetDC(0)
-    screen_width = win32print.GetDeviceCaps(hDC, win32con.DESKTOPHORZRES)
-    screen_height = win32print.GetDeviceCaps(hDC, win32con.DESKTOPVERTRES)
-    print(f"屏幕尺寸: {screen_width}x{screen_height}")
-    # 获取逻辑的宽度和高度
-    logical_width = win32api.GetSystemMetrics(win32con.SM_CXVIRTUALSCREEN)
-    logical_height = win32api.GetSystemMetrics(win32con.SM_CYVIRTUALSCREEN)
-    print(f"逻辑尺寸: {logical_width}x{logical_height}")
-    # 计算缩放比例
+    """打印多显示器场景下更准确的屏幕信息。
+
+    - 逻辑尺寸: 使用 Qt 的 virtualGeometry 获取整个虚拟桌面的逻辑像素尺寸。
+    - 缩放比例: 使用主屏的逻辑 DPI 推导缩放比例（dpi/96）。
+    注：当多显示器缩放不同步时，仅报告主屏缩放比例，避免将“总物理像素/总逻辑像素”误判为缩放。
+    """
+    from PySide6.QtGui import QGuiApplication
+
+    screen = QGuiApplication.primaryScreen()
+    if screen is None:
+        raise RuntimeError("No primary screen available")
+
+    # 虚拟桌面的逻辑像素尺寸（包含所有扩展显示器）
+    vrect = screen.virtualGeometry()
+    logical_width = int(vrect.width())
+    logical_height = int(vrect.height())
+    print(f"逻辑尺寸(虚拟桌面): {logical_width}x{logical_height}")
+
+    # 主屏缩放比例，基于逻辑 DPI（96 DPI 视为 100%）
+    dpi_x = float(getattr(screen, "logicalDotsPerInchX", lambda: screen.logicalDotsPerInch())())
+    dpi_y = float(getattr(screen, "logicalDotsPerInchY", lambda: screen.logicalDotsPerInch())())
+
     global scale_x, scale_y
-    scale_x = screen_width / logical_width
-    scale_y = screen_height / logical_height
-    print(f"屏幕缩放比例: {scale_x}, {scale_y}")
+    scale_x = dpi_x / 96.0 if dpi_x else 1.0
+    scale_y = dpi_y / 96.0 if dpi_y else 1.0
+    print(f"主屏缩放比例: {scale_x:.2f}, {scale_y:.2f}")
+
+    # 估算物理像素尺寸（按主屏缩放比例，仅作参考）
+    est_physical_w = int(round(logical_width * scale_x))
+    est_physical_h = int(round(logical_height * scale_y))
+    print(f"估算虚拟桌面物理像素(按主屏缩放): {est_physical_w}x{est_physical_h}")
+
+    # Fallback: 若需要原生 Win32 值，可在调试时取消注释
+    # hDC = win32gui.GetDC(0)
+    # try:
+    #     desktop_w = win32print.GetDeviceCaps(hDC, win32con.DESKTOPHORZRES)
+    #     desktop_h = win32print.GetDeviceCaps(hDC, win32con.DESKTOPVERTRES)
+    #     print(f"原生桌面像素(供参考): {desktop_w}x{desktop_h}")
+    # finally:
+    #     win32gui.ReleaseDC(0, hDC)
 
 
 def read_file_list(file_list_path: Path):
