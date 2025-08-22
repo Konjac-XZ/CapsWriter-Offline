@@ -370,29 +370,27 @@ async def send_audio():
                     except Exception:
                         pass
 
+                    # 在重试前，销毁并重建持久连接，防止复用已失效的连接
+                    if attempt > 0:
+                        try:
+                            await _close_http_client(reason=f"retry-recreate:{attempt}")
+                        except Exception:
+                            pass
+
+                    # 使用持久化全局客户端进行请求
+                    client = await _get_http_client()
+
                     # 尝试顺序：
-                    #   1) 按用户偏好：stream + http2 (使用全局客户端)
-                    #   2) stream + http1 (一次性客户端)
-                    #   3) 非流式 + http1 (一次性客户端)
+                    #   1) 首次优先按用户偏好使用流式
+                    #   2) 第二次仍尝试流式
+                    #   3) 第三次改为非流式
                     attempt_stream = enable_stream_pref if attempt == 0 else (enable_stream_pref and (attempt == 1))
-                    use_http2 = _HTTP2_ENABLED if attempt == 0 else False
 
                     data_form = dict(data_form_base)
                     if attempt_stream:
                         data_form["stream"] = "true"
 
                     files = {"file": (fname, payload_buf, payload_mime)}
-
-                    # 选择客户端
-                    if attempt == 0:
-                        client = await _get_http_client()
-                        close_client = False  # persistent global client
-                    else:
-                        # 临时客户端（HTTP/1.1）避免污染全局
-                        headers = _build_headers()
-                        limits = _build_limits()
-                        client = httpx.AsyncClient(timeout=httpx.Timeout(120.0), headers=headers, http2=use_http2, limits=limits)
-                        close_client = True
 
                     err_text = None
                     try:
@@ -491,31 +489,20 @@ async def send_audio():
                                     text_result = text_result[1:-1]
 
                         # 成功，跳出重试循环
-                        if close_client:
-                            try:
-                                await client.aclose()
-                            except Exception:
-                                pass
                         break
                     except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.ConnectError, httpx.RemoteProtocolError, httpx.HTTPError, OSError) as e:
                         # 连接中断/HTTP2 终止/超时等，执行指数退避重试
                         t_complete = time.time()
                         msg = err_text or str(e)
                         console.print(
-                            f"网络异常（第 {attempt + 1}/{max_retries} 次）：{msg} | http2={use_http2} | stream={attempt_stream}",
+                            f"网络异常（第 {attempt + 1}/{max_retries} 次）：{msg} | http2={_HTTP2_ENABLED} | stream={attempt_stream}",
                             style="bright_yellow",
                         )
-                        # 如果是使用持久化客户端（attempt==0），认为连接已不可用，关闭以触发下次重建
-                        if attempt == 0 and not close_client:
-                            try:
-                                await _close_http_client(reason=f"error:{e.__class__.__name__}")
-                            except Exception:
-                                pass
-                        if close_client:
-                            try:
-                                await client.aclose()
-                            except Exception:
-                                pass
+                        # 认为当前持久化连接已不可用，立即销毁，下一轮会重建
+                        try:
+                            await _close_http_client(reason=f"error:{e.__class__.__name__}")
+                        except Exception:
+                            pass
                         if attempt + 1 >= max_retries:
                             # 最终失败
                             console.print("已达到最大重试次数，返回当前结果（可能为空）", style="bright_red")
