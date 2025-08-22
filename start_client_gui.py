@@ -40,28 +40,13 @@ from util.config import ClientConfig as Config
 class Hint_While_Recording_At_Cursor_Position(QLabel):
     def __init__(self):
         super().__init__()
+    # Ensure MDL2 icon font for glyph rendering
+        self.setFont(QFont("Segoe MDL2 Assets"))
         self.setWindowFlags(
             Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
         )
         self.setVisible(False)  # 初始时隐藏标签
 
-        # 创建一个定时器来定期更新鼠标位置
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_tooltip_position)
-        self.timer.start(100)  # 每100毫秒更新一次
-
-    def update_tooltip_position(self):
-        # 使用pywin32获取全局鼠标位置
-        x, y = win32api.GetCursorPos()
-        global scale_x, scale_y
-        x, y = x / scale_x, y / scale_y
-        # 更新标签的位置和文本
-        self.move(x + (20 / scale_x), y + (20 / scale_y))
-        if is_microphone_in_use():
-            self.setText(chr(0xF8B1))
-            self.setVisible(True)
-        else:
-            self.setVisible(False)
 
 
 class GUI(QMainWindow):
@@ -78,7 +63,7 @@ class GUI(QMainWindow):
         self.resize(425, 425)
         self.setWindowTitle("CapsWriter-Offline-Client")
         self.setWindowIcon(QIcon("assets/client-icon.ico"))
-        self.setWindowOpacity(0.9)
+        self.setWindowOpacity(1.0)
         self.setWindowFlags(
             self.windowFlags()
             | Qt.FramelessWindowHint  # 隐藏标题栏
@@ -90,9 +75,6 @@ class GUI(QMainWindow):
         self.create_close_button()
         self.create_custom_title_bar()
         self.create_text_box()
-        self.create_monitor_checkbox()  # Create monitor checkbox
-        # self.create_stay_on_top_checkbox()
-        self.create_wordcount_label()
         self.create_systray_icon()
 
         # Create a vertical layout
@@ -106,12 +88,10 @@ class GUI(QMainWindow):
         # Add text box and button to the layout
         self.layout.addLayout(self.title_bar)
         self.layout.addWidget(self.text_box_client)
-        self.layout2.addWidget(self.monitor_checkbox, alignment=Qt.AlignLeft)
         # self.layout2.addWidget(self.stay_on_top_checkbox, alignment=Qt.AlignLeft)
         self.layout2.addSpacerItem(
             QSpacerItem(40, 0, QSizePolicy.Expanding, QSizePolicy.Minimum)
         )
-        self.layout2.addWidget(self.text_box_wordCountLabel, alignment=Qt.AlignRight)
         self.layout.addLayout(self.layout2)
 
         # Create a central widget
@@ -119,6 +99,7 @@ class GUI(QMainWindow):
         central_widget.setLayout(self.layout)
         # Set the central widget
         self.setCentralWidget(central_widget)
+        self.clear_text_box()
 
     def create_custom_title_bar(self):
         # 创建自定义标题栏
@@ -522,14 +503,8 @@ class GUI(QMainWindow):
 
     def enterEvent(self, event):
         super().enterEvent(event)
-        for i in range(self.title_bar.count()):  # 鼠标进入时显示标题栏
-            widget = self.title_bar.itemAt(i).widget()
-            if widget is not None:
-                widget.setVisible(True)
-        for i in range(self.layout2.count()):  # 鼠标进入时显示操作栏
-            widget = self.layout2.itemAt(i).widget()
-            if widget is not None:
-                widget.setVisible(True)
+    # Keep title bar and action bar visible permanently (no flicker on mouse enter)
+    # Widgets are created visible by default; do not toggle visibility here.
         x, y, width, height, screenWidth, screenHeight = self.checkWindowInfo()
         if self.isBerthLeft:  # 已停靠在左边
             self.move(0, y)  # 从左边弹出，31是标题栏高度
@@ -543,14 +518,8 @@ class GUI(QMainWindow):
 
     def leaveEvent(self, event):
         super().leaveEvent(event)
-        for i in range(self.title_bar.count()):  # 鼠标离开时隐藏标题栏
-            widget = self.title_bar.itemAt(i).widget()
-            if widget is not None:
-                widget.setVisible(False)
-        for i in range(self.layout2.count()):  # 鼠标离开时隐藏操作栏
-            widget = self.layout2.itemAt(i).widget()
-            if widget is not None:
-                widget.setVisible(False)
+    # Keep title bar and action bar visible permanently (no flicker on mouse leave)
+    # Do not toggle widget visibility here.
         x, y, width, height, screenWidth, screenHeight = self.checkWindowInfo()
         # print(f"左右，高低，宽，高，屏宽，屏高: {(x, y, width, height, screenWidth, screenHeight)}")
         if self.isActiveWindow():  # 窗口活跃状态，用户点击了窗口，则不恢复继续停靠
@@ -652,8 +621,30 @@ def start_client_gui():
             ["hint_while_recording.exe"], creationflags=subprocess.CREATE_NO_WINDOW
         )
     app = QApplication(sys.argv)
+    # Set global font to Segoe UI with anti-aliasing and full hinting
+    try:
+        app_font = QFont("Segoe UI")
+        # Prefer anti-aliased rendering
+        if hasattr(QFont, "StyleStrategy") and hasattr(QFont.StyleStrategy, "PreferAntialias"):
+            app_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+        elif hasattr(QFont, "PreferAntialias"):
+            app_font.setStyleStrategy(QFont.PreferAntialias)
+        # Prefer full hinting if available
+        if hasattr(QFont, "HintingPreference") and hasattr(QFont.HintingPreference, "PreferFullHinting"):
+            app_font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
+        elif hasattr(QFont, "PreferFullHinting"):
+            app_font.setHintingPreference(QFont.PreferFullHinting)
+        app.setFont(app_font)
+    except Exception as e:
+        print(f"Error setting app font: {e}")
+        pass
     if Config.hint_while_recording_at_cursor_position:
         tooltip = Hint_While_Recording_At_Cursor_Position()
+        # Ensure icon glyph renders using MDL2 font regardless of global font
+        try:
+            tooltip.setFont(QFont("Segoe MDL2 Assets"))
+        except Exception:
+            pass
         tooltip.show()
     apply_stylesheet(
         app, theme="dark_teal.xml", css_file="util\\client_gui_theme_custom.css"

@@ -1,24 +1,36 @@
+/* Global: pure black background, white text, and Segoe UI font */
+QWidget {{
+    background-color: #000000;
+    color: #FFFFFF;
+    font-family: "Segoe UI";
+}}
+
+/* Buttons use MDL2 icon font for icons; keep transparent background */
 QPushButton {{
     font-family: "Segoe MDL2 Assets";
-    color: {QTMATERIAL_PRIMARYCOLOR};
+    color: #FFFFFF;
     text-transform: none;
     height: 25px;
     border: none;
     background-color: transparent;
-  }}
+}}
 
+/* Checkbox text in white */
 QCheckBox {{
-    color: {QTMATERIAL_PRIMARYCOLOR};
+    color: #FFFFFF;
     height: 25px;
 }}
 
+/* Editor: black background, white text */
 QTextEdit {{
+    background-color: #000000;
+    color: #FFFFFF;
     border: none;
     padding: 0px;
 }}
 
+/* Labels: white text; keep default Segoe UI from QWidget */
 QLabel {{
-    font-family: "Segoe MDL2 Assets";
-    color: {QTMATERIAL_PRIMARYCOLOR};
+    color: #FFFFFF;
     font-size: 14px;
 }}
