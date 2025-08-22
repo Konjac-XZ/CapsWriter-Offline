@@ -74,6 +74,20 @@ def _streaming_enabled() -> bool:
     return os.getenv("OPENAI_TRANSCRIBE_STREAM", "1").strip() not in ("0", "false", "False")
 
 
+def _ffmpeg_path() -> str | None:
+    return shutil.which("ffmpeg")
+
+
+def _ffmpeg_processing_enabled() -> bool:
+    # Whether to let ffmpeg handle resampling and mono fold-down when available
+    return os.getenv("OPENAI_TRANSCRIBE_FFMPEG_PROCESS", "1").strip() not in ("0", "false", "False")
+
+
+def _prefer_ffmpeg_for_wav() -> bool:
+    # If true, use ffmpeg for WAV generation too (for better resample/mix); fallback to Python WAV if ffmpeg fails
+    return os.getenv("OPENAI_TRANSCRIBE_FFMPEG_WAV", "1").strip() not in ("0", "false", "False")
+
+
 # 全局可复用 HTTP 客户端，启用 keep-alive/可选 HTTP/2，减少重复握手
 _HTTP_CLIENT: httpx.AsyncClient | None = None
 _HTTP2_ENABLED: bool = False
@@ -178,387 +192,390 @@ def _atexit_close_client():
 atexit.register(_atexit_close_client)
 
 
+def _build_wav_buf_from_pcm(pcm: bytes, channels: int, sr: int) -> io.BytesIO:
+    """Encode raw PCM (s16le) bytes into a WAV buffer and return a seeked BytesIO."""
+    wav_buf = io.BytesIO()
+    with wave.open(wav_buf, "wb") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        wf.writeframes(pcm)
+    wav_buf.seek(0)
+    return wav_buf
+
+
+async def _make_audio_payload(audio_concat: np.ndarray, actual_sr: int) -> tuple[io.BytesIO, str, float, int, int]:
+    """Create upload payload from float32 audio [-1,1].
+
+    Prefers ffmpeg with float32 input for resample + mono fold-down and encoding (MP3 or WAV).
+    Falls back to Python WAV writer with safe clipping.
+
+    Returns (buffer, mime, elapsed_ms, payload_sample_rate, payload_channels).
+    """
+    t_start = time.time()
+    in_channels = int(audio_concat.shape[1]) if audio_concat.ndim == 2 else 1
+
+    ffmpeg = _ffmpeg_path()
+    target_sr = _get_target_sample_rate()
+    want_mono = _force_mono()
+    out_channels = 1 if want_mono else in_channels
+
+    # If we can, let ffmpeg do both resampling and fold-down from float32
+    prefer_ffmpeg = ffmpeg is not None and _ffmpeg_processing_enabled()
+
+    if _use_mp3_upload() and ffmpeg is not None:
+        try:
+            # Prepare float32 little-endian stream for ffmpeg input
+            # Sanitize first to avoid NaN/Inf propagating
+            np.nan_to_num(audio_concat, copy=False, nan=0.0, posinf=1.0, neginf=-1.0)
+            f32 = np.clip(audio_concat, -1.0, 1.0).astype(np.float32, copy=False).tobytes()
+            args = [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel", "error",
+                "-f", "f32le",
+                "-ar", str(48000),  # input stream SR (capture is 48k)
+                "-ac", str(in_channels),
+                "-i", "pipe:0",
+                "-vn",
+                "-ac", str(out_channels),
+                "-ar", str(target_sr),
+                "-c:a", "libmp3lame",
+                "-b:a", _mp3_bitrate(),
+                "-f", "mp3",
+                "pipe:1",
+            ]
+            flags = sp.CREATE_NO_WINDOW if hasattr(sp, "CREATE_NO_WINDOW") else 0
+            proc = await asp.create_subprocess_exec(
+                *args, stdin=PIPE, stdout=PIPE, stderr=PIPE, creationflags=flags
+            )
+            stdout, stderr = await proc.communicate(input=f32)
+            if proc.returncode == 0 and stdout:
+                elapsed = (time.time() - t_start) * 1000.0
+                return io.BytesIO(stdout), "audio/mpeg", elapsed, int(target_sr), int(out_channels)
+            # fallthrough if encoder fails
+        except Exception:
+            pass
+
+    # Try WAV via ffmpeg if preferred and available
+    if ffmpeg is not None and prefer_ffmpeg and _prefer_ffmpeg_for_wav():
+        try:
+            np.nan_to_num(audio_concat, copy=False, nan=0.0, posinf=1.0, neginf=-1.0)
+            f32 = np.clip(audio_concat, -1.0, 1.0).astype(np.float32, copy=False).tobytes()
+            args = [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel", "error",
+                "-f", "f32le",
+                "-ar", str(48000),
+                "-ac", str(in_channels),
+                "-i", "pipe:0",
+                "-vn",
+                "-ac", str(out_channels),
+                "-ar", str(target_sr),
+                "-c:a", "pcm_s16le",
+                "-f", "wav",
+                "pipe:1",
+            ]
+            flags = sp.CREATE_NO_WINDOW if hasattr(sp, "CREATE_NO_WINDOW") else 0
+            proc = await asp.create_subprocess_exec(
+                *args, stdin=PIPE, stdout=PIPE, stderr=PIPE, creationflags=flags
+            )
+            stdout, stderr = await proc.communicate(input=f32)
+            if proc.returncode == 0 and stdout:
+                elapsed = (time.time() - t_start) * 1000.0
+                return io.BytesIO(stdout), "audio/wav", elapsed, int(target_sr), int(out_channels)
+        except Exception:
+            pass
+
+    # Final fallback: write WAV in Python using s16le; do safe clipping and keep given SR/channels
+    np.nan_to_num(audio_concat, copy=False, nan=0.0, posinf=1.0, neginf=-1.0)
+    f32_clamped = np.clip(audio_concat, -1.0, 1.0)
+    pcm = (f32_clamped * (2 ** 15 - 1)).astype(np.int16).tobytes()
+    wav_buf = _build_wav_buf_from_pcm(pcm, in_channels, actual_sr)
+    elapsed = (time.time() - t_start) * 1000.0
+    return wav_buf, "audio/wav", elapsed, int(actual_sr), int(in_channels)
+
+
+def _preprocess_audio(audio_concat: np.ndarray) -> tuple[np.ndarray, int]:
+    """Apply optional mono downmix and downsampling.
+
+    Returns processed audio and the actual sample rate used.
+    """
+    if audio_concat.ndim == 1:
+        audio_concat = audio_concat.reshape(-1, 1)
+
+    # If we'll let ffmpeg handle resampling and mono, avoid altering the signal here
+    if _ffmpeg_path() is not None and _ffmpeg_processing_enabled():
+        return audio_concat, 48000
+
+    # Otherwise: light-weight safe processing in Python
+    # Optional mono fold-down by average (utility-grade)
+    if _force_mono() and audio_concat.shape[1] > 1:
+        audio_concat = audio_concat.mean(axis=1, keepdims=True)
+
+    # Gate decimation: only when exact integer ratio and small factors to reduce aliasing risk
+    target_sr = _get_target_sample_rate()
+    if target_sr not in (48000, 44100, 32000, 24000, 16000):
+        target_sr = 48000
+    if target_sr != 48000 and (48000 % target_sr == 0):
+        step = 48000 // target_sr
+        if step in (2, 3):
+            audio_concat = audio_concat[::step, :]
+            actual_sr = target_sr
+            return audio_concat, actual_sr
+
+    # Default: keep original SR to avoid bad resampling
+    return audio_concat, 48000
+
+
+async def _emit_partial_update(task_id: str, new_text: str, time_start: float, record_stop: float, t_submit: float):
+    """Emit a partial transcription update to the outbound queue."""
+    await Cosmic.queue_out.put(
+        {
+            "task_id": task_id,
+            "is_final": False,
+            "text": new_text,
+            "time_start": time_start,
+            "time_stop": record_stop,
+            "time_submit": t_submit,
+            "time_complete": time.time(),
+            "source": "mic",
+            "stream": True,
+        }
+    )
+
+
+async def _sse_transcribe(
+    client: httpx.AsyncClient,
+    url: str,
+    data_form: dict,
+    files: dict,
+    task_id: str,
+    time_start: float,
+    record_stop: float,
+) -> tuple[str, int, float]:
+    """Perform streaming transcription and emit partial updates.
+
+    Returns (final_text, status_code, t_complete).
+    """
+    t_submit = time.time()
+    current_text = ""
+    last_emit = 0.0
+    status_code = 0
+    async with client.stream("POST", url, data=data_form, files=files) as resp:
+        status_code = resp.status_code
+        if status_code >= 400:
+            body = await resp.aread()
+            try:
+                err_text = body.decode("utf-8", errors="ignore")
+            except Exception:
+                err_text = str(body)
+            raise httpx.HTTPStatusError("非成功状态码", request=resp.request, response=resp)
+        async for line in resp.aiter_lines():
+            if not line:
+                continue
+            s = line.strip()
+            if s.startswith(":"):
+                continue
+            if s.startswith("data:"):
+                s = s[5:].strip()
+            if s in ("[DONE]", "DONE"):
+                break
+            new_text = None
+            try:
+                obj = json.loads(s)
+                if isinstance(obj, dict):
+                    if "delta" in obj and isinstance(obj["delta"], str):
+                        current_text += obj["delta"]
+                        new_text = current_text
+                    elif "text" in obj and isinstance(obj["text"], str):
+                        current_text = obj["text"]
+                        new_text = current_text
+                    elif "choices" in obj:
+                        try:
+                            delta = obj["choices"][0]["delta"].get("content")
+                            if isinstance(delta, str):
+                                current_text += delta
+                                new_text = current_text
+                        except Exception:
+                            pass
+                elif isinstance(obj, str):
+                    current_text = obj
+                    new_text = current_text
+            except Exception:
+                current_text += s
+                new_text = current_text
+
+            now = time.time()
+            if new_text is not None and (now - last_emit >= 0.05) and len(new_text) > 0:
+                last_emit = now
+                await _emit_partial_update(task_id, new_text, time_start, record_stop, t_submit)
+
+    t_complete = time.time()
+    return current_text, status_code, t_complete
+
+
+async def _nonstream_transcribe(
+    client: httpx.AsyncClient,
+    url: str,
+    data_form: dict,
+    files: dict,
+) -> tuple[str, int, float, str | None]:
+    """Perform non-streaming transcription. Returns (text, status_code, t_complete, err_text)."""
+    resp = await client.post(url, data=data_form, files=files)
+    t_complete = time.time()
+    status_code = resp.status_code
+    if resp.status_code >= 500 or resp.status_code in (408, 429):
+        return "", status_code, t_complete, resp.text
+    if resp.status_code >= 400:
+        console.print(f"服务响应错误：{resp.status_code} {resp.text}", style="bright_red")
+        return "", status_code, t_complete, None
+    text_result = resp.text
+    if len(text_result) >= 2 and text_result.startswith("\"") and text_result.endswith("\""):
+        text_result = text_result[1:-1]
+    return text_result, status_code, t_complete, None
+
+
+async def _transcribe_with_retries(
+    payload_buf: io.BytesIO,
+    payload_mime: str,
+    data_form_base: dict,
+    url: str,
+    enable_stream_pref: bool,
+    task_id: str,
+    time_start: float,
+    record_stop: float,
+    max_retries: int,
+    base_delay: float,
+) -> tuple[str, int, float, float]:
+    """Retry wrapper that recreates the persistent client before each retry.
+
+    Returns (text_result, status_code, t_submit, t_complete).
+    """
+    fname = "mic.mp3" if payload_mime == "audio/mpeg" else "mic.wav"
+    text_result = ""
+    status_code = 0
+    t_submit = time.time()
+    t_complete = t_submit
+
+    for attempt in range(max_retries):
+        try:
+            payload_buf.seek(0)
+        except Exception:
+            pass
+
+        if attempt > 0:
+            try:
+                await _close_http_client(reason=f"retry-recreate:{attempt}")
+            except Exception:
+                pass
+
+        client = await _get_http_client()
+
+        attempt_stream = enable_stream_pref if attempt == 0 else (enable_stream_pref and (attempt == 1))
+        data_form = dict(data_form_base)
+        if attempt_stream:
+            data_form["stream"] = "true"
+        files = {"file": (fname, payload_buf, payload_mime)}
+
+        err_text = None
+        try:
+            t_submit = time.time()
+            if attempt_stream:
+                text_result, status_code, t_complete = await _sse_transcribe(
+                    client, url, data_form, files, task_id, time_start, record_stop
+                )
+            else:
+                text_result, status_code, t_complete, err_text = await _nonstream_transcribe(
+                    client, url, data_form, files
+                )
+                if status_code >= 500 or status_code in (408, 429):
+                    raise httpx.HTTPStatusError("服务暂时不可用", request=None, response=None)
+            break
+        except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.ConnectError, httpx.RemoteProtocolError, httpx.HTTPError, OSError) as e:
+            t_complete = time.time()
+            msg = err_text or str(e)
+            console.print(
+                f"网络异常（第 {attempt + 1}/{max_retries} 次）：{msg} | http2={_HTTP2_ENABLED} | stream={attempt_stream}",
+                style="bright_yellow",
+            )
+            try:
+                await _close_http_client(reason=f"error:{e.__class__.__name__}")
+            except Exception:
+                pass
+            if attempt + 1 >= max_retries:
+                console.print("已达到最大重试次数，返回当前结果（可能为空）", style="bright_red")
+                break
+            delay = base_delay * (2 ** attempt) + random.uniform(0.0, 0.1)
+            await asyncio.sleep(delay)
+
+    return text_result, status_code, t_submit, t_complete
+
+
+async def _gather_audio_once(task_id: str) -> tuple[np.ndarray, float, float, float, float, str | None]:
+    """Read from queue until finish or cancel, write file if enabled, and assemble audio.
+
+    Returns (audio_concat, duration, time_start, record_stop, t_finish_entry, cancel_reason). If canceled, audio is empty and
+    record_stop may be current time, and cancel_reason is non-None ("cancel").
+    """
+    time_start = 0.0
+    cache: list[np.ndarray] = []
+    all_data: list[np.ndarray] = []
+    duration = 0.0
+    file_path, file = "", None
+
+    while task := await Cosmic.queue_in.get():
+        Cosmic.queue_in.task_done()
+        ttype = task.get("type")
+        if ttype == "begin":
+            time_start = task["time"]
+        elif ttype == "data":
+            if task["time"] - time_start < Config.threshold:
+                cache.append(task["data"])
+                continue
+            if Config.save_audio and not file_path:
+                file_path, file = create_file(task["data"].shape[1], time_start)
+                Cosmic.audio_files[task_id] = file_path
+            if cache:
+                data = np.concatenate(cache)
+                cache.clear()
+            else:
+                data = task["data"]
+            all_data.append(data.copy())
+            duration += len(data) / 48000
+            if Config.save_audio:
+                write_file(file, data)
+        elif ttype == "finish":
+            record_stop = task.get("time", time.time())
+            t_finish_entry = time.time()
+            if Config.save_audio:
+                finish_file(file)
+            if all_data:
+                audio_concat = np.concatenate(all_data)
+            else:
+                audio_concat = np.zeros((0, 1), dtype=np.float32)
+            return audio_concat, duration, time_start, record_stop, t_finish_entry, None
+        elif ttype == "cancel":
+            # no audio to upload; caller will emit blank result
+            now = time.time()
+            return np.zeros((0, 1), dtype=np.float32), duration, time_start, now, now, "cancel"
+
+    # Shouldn't reach here normally
+    now = time.time()
+    return np.zeros((0, 1), dtype=np.float32), duration, time_start, now, now, "cancel"
+
+
 async def send_audio():
     try:
-        # 生成唯一任务 ID
         task_id = str(uuid.uuid1())
+        # Gather audio once (until finish or cancel)
+        audio_concat, duration, time_start, record_stop, t_finish_entry, cancel_reason = await _gather_audio_once(task_id)
 
-        # 任务起始时间
-        time_start = 0
-
-        # 音频数据临时存放处
-        cache = []
-        all_data = []  # 用于在结束时组合为完整音频
-        duration = 0
-
-        # 保存音频文件
-        file_path, file = "", None
-
-        # 开始取数据
-        # task: {'type', 'time', 'data'}
-        while task := await Cosmic.queue_in.get():
-            Cosmic.queue_in.task_done()
-            if task["type"] == "begin":
-                time_start = task["time"]
-            elif task["type"] == "data":
-                # 在阈值之前积攒音频数据
-                if task["time"] - time_start < Config.threshold:
-                    cache.append(task["data"])
-                    continue
-
-                # 创建音频文件
-                if Config.save_audio and not file_path:
-                    file_path, file = create_file(task["data"].shape[1], time_start)
-                    Cosmic.audio_files[task_id] = file_path
-
-                # 获取音频数据
-                if cache:
-                    data = np.concatenate(cache)
-                    cache.clear()
-                else:
-                    data = task["data"]
-
-                # 记录用于上传的原始数据
-                all_data.append(data.copy())
-
-                # 保存音频至本地文件
-                duration += len(data) / 48000
-                if Config.save_audio:
-                    write_file(file, data)
-            elif task["type"] == "finish":
-                # 记录收到 finish 消息（键抬起后）的时间点
-                record_stop = task.get("time", time.time())
-                t_finish_entry = time.time()
-                # 完成写入本地文件
-                if Config.save_audio:
-                    finish_file(file)
-
-                console.print(f"任务标识：{task_id}")
-                console.print(f"    录音时长：{duration:.2f}s")
-
-                # 结束时，将累计的数据转为 WAV 临时文件并上传到 OpenAI 兼容端点
-                if all_data:
-                    audio_concat = np.concatenate(all_data)
-                else:
-                    audio_concat = np.zeros((0, 1), dtype=np.float32)
-
-                # 保证 shape 为 (n, channels)
-                if audio_concat.ndim == 1:
-                    audio_concat = audio_concat.reshape(-1, 1)
-
-                # 可选：先转为单声道以减小体积
-                if _force_mono() and audio_concat.shape[1] > 1:
-                    audio_concat = audio_concat.mean(axis=1, keepdims=True)
-
-                # 可选：降采样（48000 -> 16000），减少 3 倍体积
-                target_sr = _get_target_sample_rate()
-                if target_sr not in (48000, 44100, 32000, 24000, 16000):
-                    target_sr = 48000
-                if target_sr != 48000 and (48000 % target_sr == 0):
-                    step = 48000 // target_sr
-                    audio_concat = audio_concat[::step, :]
-                actual_sr = target_sr if target_sr in (48000, 44100, 32000, 24000, 16000) else 48000
-
-                # 构造内存中的 WAV（48000Hz, 16-bit PCM），避免磁盘 I/O
-                # 编码为 MP3（优先）或 WAV（回退）
-                pcm = (audio_concat * (2 ** 15 - 1)).astype(np.int16).tobytes()
-                payload_buf: io.BytesIO
-                payload_mime: str
-                t_prep_start = time.time()
-                encode_ms = 0.0
-                if _use_mp3_upload():
-                    try:
-                        ffmpeg = shutil.which("ffmpeg")
-                        args = [
-                            ffmpeg,
-                            "-hide_banner",
-                            "-loglevel",
-                            "error",
-                            "-f",
-                            "s16le",
-                            "-ar",
-                            str(actual_sr),
-                            "-ac",
-                            str(audio_concat.shape[1]),
-                            "-i",
-                            "pipe:0",
-                            "-vn",
-                            "-c:a",
-                            "libmp3lame",
-                            "-b:a",
-                            _mp3_bitrate(),
-                            "-f",
-                            "mp3",
-                            "pipe:1",
-                        ]
-                        flags = sp.CREATE_NO_WINDOW if hasattr(sp, "CREATE_NO_WINDOW") else 0
-                        proc = await asp.create_subprocess_exec(
-                            *args,
-                            stdin=PIPE,
-                            stdout=PIPE,
-                            stderr=PIPE,
-                            creationflags=flags,
-                        )
-                        stdout, stderr = await proc.communicate(input=pcm)
-                        if proc.returncode == 0 and stdout:
-                            payload_buf = io.BytesIO(stdout)
-                            payload_mime = "audio/mpeg"
-                            encode_ms = (time.time() - t_prep_start) * 1000.0
-                        else:
-                            # 回退 WAV
-                            wav_buf = io.BytesIO()
-                            with wave.open(wav_buf, "wb") as wf:
-                                wf.setnchannels(audio_concat.shape[1])
-                                wf.setsampwidth(2)
-                                wf.setframerate(actual_sr)
-                                wf.writeframes(pcm)
-                            wav_buf.seek(0)
-                            payload_buf = wav_buf
-                            payload_mime = "audio/wav"
-                            encode_ms = (time.time() - t_prep_start) * 1000.0
-                    except Exception:
-                        # 回退 WAV
-                        wav_buf = io.BytesIO()
-                        with wave.open(wav_buf, "wb") as wf:
-                            wf.setnchannels(audio_concat.shape[1])
-                            wf.setsampwidth(2)
-                            wf.setframerate(actual_sr)
-                            wf.writeframes(pcm)
-                        wav_buf.seek(0)
-                        payload_buf = wav_buf
-                        payload_mime = "audio/wav"
-                        encode_ms = (time.time() - t_prep_start) * 1000.0
-                else:
-                    # 直接 WAV
-                    wav_buf = io.BytesIO()
-                    with wave.open(wav_buf, "wb") as wf:
-                        wf.setnchannels(audio_concat.shape[1])
-                        wf.setsampwidth(2)
-                        wf.setframerate(actual_sr)
-                        wf.writeframes(pcm)
-                    wav_buf.seek(0)
-                    payload_buf = wav_buf
-                    payload_mime = "audio/wav"
-                    encode_ms = (time.time() - t_prep_start) * 1000.0
-
-                # 上传（带重试）
-                api_base = _get_api_base()
-                url = f"{api_base}/v1/audio/transcriptions"
-                # 统一在全局客户端中设置 headers
-                data_form_base = {
-                    "model": _get_model(),
-                    "prompt": _get_prompt(),
-                    "response_format": os.getenv("OPENAI_TRANSCRIBE_FORMAT", "text"),
-                    "language": _get_language(),
-                }
-                max_retries = int(os.getenv("OPENAI_TRANSCRIBE_RETRIES", "3"))
-                base_delay = float(os.getenv("OPENAI_TRANSCRIBE_BACKOFF_BASE", "0.5"))
-                enable_stream_pref = _streaming_enabled()
-
-                # 精确记录提交与完成的时间，供延时统计
-                t_presubmit = time.time()
-                fname = "mic.mp3" if payload_mime == "audio/mpeg" else "mic.wav"
-                status_code = 0
-                text_result = ""
-                t_submit = t_presubmit
-                t_complete = t_presubmit
-
-                for attempt in range(max_retries):
-                    # 每次尝试都需重置文件指针
-                    try:
-                        payload_buf.seek(0)
-                    except Exception:
-                        pass
-
-                    # 在重试前，销毁并重建持久连接，防止复用已失效的连接
-                    if attempt > 0:
-                        try:
-                            await _close_http_client(reason=f"retry-recreate:{attempt}")
-                        except Exception:
-                            pass
-
-                    # 使用持久化全局客户端进行请求
-                    client = await _get_http_client()
-
-                    # 尝试顺序：
-                    #   1) 首次优先按用户偏好使用流式
-                    #   2) 第二次仍尝试流式
-                    #   3) 第三次改为非流式
-                    attempt_stream = enable_stream_pref if attempt == 0 else (enable_stream_pref and (attempt == 1))
-
-                    data_form = dict(data_form_base)
-                    if attempt_stream:
-                        data_form["stream"] = "true"
-
-                    files = {"file": (fname, payload_buf, payload_mime)}
-
-                    err_text = None
-                    try:
-                        t_submit = time.time()
-                        if attempt_stream:
-                            # 以流式读取响应（SSE/分行 JSON）
-                            current_text = ""
-                            last_emit = 0.0
-                            async with client.stream("POST", url, data=data_form, files=files) as resp:
-                                status_code = resp.status_code
-                                if status_code >= 400:
-                                    body = await resp.aread()
-                                    try:
-                                        err_text = body.decode("utf-8", errors="ignore")
-                                    except Exception:
-                                        err_text = str(body)
-                                    raise httpx.HTTPStatusError("非成功状态码", request=resp.request, response=resp)
-                                async for line in resp.aiter_lines():
-                                    if not line:
-                                        continue
-                                    s = line.strip()
-                                    if s.startswith(":"):
-                                        # SSE keep-alive
-                                        continue
-                                    if s.startswith("data:"):
-                                        s = s[5:].strip()
-                                    if s in ("[DONE]", "DONE"):
-                                        # 结束
-                                        break
-                                    # 尝试解析 JSON 行；若失败就当作纯文本累加
-                                    new_text = None
-                                    try:
-                                        obj = json.loads(s)
-                                        if isinstance(obj, dict):
-                                            if "delta" in obj and isinstance(obj["delta"], str):
-                                                current_text += obj["delta"]
-                                                new_text = current_text
-                                            elif "text" in obj and isinstance(obj["text"], str):
-                                                current_text = obj["text"]
-                                                new_text = current_text
-                                            elif "choices" in obj:
-                                                # OpenAI-like stream payload with choices[0].delta.content
-                                                try:
-                                                    delta = obj["choices"][0]["delta"].get("content")
-                                                    if isinstance(delta, str):
-                                                        current_text += delta
-                                                        new_text = current_text
-                                                except Exception:
-                                                    pass
-                                        elif isinstance(obj, str):
-                                            current_text = obj
-                                            new_text = current_text
-                                    except Exception:
-                                        # 非 JSON，按纯文本处理
-                                        current_text += s
-                                        new_text = current_text
-
-                                    # 节流：每 50ms 推一次，且文本有增长
-                                    now = time.time()
-                                    if new_text is not None and (now - last_emit >= 0.05) and len(new_text) > 0:
-                                        last_emit = now
-                                        await Cosmic.queue_out.put(
-                                            {
-                                                "task_id": task_id,
-                                                "is_final": False,
-                                                "text": new_text,
-                                                "time_start": time_start,
-                                                "time_stop": record_stop,
-                                                "time_submit": t_submit,
-                                                "time_complete": now,
-                                                "source": "mic",
-                                                "stream": True,
-                                            }
-                                        )
-
-                                # 最终结果
-                                t_complete = time.time()
-                                text_result = current_text
-                        else:
-                            resp = await client.post(url, data=data_form, files=files)
-                            t_complete = time.time()
-                            status_code = resp.status_code
-                            if resp.status_code >= 500 or resp.status_code in (408, 429):
-                                # 可重试状态码
-                                err_text = resp.text
-                                raise httpx.HTTPStatusError("服务暂时不可用", request=resp.request, response=resp)
-                            if resp.status_code >= 400:
-                                # 不可重试，直接失败
-                                console.print(f"服务响应错误：{resp.status_code} {resp.text}", style="bright_red")
-                                text_result = ""
-                            else:
-                                text_result = resp.text
-                                if (
-                                    len(text_result) >= 2 and text_result.startswith("\"") and text_result.endswith("\"")
-                                ):
-                                    text_result = text_result[1:-1]
-
-                        # 成功，跳出重试循环
-                        break
-                    except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.ConnectError, httpx.RemoteProtocolError, httpx.HTTPError, OSError) as e:
-                        # 连接中断/HTTP2 终止/超时等，执行指数退避重试
-                        t_complete = time.time()
-                        msg = err_text or str(e)
-                        console.print(
-                            f"网络异常（第 {attempt + 1}/{max_retries} 次）：{msg} | http2={_HTTP2_ENABLED} | stream={attempt_stream}",
-                            style="bright_yellow",
-                        )
-                        # 认为当前持久化连接已不可用，立即销毁，下一轮会重建
-                        try:
-                            await _close_http_client(reason=f"error:{e.__class__.__name__}")
-                        except Exception:
-                            pass
-                        if attempt + 1 >= max_retries:
-                            # 最终失败
-                            console.print("已达到最大重试次数，返回当前结果（可能为空）", style="bright_red")
-                            # 保持 text_result 为当前已累计的内容（若有）
-                            break
-                        # 延时后重试
-                        delay = base_delay * (2 ** attempt) + random.uniform(0.0, 0.1)
-                        await asyncio.sleep(delay)
-
-                # 可选的调试输出
-                wav_ms = encode_ms  # 兼容旧字段名，始终定义，供后续使用
-                if os.getenv("CAPSWRITER_DEBUG_TIMING"):
-                    pre_submit_ms = (t_submit - t_presubmit) * 1000.0
-                    queue_delay_ms = (t_finish_entry - record_stop) * 1000.0
-                    upload_s = (t_complete - t_submit)
-                    total_s = (t_complete - record_stop)
-                    wav_bytes = payload_buf.getbuffer().nbytes
-                    console.print(
-                        f"    [debug] 阶段: 队列等待 {queue_delay_ms:.0f}ms | 编码 {wav_ms:.0f}ms | 准备发送 {pre_submit_ms:.0f}ms | 上传+服务 {upload_s:.2f}s | 自抬键总计 {total_s:.2f}s | 大小 {wav_bytes/1024:.1f}KB @ {actual_sr}Hz/{audio_concat.shape[1]}ch [{payload_mime}] | http2={_HTTP2_ENABLED}",
-                        style="dim",
-                    )
-
-                # 将结果放入客户端结果队列，由 recv_result 统一处理输出/翻译/打字
-                message = {
-                    "task_id": task_id,
-                    "is_final": True,
-                    "text": text_result,
-                    "time_start": time_start,           # 开始录音（墙钟）
-                    "time_stop": record_stop,           # 抬键时间（墙钟）
-                    "time_submit": t_submit,            # 提交到后端（墙钟）
-                    "time_complete": t_complete,        # 收到结果（墙钟）
-                    "source": "mic",
-                    "stream": _streaming_enabled(),
-                    "debug_timing": {
-                        "queue_delay_ms": max(0.0, (t_finish_entry - record_stop) * 1000.0),
-                        "wav_ms": max(0.0, wav_ms),
-                        "pre_submit_ms": max(0.0, (t_submit - t_presubmit) * 1000.0),
-                        "upload_s": max(0.0, (t_complete - t_submit)),
-                        "total_since_keyup_s": max(0.0, (t_complete - record_stop)),
-                        "wav_bytes": payload_buf.getbuffer().nbytes,
-                        "sr": actual_sr,
-                        "channels": int(audio_concat.shape[1]),
-                        "record_duration_s": float(duration),
-                        "record_duration_by_key_s": max(0.0, record_stop - time_start),
-                        "http_status": int(status_code),
-                        "mime": payload_mime,
-                        "bitrate": _mp3_bitrate() if payload_mime == "audio/mpeg" else None,
-                        "http2": _HTTP2_ENABLED,
-                    },
-                }
-                await Cosmic.queue_out.put(message)
-                break
-            elif task["type"] == "cancel":
-                # 告诉服务端任务已取消
-                # 仍然向结果队列投递一个空结果，确保 UI 和状态能恢复
-                message = {
+        if cancel_reason is not None:
+            # Emit a final empty result to restore UI state
+            await Cosmic.queue_out.put(
+                {
                     "task_id": task_id,
                     "is_final": True,
                     "text": "",
@@ -567,7 +584,87 @@ async def send_audio():
                     "time_complete": time.time(),
                     "source": "mic",
                 }
-                await Cosmic.queue_out.put(message)
-                break
+            )
+            return
+
+        # Log identifiers
+        console.print(f"任务标识：{task_id}")
+        console.print(f"    录音时长：{duration:.2f}s")
+
+        # Preprocess audio (mono/downsample)
+        audio_proc, actual_sr = _preprocess_audio(audio_concat)
+
+        # Build payload
+        payload_buf, payload_mime, encode_ms, payload_sr, payload_ch = await _make_audio_payload(audio_proc, actual_sr)
+
+        # Upload with retries
+        api_base = _get_api_base()
+        url = f"{api_base}/v1/audio/transcriptions"
+        data_form_base = {
+            "model": _get_model(),
+            "prompt": _get_prompt(),
+            "response_format": os.getenv("OPENAI_TRANSCRIBE_FORMAT", "text"),
+            "language": _get_language(),
+        }
+        max_retries = int(os.getenv("OPENAI_TRANSCRIBE_RETRIES", "3"))
+        base_delay = float(os.getenv("OPENAI_TRANSCRIBE_BACKOFF_BASE", "0.5"))
+        enable_stream_pref = _streaming_enabled()
+
+        t_presubmit = time.time()
+        text_result, status_code, t_submit, t_complete = await _transcribe_with_retries(
+            payload_buf,
+            payload_mime,
+            data_form_base,
+            url,
+            enable_stream_pref,
+            task_id,
+            time_start,
+            record_stop,
+            max_retries,
+            base_delay,
+        )
+
+        # Optional debug
+        wav_ms = encode_ms
+        if os.getenv("CAPSWRITER_DEBUG_TIMING"):
+            pre_submit_ms = (t_submit - t_presubmit) * 1000.0
+            queue_delay_ms = (t_finish_entry - record_stop) * 1000.0
+            upload_s = (t_complete - t_submit)
+            total_s = (t_complete - record_stop)
+            wav_bytes = payload_buf.getbuffer().nbytes
+            console.print(
+                f"    [debug] 阶段: 队列等待 {queue_delay_ms:.0f}ms | 编码 {wav_ms:.0f}ms | 准备发送 {pre_submit_ms:.0f}ms | 上传+服务 {upload_s:.2f}s | 自抬键总计 {total_s:.2f}s | 大小 {wav_bytes/1024:.1f}KB @ {payload_sr}Hz/{payload_ch}ch [{payload_mime}] | http2={_HTTP2_ENABLED}",
+                style="dim",
+            )
+
+        # Emit final
+        message = {
+            "task_id": task_id,
+            "is_final": True,
+            "text": text_result,
+            "time_start": time_start,
+            "time_stop": record_stop,
+            "time_submit": t_submit,
+            "time_complete": t_complete,
+            "source": "mic",
+            "stream": _streaming_enabled(),
+            "debug_timing": {
+                "queue_delay_ms": max(0.0, (t_finish_entry - record_stop) * 1000.0),
+                "wav_ms": max(0.0, wav_ms),
+                "pre_submit_ms": max(0.0, (t_submit - t_presubmit) * 1000.0),
+                "upload_s": max(0.0, (t_complete - t_submit)),
+                "total_since_keyup_s": max(0.0, (t_complete - record_stop)),
+                "wav_bytes": payload_buf.getbuffer().nbytes,
+                "sr": int(payload_sr),
+                "channels": int(payload_ch),
+                "record_duration_s": float(duration),
+                "record_duration_by_key_s": max(0.0, record_stop - time_start),
+                "http_status": int(status_code),
+                "mime": payload_mime,
+                "bitrate": _mp3_bitrate() if payload_mime == "audio/mpeg" else None,
+                "http2": _HTTP2_ENABLED,
+            },
+        }
+        await Cosmic.queue_out.put(message)
     except Exception as e:
         console.print(e)
