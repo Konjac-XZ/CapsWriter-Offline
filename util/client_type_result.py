@@ -43,3 +43,13 @@ async def type_result(text):
     # 模拟打印
     else:
         keyboard.write(text)
+
+
+# 直打（用于流式增量输出）。不改动 Config.paste，以调用方控制“键入”与“粘贴”。
+async def type_keys(text: str):
+    keyboard.write(text)
+
+
+# 明确走粘贴（用于最终合并输出）。
+async def type_paste(text: str):
+    await type_result(text)

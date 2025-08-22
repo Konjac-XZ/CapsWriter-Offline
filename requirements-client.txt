@@ -16,3 +16,6 @@ pywin32==308
 qrcode==7.4.2
 opencc==1.1.9
 tomlkit==0.13.2
+python-dotenv
+pangu
+httpx[http2]

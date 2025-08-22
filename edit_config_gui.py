@@ -2,9 +2,12 @@ import sys
 from pathlib import Path
 
 from PySide6.QtGui import QGuiApplication, QIcon
-from PySide6.QtWidgets import (
-    QApplication,
-)
+from PySide6.QtWidgets import QApplication
+
+# Instantiate QApplication as early as possible to satisfy any Qt widget usage
+# that may occur during imports of siui or page modules.
+_app = QApplication.instance() or QApplication(sys.argv)
+
 from siui.core import SiGlobal
 from siui.templates.application.application import SiliconApplication
 from tomlkit import parse
@@ -13,8 +16,12 @@ from util.edit_config_gui.about_page import AboutPage
 from util.edit_config_gui.client_config_page import ClientConfigPage
 from util.edit_config_gui.deeplx_config_page import DeeplxConfigPage
 from util.edit_config_gui.model_paths_config_page import ModelPathsConfigPage
-from util.edit_config_gui.paraformer_args_config_page import ParaformerArgsConfigPage
-from util.edit_config_gui.sensevoice_args_config_page import SenseVoiceArgsConfigPage
+from util.edit_config_gui.paraformer_args_config_page import (
+    ParaformerArgsConfigPage,
+)
+from util.edit_config_gui.sensevoice_args_config_page import (
+    SenseVoiceArgsConfigPage,
+)
 from util.edit_config_gui.server_config_page import ServerConfigPage
 
 
@@ -91,7 +98,6 @@ class ConfigEditor(SiliconApplication):
 
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
     window = ConfigEditor("config.toml")
     window.show()
-    sys.exit(app.exec())
+    sys.exit(_app.exec())

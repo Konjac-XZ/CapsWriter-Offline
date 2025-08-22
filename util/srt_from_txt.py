@@ -36,7 +36,6 @@ def get_scout(line, words, cursor):
     words_num = len(words)
     scout_list = []
     scout_num, _ = 5, 0
-
     while _ <= scout_num:
         # 新建一个侦察兵
         scout = Scout()
@@ -106,8 +105,6 @@ def lines_match_words(text_lines: List[str], words: List) -> List[srt.Subtitle]:
                 'word' : 'good'
                 }
     """
-    # 初始化 fail_count
-    fail_count = 0
     # 空的字幕列表
     subtitle_list = []
 
@@ -172,11 +169,7 @@ def lines_match_words(text_lines: List[str], words: List) -> List[srt.Subtitle]:
 
         # 如果本轮侦察评分不优秀，下一句应当回溯，避免本句识别末尾没刹住
         if score <= 0:
-            fail_count += 1
-            if fail_count > 3:  # 连续失败超过 3 次时，回退更多步数
-                cursor = max(0, cursor - 40)
-            else:
-                cursor = max(0, cursor - 20)
+            cursor = max(0, cursor - 20)
 
     return subtitle_list
 
@@ -185,9 +178,6 @@ def get_words(json_file: Path) -> list:
     # 读取分词 json 文件
     with open(json_file, "r", encoding="utf-8") as f:
         json_info = json.load(f)
-    # timestamps_count = len(json_info["timestamps"])
-    # tokens_count = len(json_info["tokens"])
-    # print(f"timestamps_count = {timestamps_count} \t tokens_count = {tokens_count}")
 
     # 获取带有时间戳的分词列表
     words = [
@@ -196,11 +186,6 @@ def get_words(json_file: Path) -> list:
     ]
     for i in range(len(words) - 1):
         words[i]["end"] = min(words[i]["end"], words[i + 1]["start"])
-
-    # 将word写入debug.txt
-    # with open("debug.txt", "w", encoding="utf-8") as f:
-    #     for word in words:
-    #         f.write(f"{word}\n")
 
     return words
 
@@ -238,15 +223,7 @@ def main(files: List[Path]):
 
 
 if __name__ == "__main__":
-    # main([Path(r"C:\Users\user0\Downloads\武林外传.E01-E04.DVDRip.x264.AC3-CMCT.txt")])
-
-    main(
-        [
-            Path(
-                r"C:\Users\user0\Downloads\Video\4-2 Linux计划任务管理 (014000-3343720).txt"
-            )
-        ]
-    )
+    main([Path(r"C:\Users\user0\Downloads\武林外传.E01-E04.DVDRip.x264.AC3-CMCT.txt")])
 
     # merge_filename = Path(
     #     r"C:\Users\user0\Downloads\武林外传.E01-E04.DVDRip.x264.AC3-CMCT.merge.txt"

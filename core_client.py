@@ -1,4 +1,8 @@
 # coding: utf-8
+import sys, importlib.util, platform
+print(sys.executable, sys.version, platform.architecture())
+print(importlib.util.find_spec('_cffi_backend'))
+print([p for p in sys.path if p.endswith('site-packages')])
 
 import asyncio
 import os
@@ -52,12 +56,6 @@ async def main_mic():
 
     show_mic_tips()
 
-    # 更新热词
-    update_hot_all()
-
-    # 实时更新热词
-    observer = observe_hot()
-
     # 打开音频流
     Cosmic.stream = stream_open()
 
@@ -71,27 +69,8 @@ async def main_mic():
     if system() == "Windows":
         empty_current_working_set()
 
-    # 接收结果
-    print(
-        f"连接服务端...  （服务端载入模块时长约 50 秒，请耐心等待。若好几分钟了还无响应 -> 服务端软件 start_server_gui.exe 启动了吗？ 服务端地址当前设置 {Config.addr}:{Config.speech_recognition_port} 是正确的吗？）"
-    )
     while True:
         await recv_result()
-
-
-async def main_file(files: List[Path]):
-    show_file_tips()
-
-    for file in files:
-        if file.suffix in [".txt", ".json", "srt"]:
-            adjust_srt(file)
-        else:
-            await transcribe_check(file)
-            await asyncio.gather(transcribe_send(file), transcribe_recv(file))
-
-    if Cosmic.websocket:
-        await Cosmic.websocket.close()
-    input("\n按回车退出\n")
 
 
 def init_mic():
@@ -103,21 +82,5 @@ def init_mic():
         print("...")
 
 
-def init_file(files: List[Path]):
-    """
-    用 CapsWriter Server 转录音视频文件，生成 srt 字幕
-    """
-    try:
-        asyncio.run(main_file(files))
-    except KeyboardInterrupt:
-        console.print("再见！")
-        sys.exit()
-
-
 if __name__ == "__main__":
-    # 如果参数传入文件，那就转录文件
-    # 如果没有多余参数，就从麦克风输入
-    if sys.argv[1:]:
-        typer.run(init_file)
-    else:
-        init_mic()
+    init_mic()

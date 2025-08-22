@@ -13,10 +13,10 @@ addr = "0.0.0.0"
 speech_recognition_port = "6016"
 # 语音识别服务端口
 
-start_online_translate_server = true
+start_online_translate_server = false
 # 是否启用在线翻译服务
 
-start_offline_translate_server = true
+start_offline_translate_server = false
 # 是否启用离线翻译服务
 
 offline_translate_port = "6017"
@@ -55,7 +55,8 @@ in_the_meantime_start_the_client_and_run_as_admin = true
 # ======================客户端配置==================================
 
 [client]
-addr = "127.0.0.1"
+# addr = "127.0.0.1"
+addr = "192.168.31.94"
 # 要连接的服务端地址
 
 speech_recognition_port = "6016"
@@ -67,10 +68,10 @@ offline_translate_port = "6017"
 offline_translate_port_gemma2b = "11434"
 # Gemma 2B 离线翻译端口
 
-speech_recognition_shortcut = "caps lock"
+speech_recognition_shortcut = "f15"
 # 控制录音的快捷键，默认是 "caps lock"
 
-use_offline_translate_function = true
+use_offline_translate_function = false
 # 是否启用离线翻译功能
 
 offline_translate_shortcut = "left shift"
@@ -80,7 +81,7 @@ offline_translate_and_replace_the_selected_text_shortcut = "ctrl + alt + p"
 # 控制离线翻译将光标选中的中文翻译并替换为英文的快捷键
 # 如果未选中任何文字，会将剪贴板的文字翻译为英文并粘贴
 
-use_online_translate_function = true
+use_online_translate_function = false
 # 是否启用在线翻译功能
 
 online_translate_shortcut = "right shift"
@@ -127,10 +128,10 @@ paste = true
 restore_clipboard_after_paste = true
 # 模拟粘贴后是否恢复剪贴板
 
-save_audio = true
+save_audio = false
 # 是否保存录音文件
 
-save_markdown = true
+save_markdown = false
 # 是否将记录写入 Markdown 文件
 
 audio_name_len = 20
@@ -195,37 +196,37 @@ only_enable_microphones_when_pressed_record_shortcut = true
 # 缺点就是输入的时候可能会慢些
 # 毕竟要先建立与麦克风的连接
 
-vscode_exe_path = "C:\\SSS\\VSCode\\Code - Insiders.exe"
+vscode_exe_path = "C:\\Users\\xinrui\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe"
 # 设置 VSCode 可执行文件位置
 # 用于通过客户端托盘图标右键菜单项 View 子菜单项
 # 🤓 Open Home Folder With VSCode
 # 使用 VSCode 快速打开 CapsWriter 主目录
 # 方便调试
 
-play_start_music = true
+play_start_music = false
 # 开始任务时是否播放提示音
 # 需要 ffplay.exe
 
 start_music_path = "assets/start.mp3"
 # 开始任务提示音的文件路径
 
-start_music_volume = "100"
+start_music_volume = "96"
 # 开始任务提示音的音量，0 ~ 100 之间
 
-play_stop_music = true
+play_stop_music = false
 # 结束任务时是否播放提示音
 # 需要 ffplay.exe
 
 stop_music_path = "assets/stop.mp3"
 # 结束任务提示音的文件路径
 
-stop_music_volume = "50"
+stop_music_volume = "62"
 # 结束任务提示音的音量，0 ~ 100 之间
 
-hint_while_recording_at_edit_position_powered_by_ahk = true
+hint_while_recording_at_edit_position_powered_by_ahk = false
 # 是否启用基于 AHK 的输入光标位置的输入状态提示功能
 
-hint_while_recording_at_cursor_position = true
+hint_while_recording_at_cursor_position = false
 # 是否启用跟随鼠标光标位置的新版输入状态提示功能
 
 check_microphone_usage_by = "注册表"
@@ -236,7 +237,7 @@ check_microphone_usage_by = "注册表"
 # 将强制忽略此项设置使用 "按键"
 # "按键" 是通过监测 `speech_recognition_shortcut` 状态是否按下进而推测是否在录音
 
-enable_double_click_opposite_state = true
+enable_double_click_opposite_state = false
 # 是否启用双击 `录音键` 临时转换 `简/繁` 体中文输出的功能
 
 convert_to_traditional_chinese_main = "简"

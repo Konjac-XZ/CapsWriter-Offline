@@ -5,6 +5,9 @@ import sys
 import threading
 from pathlib import Path
 from queue import Queue
+from dotenv import load_dotenv
+
+load_dotenv()
 
 import win32api
 import win32con
@@ -159,8 +162,10 @@ class GUI(QMainWindow):
         self.monitor_checkbox.setMaximumSize(65, 30)
         # 当状态改变时，调用self.on_monitor_toggled函数
         self.monitor_checkbox.stateChanged.connect(self.on_monitor_toggled)
-        # 设置默认状态
+        # 设置默认状态（初始化时不触发信号）
+        self.monitor_checkbox.blockSignals(True)
         self.monitor_checkbox.setChecked(True)
+        self.monitor_checkbox.blockSignals(False)
 
     # def create_stay_on_top_checkbox(self):
     #     self.stay_on_top_checkbox = QCheckBox('置顶')
@@ -282,10 +287,13 @@ class GUI(QMainWindow):
 
     def on_monitor_toggled(self, state):
         # 检查复选框的选中状态
+        timer = getattr(self, "update_timer", None)
+        if timer is None:
+            return
         if state == 2:  # 2 表示选中状态
-            self.update_timer.start(100)
+            timer.start(100)
         else:
-            self.update_timer.stop()
+            timer.stop()
 
     # def window_stay_on_top_toggled(self):
     #     # 切换窗口置顶状态

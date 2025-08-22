@@ -37,7 +37,21 @@ def replacer(original: re.Match):
     return final
 
 def adjust_space(txt):
-    return en_in_zh.sub(replacer, txt)
+    """
+    Adjust spacing between Chinese and Latin text.
+    Delegate to pangu.spacing_text when available; fall back to the original
+    regex-based implementation if pangu raises an exception.
+    """
+    if txt is None:
+        return txt
+    try:
+        import pangu
+        res = pangu.spacing_text(txt)
+        # 合并类似“t x t”这样的单字母序列 -> “txt”
+        res = re.sub(r'\b(?:[A-Za-z]\s){1,}[A-Za-z]\b', lambda m: m.group(0).replace(' ', ''), res)
+        return res
+    except Exception:
+        return en_in_zh.sub(replacer, txt)
 
 if __name__ == '__main__':
     txt = '''

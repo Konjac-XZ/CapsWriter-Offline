@@ -1,9 +1,7 @@
 import json
 
 import opencc
-import websockets
-
-from util.client_check_websocket import check_websocket
+import pangu
 from util.client_cosmic import Cosmic, console
 from util.client_hot_sub import hot_sub
 from util.client_rename_audio import rename_audio
@@ -21,100 +19,156 @@ warnings.filterwarnings("ignore")
 
 
 async def recv_result():
-    if not await check_websocket():
-        return
-    console.print("[green]连接成功\n")
+    # 直接从本地结果队列读取（由 send_audio 推送），不再依赖远程 websocket
     try:
         while True:
-            # 接收消息
-            message = await Cosmic.websocket.recv()
-            message = json.loads(message)
-            text = message["text"]
-            delay = message["time_complete"] - message["time_submit"]
+            message = await Cosmic.queue_out.get()
+            Cosmic.queue_out.task_done()
+            text = message.get("text", "")
+            delay = message.get("time_complete", 0) - message.get("time_submit", 0)
+            if delay < 0 or delay > 600:
+                # 防御性：若时间源混乱，避免显示荒谬时延
+                delay = max(0.0, delay)
 
-            # 如果非最终结果，继续等待
-            if not message["is_final"]:
-                continue
+            # 基本标记
+            is_final = bool(message.get("is_final"))
+            is_stream = bool(message.get("stream"))
 
-            # 消除末尾标点
-            text = strip_punc(text)
-
-            # 热词替换
-            text = hot_sub(text)
+            # 流式时：对中间增量不做末尾标点剥离，避免抖动
+            if not (is_stream and not is_final):
+                text = strip_punc(text)
 
             # 简繁转换
             convert_to_traditional_chinese_done = False
-            converter = opencc.OpenCC(Config.opencc_converter)
-            traditional_text = converter.convert(text)
-            convert_to_traditional_chinese_done = True
+            traditional_text = None
+            if is_final:
+                converter = opencc.OpenCC(Config.opencc_converter)
+                traditional_text = converter.convert(text)
+                convert_to_traditional_chinese_done = True
 
             # 离线翻译
             offline_translate_done = False
-            if Cosmic.offline_translate_needed and not Cosmic.transcribe_subtitles:
+            if is_final and Cosmic.offline_translate_needed and not Cosmic.transcribe_subtitles:
                 offline_translated_text = await translate_offline(text)
                 offline_translate_done = True
                 Cosmic.offline_translate_needed = False
 
             # 在线翻译
             online_translate_done = False
-            if Cosmic.online_translate_needed and not Cosmic.transcribe_subtitles:
+            if is_final and Cosmic.online_translate_needed and not Cosmic.transcribe_subtitles:
                 online_translated_text = translate_online(text)
                 online_translate_done = True
                 Cosmic.online_translate_needed = False
 
-            if Config.save_audio:
-                # 重命名录音文件
-                file_audio = rename_audio(
-                    message["task_id"], text, message["time_start"]
-                )
-            else:
-                file_audio = None
-
-            if Config.save_markdown:
-                # 记录写入 md 文件
-                match Config.convert_to_traditional_chinese_main:
-                    case "繁":
-                        write_md(traditional_text, message["time_start"], file_audio)
-                    case _:
-                        write_md(text, message["time_start"], file_audio)
+            # 仅在最终结果时进行音频重命名与 Markdown 写入
+            file_audio = None
+            if is_final:
+                if Config.save_audio:
+                    # 重命名录音文件
+                    file_audio = rename_audio(
+                        message.get("task_id"), text, message.get("time_start")
+                    )
+                if Config.save_markdown:
+                    # 记录写入 md 文件
+                    match Config.convert_to_traditional_chinese_main:
+                        case "繁":
+                            write_md(traditional_text or text, message.get("time_start"), file_audio)
+                        case _:
+                            write_md(text, message.get("time_start"), file_audio)
 
             # 控制台输出
-            console.print(f"    转录时延：{delay:.2f}s")
-            console.print(f"    识别结果：[green]{text}")
-            if offline_translate_done:
-                console.print(f"    离线翻译结果：[green]{offline_translated_text}")
-            if online_translate_done:
-                console.print(f"    在线翻译结果：[green]{online_translated_text}")
-            if convert_to_traditional_chinese_done and Cosmic.opposite_state:
-                console.print(f"    简繁转换结果：[green]{traditional_text}")
-            console.line()
+            if is_final:
+                # 使用 pangu 对完整文本进行中英文混排空格优化，仅用于显示/输出
+                text = pangu.spacing_text(text)
+                console.print(f"    转录时延：{delay:.2f}s")
+                dbg = message.get("debug_timing")
+                if dbg:
+                    console.print(
+                        (
+                            f"    [debug] 阶段: 队列等待 {dbg.get('queue_delay_ms', 0):.0f}ms | "
+                            f"WAV {dbg.get('wav_ms', 0):.0f}ms | 准备发送 {dbg.get('pre_submit_ms', 0):.0f}ms | "
+                            f"上传+服务 {dbg.get('upload_s', 0):.2f}s | 自抬键总计 {dbg.get('total_since_keyup_s', 0):.2f}s | "
+                            f"大小 {dbg.get('wav_bytes', 0)/1024:.1f}KB @ {dbg.get('sr')}Hz/{dbg.get('channels')}ch"
+                        ),
+                        style="dim",
+                    )
+                console.print(f"    识别结果：[green]{text}")
+                console.line()
+            else:
+                # 轻量日志：帮助定位流式过程中是否有数据
+                try:
+                    last_len_dbg = getattr(Cosmic, "_last_stream_len", 0)
+                    inc_dbg = text[last_len_dbg:]
+                    if inc_dbg:
+                        console.print(f"[stream] +{inc_dbg}", style="dim")
+                except Exception:
+                    pass
 
-            # 打字
-            if offline_translate_done:
-                await type_result(offline_translated_text)
-                offline_translate_done = False
-            elif online_translate_done:
-                await type_result(online_translated_text)
-                online_translate_done = False
-            elif convert_to_traditional_chinese_done:
-                # 根据'简/繁'转换设定,来选择输出内容的逻辑
-                match Config.convert_to_traditional_chinese_main:
-                    case "繁":
-                        if Cosmic.opposite_state:
-                            await type_result(text)
-                        else:
-                            await type_result(traditional_text)
-                    case _:
-                        if Cosmic.opposite_state:
-                            await type_result(traditional_text)
-                        else:
-                            await type_result(text)
-                convert_to_traditional_chinese_done = False
+            # 打字：流式增量用“模拟键入”，最终结果才使用剪贴板粘贴（以减少光标跳动）
+            async def type_incremental(s: str):
+                import keyboard as _kb
+                # 仅增量字符，避免重复：比较上次输出长度
+                last_len = getattr(Cosmic, "_last_stream_len", 0)
+                inc = s[last_len:]
+                if inc:
+                    _kb.write(inc)
+                    Cosmic._last_stream_len = last_len + len(inc)
+                    # 标记本 task 曾有流式增量输出
+                    Cosmic._stream_had_increments = True
+
+            async def type_final(s: str):
+                # 重置流长度计数器
+                if hasattr(Cosmic, "_last_stream_len"):
+                    Cosmic._last_stream_len = 0
+                await type_result(s)
+
+            # 每个 task 流式独立计数，切换 task 时重置（避免跨任务污染）
+            current_tid = message.get("task_id")
+            last_tid = getattr(Cosmic, "_last_stream_task", None)
+            if current_tid != last_tid:
+                Cosmic._last_stream_task = current_tid
+                if hasattr(Cosmic, "_last_stream_len"):
+                    Cosmic._last_stream_len = 0
+                # 新任务开始时，清理流式标记
+                Cosmic._stream_had_increments = False
+
+            if is_stream and not is_final:
+                # 增量：不做翻译/简繁，直接键入原文增量
+                await type_incremental(text)
+            else:
+                # 最终：按原逻辑输出（含翻译/简繁），但走剪贴板粘贴
+                # 若此前已有流式增量输出，则不再进行最终粘贴，避免重复
+                if is_stream and getattr(Cosmic, "_stream_had_increments", False):
+                    # 完结时重置计数与标记
+                    if hasattr(Cosmic, "_last_stream_len"):
+                        Cosmic._last_stream_len = 0
+                    Cosmic._stream_had_increments = False
+                    # 不进行任何粘贴输出
+                    pass
+                elif offline_translate_done:
+                    offline_translated_text = pangu.spacing_text(offline_translated_text)
+                    await type_final(offline_translated_text)
+                    offline_translate_done = False
+                elif online_translate_done:
+                    online_translated_text = pangu.spacing_text(online_translated_text)
+                    await type_final(online_translated_text)
+                    online_translate_done = False
+                elif convert_to_traditional_chinese_done:
+                    match Config.convert_to_traditional_chinese_main:
+                        case "繁":
+                            if Cosmic.opposite_state:
+                                await type_final(text)
+                            else:
+                                traditional_text = pangu.spacing_text(traditional_text)
+                                await type_final(traditional_text)
+                        case _:
+                            if Cosmic.opposite_state:
+                                traditional_text = pangu.spacing_text(traditional_text)
+                                await type_final(traditional_text)
+                            else:
+                                await type_final(text)
+                    convert_to_traditional_chinese_done = False
             Cosmic.opposite_state = False
-    except websockets.ConnectionClosedError:
-        console.print("[red]连接断开\n")
-    except websockets.ConnectionClosedOK:
-        console.print("[red]连接断开\n")
     except Exception as e:
         print(e)
     finally:

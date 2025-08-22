@@ -331,6 +331,7 @@ def hold_mode(e: keyboard.KeyboardEvent):
     global \
         task, \
         double_clicked, \
+        last_time_pressed, \
         last_time_released, \
         hold_mode_first_time_cancel_task, \
         unpause_needed
@@ -349,6 +350,8 @@ def hold_mode(e: keyboard.KeyboardEvent):
                     unpause_needed = True
 
     if e.event_type == "down" and not Cosmic.on:
+        # 标记最后按下的时间
+        last_time_pressed = time.time()
         # 根據上一次是否短時間內(`is_short_duration`)按下錄音鍵,來判斷是否需要輸出 `簡/繁`
         if double_clicked and Config.enable_double_click_opposite_state:
             Cosmic.opposite_state = not Cosmic.opposite_state
@@ -363,11 +366,11 @@ def hold_mode(e: keyboard.KeyboardEvent):
         # 记录开始时间
         launch_task()
 
-    elif e.event_type == "up":
+    if e.event_type == "up":
         # 标记最后弹起的时间
         last_time_released = time.time()
         # 记录持续时间，并标识录音线程停止向队列放数据
-        duration = time.time() - Cosmic.on
+        duration = time.time() - last_time_pressed
         # 取消或停止任务
         if duration < Config.threshold and not double_clicked:
             hold_mode_first_time_cancel_task = True
