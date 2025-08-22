@@ -14,7 +14,7 @@ import win32con
 import win32gui
 import win32print
 from PySide6.QtCore import QPoint, Qt, QTimer, QLocale
-from PySide6.QtGui import QAction, QFont, QIcon, QWheelEvent, QFontDatabase
+from PySide6.QtGui import QAction, QFont, QIcon, QWheelEvent, QFontDatabase, QTextOption, QShortcut, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -64,43 +64,28 @@ class GUI(QMainWindow):
         self.setWindowTitle("CapsWriter-Offline-Client")
         self.setWindowIcon(QIcon("assets/client-icon.ico"))
         self.setWindowOpacity(1.0)
-        self.setWindowFlags(
-            self.windowFlags()
-            | Qt.FramelessWindowHint  # 隐藏标题栏
-            | Qt.WindowStaysOnTopHint  # 置顶
-        )
-        self.create_stay_on_top_button()
-        self.create_cloudypaste_button()  # Create cloudy paste button
-        self.create_clear_button()  # Create clear button
-        self.create_close_button()
-        self.create_custom_title_bar()
+
+        # Use native system title bar; no custom frame
         self.create_text_box()
         self.create_systray_icon()
 
-        # Create a vertical layout
+        # Layout
         self.layout = QVBoxLayout()
-        self.layout.setSpacing(0)  # 设置控件间距为0像素
-        self.layout.setContentsMargins(3, 3, 3, 3)  # 设置左、上、右、下的边距
-        self.layout2 = QHBoxLayout()
-        self.layout2.setSpacing(0)  # 设置控件间距为0像素
-        self.layout2.setContentsMargins(0, 0, 0, 0)  # 设置左、上、右、下的边距为0像素
-
-        # Add text box and button to the layout
-        self.layout.addLayout(self.title_bar)
+        self.layout.setSpacing(0)
+        self.layout.setContentsMargins(3, 3, 3, 3)
         self.layout.addWidget(self.text_box_client)
-        # self.layout2.addWidget(self.stay_on_top_checkbox, alignment=Qt.AlignLeft)
-        self.layout2.addSpacerItem(
-            QSpacerItem(40, 0, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        )
-        self.layout.addLayout(self.layout2)
 
-        # Create a central widget
+        # Central widget
         central_widget = QWidget()
         central_widget.setLayout(self.layout)
-        # Set the central widget
         self.setCentralWidget(central_widget)
-        self.clear_text_box()
 
+        # Shortcut: Ctrl+L clears the text box
+        clear_sc = QShortcut(QKeySequence("Ctrl+L"), self)
+        clear_sc.activated.connect(self.clear_text_box)
+        
+
+    @staticmethod
     def _preferred_cn_font_family() -> str:
         """Return a CN-first font family available on this system.
 
@@ -124,39 +109,18 @@ class GUI(QMainWindow):
             pass
         return "Microsoft YaHei UI"
 
-    def create_custom_title_bar(self):
-        # 创建自定义标题栏
-        self.title_bar = QHBoxLayout()
-        self.title_bar.addWidget(self.stay_on_top_button)
-        self.title = QLabel("CapsWriter-Offline-Client")
-        font = QFont()
-        font.setBold(True)
-        self.title.setFont(font)
-        self.title_bar.addWidget(self.title)
-        self.title_bar.addSpacerItem(
-            QSpacerItem(80, 0, QSizePolicy.Expanding, QSizePolicy.Minimum)
-        )
-        self.title_bar.addWidget(self.cloudypaste_button, alignment=Qt.AlignRight)
-        self.title_bar.addWidget(self.clear_button, alignment=Qt.AlignRight)
-        self.title_bar.addWidget(self.close_button)
 
-    def create_stay_on_top_button(self):
-        self.stay_on_top_button = QPushButton()
-        pin_char = chr(0xE840)
-        self.stay_on_top_button.setText(pin_char)
-        self.stay_on_top_button.setToolTip("置顶窗口，将它显示在其他窗口之上 / 不置顶")
-        self.stay_on_top_button.setMaximumSize(50, 50)
-        self.stay_on_top_button.clicked.connect(self.window_stay_on_top_toggled)
-
-    def create_close_button(self):
-        self.close_button = QPushButton(chr(0xE8BB))
-        self.close_button.setMaximumSize(50, 50)
-        self.close_button.clicked.connect(self.hide)
+    # Removed custom title bar and its buttons; using native frame instead
 
     def create_text_box(self):
         self.text_box_client = QTextEdit()
         self.text_box_client.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.text_box_client.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # Treat content strictly as plain text to avoid HTML rendering side-effects
+        self.text_box_client.setAcceptRichText(False)
+        # Wrap at widget width and allow wrapping anywhere to avoid mid-glyph clipping for long CJK strings
+        self.text_box_client.setLineWrapMode(QTextEdit.WidgetWidth)
+        self.text_box_client.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
 
     def create_monitor_checkbox(self):
         # 创建一个QCheckBox控件
@@ -169,13 +133,6 @@ class GUI(QMainWindow):
         self.monitor_checkbox.blockSignals(True)
         self.monitor_checkbox.setChecked(True)
         self.monitor_checkbox.blockSignals(False)
-
-    # def create_stay_on_top_checkbox(self):
-    #     self.stay_on_top_checkbox = QCheckBox('置顶')
-    #     self.stay_on_top_checkbox.setToolTip("置顶窗口，将它显示在其他窗口之上 / 不置顶")
-    #     self.stay_on_top_checkbox.setMaximumSize(65, 30)
-    #     self.stay_on_top_checkbox.stateChanged.connect(self.window_stay_on_top_toggled)
-    #     self.stay_on_top_checkbox.setChecked(True)
 
     def create_wordcount_label(self):
         self.text_box_wordCountLabel = QLabel("字符数字节数", self)
@@ -305,21 +262,7 @@ class GUI(QMainWindow):
     #     else:
     #         self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
     #     self.show()  # 重新显示窗口以应用更改
-    def window_stay_on_top_toggled(self):
-        # 切换窗口置顶状态
-        if self.windowFlags() & Qt.WindowStaysOnTopHint:
-            self.setWindowFlags(self.windowFlags() ^ Qt.WindowStaysOnTopHint)
-        else:
-            self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
-            global gui
-        window_is_on_top = bool(gui.windowFlags() & Qt.WindowStaysOnTopHint)
-        if window_is_on_top:
-            pin_char = chr(0xE840)
-            self.stay_on_top_button.setText(pin_char)
-        else:
-            unpin_char = " "
-            self.stay_on_top_button.setText(unpin_char)
-        self.show()  # 重新显示窗口以应用更改
+    # Removed stay-on-top toggle tied to custom title bar button
 
     def update_word_count_toggled(self):
         select_text_count = len(self.text_box_client.textCursor().selectedText())
@@ -495,24 +438,9 @@ class GUI(QMainWindow):
                 line = self.output_queue_client.get()
                 self.text_box_client.append(line)
             except Exception as e:
-                self.text_box_client.append(e)
+                self.text_box_client.append(str(e))
                 break
 
-    def checkWindowActive(self):
-        # 检查窗口是否处于活跃状态
-        if self.isActiveWindow():
-            pass
-        else:
-            x, y, width, height, screenWidth, screenHeight = self.checkWindowInfo()
-            if x == 0:  # 窗口非活跃状态，从左边弹出的，恢复继续停靠在左边
-                self.berthToLeft(x, y, width, height, screenWidth, screenHeight)
-            elif (
-                x == screenWidth - width
-            ):  # 窗口非活跃状态，从右边弹出的，恢复继续停靠在右边
-                self.berthToRight(x, y, width, height, screenWidth, screenHeight)
-            else:
-                print("窗口无需恢复停靠")
-                pass
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -523,64 +451,6 @@ class GUI(QMainWindow):
             delta = QPoint(event.globalPosition().toPoint() - self.old_pos)
             self.move(self.x() + delta.x(), self.y() + delta.y())
             self.old_pos = event.globalPosition().toPoint()
-
-    def enterEvent(self, event):
-        super().enterEvent(event)
-    # Keep title bar and action bar visible permanently (no flicker on mouse enter)
-    # Widgets are created visible by default; do not toggle visibility here.
-        x, y, width, height, screenWidth, screenHeight = self.checkWindowInfo()
-        if self.isBerthLeft:  # 已停靠在左边
-            self.move(0, y)  # 从左边弹出，31是标题栏高度
-            self.isBerthLeft = False
-        elif self.isBerthRight:  # 已停靠在右边
-            self.move(screenWidth - width, y)  # 从右边弹出，31是标题栏高度
-            self.isBerthRight = False
-        else:
-            # print("窗口未停靠")
-            pass
-
-    def leaveEvent(self, event):
-        super().leaveEvent(event)
-    # Keep title bar and action bar visible permanently (no flicker on mouse leave)
-    # Do not toggle widget visibility here.
-        x, y, width, height, screenWidth, screenHeight = self.checkWindowInfo()
-        # print(f"左右，高低，宽，高，屏宽，屏高: {(x, y, width, height, screenWidth, screenHeight)}")
-        if self.isActiveWindow():  # 窗口活跃状态，用户点击了窗口，则不恢复继续停靠
-            # print("窗口活跃状态")
-            if x < 0 - width / 2:
-                # print("活跃状态，但是窗口的一半已超出屏幕左边界，将窗口停靠在左边")
-                self.berthToLeft(x, y, width, height, screenWidth, screenHeight)
-            elif x > screenWidth - width / 2:
-                # print("窗口活跃状态，但是窗口的一半已超出屏幕右边界，将窗口停靠在右边")
-                self.berthToRight(x, y, width, height, screenWidth, screenHeight)
-            else:
-                # print("窗口活跃状态，无需停靠")
-                pass
-        else:  # 窗口非活跃状态，用户可能只是鼠标划过看一眼，失去焦点时恢复继续停靠
-            # print("窗口不活跃状态")
-            if x < 0 - width / 2:
-                # print("窗口的一半已超出屏幕左边界")
-                self.berthToLeft(x, y, width, height, screenWidth, screenHeight)
-            elif x > screenWidth - width / 2:
-                # print("窗口的一半已超出屏幕右边界")
-                self.berthToRight(x, y, width, height, screenWidth, screenHeight)
-            elif x == 0:  # 窗口非活跃状态，从左边弹出的，恢复继续停靠在左边
-                self.berthToLeft(x, y, width, height, screenWidth, screenHeight)
-            elif (
-                x == screenWidth - width
-            ):  # 窗口非活跃状态，从右边弹出的，恢复继续停靠在右边
-                self.berthToRight(x, y, width, height, screenWidth, screenHeight)
-            else:
-                # print("窗口未超出屏幕边界")
-                pass
-
-    def berthToLeft(self, x, y, width, height, screenWidth, screenHeight):
-        self.move(0 - width + self.edgeMargin, y)  # 停靠到左边，31是标题栏高度
-        self.isBerthLeft = True
-
-    def berthToRight(self, x, y, width, height, screenWidth, screenHeight):
-        self.move(screenWidth - self.edgeMargin, y)  # 停靠到右边，31是标题栏高度
-        self.isBerthRight = True
 
     def checkWindowInfo(self):
         geometry = self.geometry()
@@ -650,7 +520,7 @@ def start_client_gui():
         pass
     # Set global font to Segoe UI with anti-aliasing and full hinting
     try:
-        app_font = QFont(_preferred_cn_font_family())
+        app_font = QFont(GUI._preferred_cn_font_family())
         # Prefer anti-aliased rendering
         if hasattr(QFont, "StyleStrategy") and hasattr(QFont.StyleStrategy, "PreferAntialias"):
             app_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)

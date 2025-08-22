@@ -64,15 +64,13 @@ def build_headers() -> dict:
 def _log_persistent_established():
     api_base = get_api_base()
     console.print(
-        f"[conn] Persistent HTTP client established | http2={_HTTP2_ENABLED} | base={api_base} | gen={_CLIENT_GEN}",
-        style="cyan",
+        f"持久连接已建立"
     )
 
 
 def _log_persistent_closed(reason: str):
     console.print(
-        f"[conn] Persistent HTTP client closed | reason={reason} | gen={_CLIENT_GEN}",
-        style="cyan",
+        f"持久连接已关闭"
     )
 
 

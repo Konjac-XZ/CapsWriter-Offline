@@ -30,3 +30,5 @@ class Cosmic:
     online_translate_needed = False
     offline_translate_needed = False
     opposite_state = False
+    # Whether we've already shown the non-USB-device warning during this run
+    usb_warning_shown = False

@@ -80,19 +80,19 @@ async def recv_result():
             if is_final:
                 # 使用 pangu 对完整文本进行中英文混排空格优化，仅用于显示/输出
                 text = pangu.spacing_text(text)
-                console.print(f"    转录时延：{delay:.2f}s")
+                console.print(f"转录时延：{delay:.2f}s")
                 dbg = message.get("debug_timing")
-                if dbg:
+                if False:
                     console.print(
                         (
-                            f"    [debug] 阶段: 队列等待 {dbg.get('queue_delay_ms', 0):.0f}ms | "
+                            f" 阶段: 队列等待 {dbg.get('queue_delay_ms', 0):.0f}ms | "
                             f"WAV {dbg.get('wav_ms', 0):.0f}ms | 准备发送 {dbg.get('pre_submit_ms', 0):.0f}ms | "
                             f"上传+服务 {dbg.get('upload_s', 0):.2f}s | 自抬键总计 {dbg.get('total_since_keyup_s', 0):.2f}s | "
                             f"大小 {dbg.get('wav_bytes', 0)/1024:.1f}KB @ {dbg.get('sr')}Hz/{dbg.get('channels')}ch"
                         ),
                         style="dim",
                     )
-                console.print(f"    识别结果：[green]{text}")
+                console.print(f"识别结果：{text}", soft_wrap=True)
                 console.line()
             else:
                 # 轻量日志：帮助定位流式过程中是否有数据

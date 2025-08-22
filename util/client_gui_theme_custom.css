@@ -1,11 +1,11 @@
 /*
- Global: pure black background, white text.
+ Global: pure white background, black text.
  Force a CN‑first CJK font stack to avoid JP glyph fallbacks on Windows.
  Order matters: Qt will pick the first available family for rendering.
 */
 QWidget {{
-    background-color: #000000;
-    color: #FFFFFF;
+    background-color: #FFFFFF;
+    color: #000000;
     /* Prefer Simplified Chinese fonts to ensure CN glyph shapes for CJK */
     font-family: "Microsoft YaHei UI", "Microsoft YaHei",
                  "Noto Sans CJK SC", "Noto Sans SC",
@@ -17,23 +17,23 @@ QWidget {{
 /* Buttons use MDL2 icon font for icons; keep transparent background */
 QPushButton {{
     font-family: "Segoe MDL2 Assets";
-    color: #FFFFFF;
+    color: #000000;
     text-transform: none;
     height: 25px;
     border: none;
     background-color: transparent;
 }}
 
-/* Checkbox text in white */
+/* Checkbox text in black */
 QCheckBox {{
-    color: #FFFFFF;
+    color: #000000;
     height: 25px;
 }}
 
-/* Editor: black background, white text */
+/* Editor: white background, black text */
 QTextEdit {{
-    background-color: #000000;
-    color: #FFFFFF;
+    background-color: #FFFFFF;
+    color: #000000;
     border: none;
     padding: 0px;
     /* Ensure editor inherits Chinese-preferred font stack */
@@ -44,9 +44,9 @@ QTextEdit {{
                  "Segoe UI";
 }}
 
-/* Labels: white text; keep default Segoe UI from QWidget */
+/* Labels: black text; keep default Segoe UI from QWidget */
 QLabel {{
-    color: #FFFFFF;
+    color: #000000;
     font-size: 14px;
     /* Ensure labels also use the CN-first font preference */
     font-family: "Microsoft YaHei UI", "Microsoft YaHei",

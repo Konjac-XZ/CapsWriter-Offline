@@ -108,7 +108,6 @@ async def send_audio():
             return
 
         # Log identifiers
-        console.print(f"任务标识：{task_id}")
         console.print(f"    录音时长：{duration:.2f}s")
 
         # Preprocess audio (mono/downsample)
