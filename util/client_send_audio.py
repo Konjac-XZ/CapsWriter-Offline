@@ -18,24 +18,19 @@ from util.client_write_file import write_file
 from util.config import ClientConfig as Config
 
 # New modules for clearer separation of concerns
-from util.openai_transcribe_audio import preprocess_audio as _preprocess_audio
-from util.openai_transcribe_audio import make_audio_payload as _make_audio_payload
-from util.openai_transcribe_audio import get_mp3_bitrate as _get_mp3_bitrate
+from util.openai_transcribe_audio import preprocess_audio
+from util.openai_transcribe_audio import make_audio_payload
+from util.openai_transcribe_audio import get_mp3_bitrate
 from util.openai_transcribe_http import (
-    get_api_base as _get_api_base,
-    get_api_key as _get_api_key,
-    get_model as _get_model,
-    get_prompt as _get_prompt,
-    get_language as _get_language,
-    is_streaming_enabled as _streaming_enabled,
-    transcribe_with_retries as _transcribe_with_retries,
-    http2_enabled as _HTTP2_ENABLED_fn,
+    get_api_base,
+    get_api_key,
+    get_model,
+    get_prompt,
+    get_language,
+    is_streaming_enabled,
+    transcribe_with_retries,
+    http2_enabled,
 )
-
-
-def _HTTP2_ENABLED() -> bool:
-    # proxy to new module's flag getter
-    return _HTTP2_ENABLED_fn()
 
 
 async def _gather_audio_once(task_id: str) -> tuple[np.ndarray, float, float, float, float, str | None]:
@@ -117,26 +112,26 @@ async def send_audio():
         console.print(f"    录音时长：{duration:.2f}s")
 
         # Preprocess audio (mono/downsample)
-        audio_proc, actual_sr = _preprocess_audio(audio_concat)
+        audio_proc, actual_sr = preprocess_audio(audio_concat)
 
         # Build payload
-        payload_buf, payload_mime, encode_ms, payload_sr, payload_ch = await _make_audio_payload(audio_proc, actual_sr)
+        payload_buf, payload_mime, encode_ms, payload_sr, payload_ch = await make_audio_payload(audio_proc, actual_sr)
 
         # Upload with retries
-        api_base = _get_api_base()
+        api_base = get_api_base()
         url = f"{api_base}/v1/audio/transcriptions"
         data_form_base = {
-            "model": _get_model(),
-            "prompt": _get_prompt(),
+            "model": get_model(),
+            "prompt": get_prompt(),
             "response_format": os.getenv("OPENAI_TRANSCRIBE_FORMAT", "text"),
-            "language": _get_language(),
+            "language": get_language(),
         }
         max_retries = int(os.getenv("OPENAI_TRANSCRIBE_RETRIES", "3"))
         base_delay = float(os.getenv("OPENAI_TRANSCRIBE_BACKOFF_BASE", "0.5"))
-        enable_stream_pref = _streaming_enabled()
+        enable_stream_pref = is_streaming_enabled()
 
         t_presubmit = time.time()
-        text_result, status_code, t_submit, t_complete, http2_flag = await _transcribe_with_retries(
+        text_result, status_code, t_submit, t_complete, http2_flag = await transcribe_with_retries(
             payload_buf,
             payload_mime,
             data_form_base,
@@ -172,7 +167,7 @@ async def send_audio():
             "time_submit": t_submit,
             "time_complete": t_complete,
             "source": "mic",
-            "stream": _streaming_enabled(),
+            "stream": is_streaming_enabled(),
             "debug_timing": {
                 "queue_delay_ms": max(0.0, (t_finish_entry - record_stop) * 1000.0),
                 "wav_ms": max(0.0, wav_ms),
@@ -186,7 +181,7 @@ async def send_audio():
                 "record_duration_by_key_s": max(0.0, record_stop - time_start),
                 "http_status": int(status_code),
                 "mime": payload_mime,
-                "bitrate": _get_mp3_bitrate() if payload_mime == "audio/mpeg" else None,
+                "bitrate": get_mp3_bitrate() if payload_mime == "audio/mpeg" else None,
                 "http2": http2_flag,
             },
         }
