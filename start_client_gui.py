@@ -82,7 +82,6 @@ class GUI(QMainWindow):
         self.setWindowFlags(
             self.windowFlags()
             | Qt.FramelessWindowHint  # 隐藏标题栏
-            | Qt.Tool  # 隐藏Windows任务栏上的图标
             | Qt.WindowStaysOnTopHint  # 置顶
         )
         self.create_stay_on_top_button()
