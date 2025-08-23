@@ -18,7 +18,7 @@ _CLIENT_GEN: int = 0
 
 
 def get_api_base() -> str:
-    return os.getenv("OPENAI_BASE_URL", "https://api2.aigcbest.top").rstrip("/")
+    return os.getenv("OPENAI_BASE_URL").rstrip("/")
 
 
 def get_api_key() -> str:

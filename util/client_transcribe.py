@@ -13,7 +13,7 @@ from util.client_hot_update import observe_hot, update_hot_all
 
 
 def _get_api_base() -> str:
-    return os.getenv("OPENAI_BASE_URL", "https://api2.aigcbest.top").rstrip("/")
+    return os.getenv("OPENAI_BASE_URL").rstrip("/")
 
 
 def _get_api_key() -> str:

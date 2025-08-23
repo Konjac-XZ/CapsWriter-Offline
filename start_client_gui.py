@@ -60,7 +60,6 @@ class GUI(QMainWindow):
         self.isBerthRight = False
 
     def init_ui(self):
-        self.resize(425, 425)
         self.setWindowTitle("CapsWriter-Offline-Client")
         self.setWindowIcon(QIcon("assets/client-icon.ico"))
         self.setWindowOpacity(1.0)
@@ -83,6 +82,7 @@ class GUI(QMainWindow):
         # Shortcut: Ctrl+L clears the text box
         clear_sc = QShortcut(QKeySequence("Ctrl+L"), self)
         clear_sc.activated.connect(self.clear_text_box)
+        self.text_box_client.append("准备就绪。")
         
 
     @staticmethod
@@ -118,6 +118,14 @@ class GUI(QMainWindow):
         self.text_box_client.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         # Treat content strictly as plain text to avoid HTML rendering side-effects
         self.text_box_client.setAcceptRichText(False)
+        # Make widget read-only to prevent user edits while still allowing programmatic updates
+        self.text_box_client.setReadOnly(True)
+        # Disable drag-and-drop to prevent dropping text into the widget
+        self.text_box_client.setAcceptDrops(False)
+        # Allow selection by mouse/keyboard but forbid editing
+        self.text_box_client.setTextInteractionFlags(
+            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+        )
         # Wrap at widget width and allow wrapping anywhere to avoid mid-glyph clipping for long CJK strings
         self.text_box_client.setLineWrapMode(QTextEdit.WidgetWidth)
         self.text_box_client.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
@@ -141,13 +149,6 @@ class GUI(QMainWindow):
         self.text_box_client.textChanged.connect(self.update_word_count_toggled)
         self.text_box_client.selectionChanged.connect(self.update_word_count_toggled)
 
-    def create_cloudypaste_button(self):
-        self.cloudypaste_button = QPushButton(chr(0xE753), self)
-        self.cloudypaste_button.setToolTip(
-            "将文本上传至云剪切板，方便向ios设备分享。基于 cv.j20.cc ，一个无依赖即用即走的剪切板。实测5~1024字节，不足字节补.超出字节无效。"
-        )
-        self.cloudypaste_button.setMaximumSize(80, 30)
-        self.cloudypaste_button.clicked.connect(self.cloudy_paste)
 
     def create_clear_button(self):
         # Create a button
@@ -167,9 +168,7 @@ class GUI(QMainWindow):
 
         explore_home_folder_action = QAction("📁 Open Home Folder With Explorer", self)
         vscode_home_folder_action = QAction("🤓 Open Home Folder With VSCode", self)
-        chatglm_website_action = QAction("🤖 ChatGLM Website", self)
 
-        github_website_action = QAction("🌐 GitHub Website", self)
         show_action = QAction("🪟 Show", self)
         restart_client_action = QAction("🔄 Restart Client", self)
         quit_action = QAction("❌ Quit", self)
@@ -181,9 +180,7 @@ class GUI(QMainWindow):
 
         explore_home_folder_action.triggered.connect(self.explore_home_folder)
         vscode_home_folder_action.triggered.connect(self.vscode_home_folder)
-        chatglm_website_action.triggered.connect(self.open_chatglm_website)
 
-        github_website_action.triggered.connect(self.open_github_website)
         show_action.triggered.connect(self.showNormal)
         restart_client_action.triggered.connect(self.restart_client)
         quit_action.triggered.connect(self.quit_app)
@@ -192,21 +189,15 @@ class GUI(QMainWindow):
 
         tray_menu = QMenu()
         edit_menu = QMenu("📝 Edit Hot Rules", tray_menu)
-        view_menu = QMenu("👁️ View", tray_menu)
 
         edit_menu.addAction(edit_hot_en_action)
         edit_menu.addAction(edit_hot_rule_action)
         edit_menu.addAction(edit_hot_zh_action)
         edit_menu.addAction(edit_keyword_action)
 
-        view_menu.addAction(explore_home_folder_action)
-        view_menu.addAction(vscode_home_folder_action)
-        view_menu.addAction(chatglm_website_action)
 
         tray_menu.addMenu(edit_menu)
-        tray_menu.addMenu(view_menu)
 
-        tray_menu.addAction(github_website_action)
         tray_menu.addSeparator()
         tray_menu.addAction(show_action)
         tray_menu.addAction(restart_client_action)
@@ -224,26 +215,11 @@ class GUI(QMainWindow):
             encoding="utf-8",
         )
 
-    def cloudy_paste(self):
-        text = self.text_box_client.toPlainText()
-        subprocess.Popen(
-            [
-                ".\\runtime\\pythonw.exe",
-                ".\\util\\cloud_clipboard_show_qrcode.py",
-                text,
-            ],
-            creationflags=subprocess.CREATE_NO_WINDOW,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-        )
 
     def clear_text_box(self):
         # Clear the content of the client text box
         self.text_box_client.clear()
-        # Resize Window
-        self.resize(425, 425)
+
 
     def on_monitor_toggled(self, state):
         # 检查复选框的选中状态
@@ -299,12 +275,6 @@ class GUI(QMainWindow):
         current_directory = os.getcwd()
         vscode_exe_path = Config.vscode_exe_path
         subprocess.Popen([vscode_exe_path, current_directory])
-
-    def open_chatglm_website(self):
-        os.system("start https://chatglm.cn/main/alltoolsdetail")
-
-    def open_github_website(self):
-        os.system("start https://github.com/H1DDENADM1N/CapsWriter-Offline")
 
     def closeEvent(self, event):
         # Minimize to system tray instead of closing the window when the user clicks the close button

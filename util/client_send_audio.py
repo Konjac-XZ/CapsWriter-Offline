@@ -126,7 +126,7 @@ async def send_audio():
             "language": get_language(),
         }
         max_retries = int(os.getenv("OPENAI_TRANSCRIBE_RETRIES", "3"))
-        base_delay = float(os.getenv("OPENAI_TRANSCRIBE_BACKOFF_BASE", "0.5"))
+        base_delay = float(os.getenv("OPENAI_TRANSCRIBE_BACKOFF_BASE", "0.05"))
         enable_stream_pref = is_streaming_enabled()
 
         t_presubmit = time.time()
