@@ -203,24 +203,24 @@ vscode_exe_path = "C:\\Users\\xinrui\\AppData\\Local\\Programs\\Microsoft VS Cod
 # 使用 VSCode 快速打开 CapsWriter 主目录
 # 方便调试
 
-play_start_music = false
+play_start_music = true
 # 开始任务时是否播放提示音
 # 需要 ffplay.exe
 
-start_music_path = "assets/start.mp3"
+start_music_path = "SpeechOn.mp3"
 # 开始任务提示音的文件路径
 
-start_music_volume = "96"
+start_music_volume = "100"
 # 开始任务提示音的音量，0 ~ 100 之间
 
-play_stop_music = false
+play_stop_music = true
 # 结束任务时是否播放提示音
 # 需要 ffplay.exe
 
-stop_music_path = "assets/stop.mp3"
+stop_music_path = "SpeechOff.mp3"
 # 结束任务提示音的文件路径
 
-stop_music_volume = "62"
+stop_music_volume = "100"
 # 结束任务提示音的音量，0 ~ 100 之间
 
 hint_while_recording_at_edit_position_powered_by_ahk = false

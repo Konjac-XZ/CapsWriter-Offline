@@ -21,16 +21,7 @@ from util.config import ClientConfig as Config
 from util.openai_transcribe_audio import preprocess_audio
 from util.openai_transcribe_audio import make_audio_payload
 from util.openai_transcribe_audio import get_mp3_bitrate
-from util.openai_transcribe_http import (
-    get_api_base,
-    get_api_key,
-    get_model,
-    get_prompt,
-    get_language,
-    is_streaming_enabled,
-    transcribe_with_retries,
-    http2_enabled,
-)
+from util.transcribe_provider import transcribe_audio, get_stream_flag
 
 
 async def _gather_audio_once(task_id: str) -> tuple[np.ndarray, float, float, float, float, str | None]:
@@ -116,31 +107,14 @@ async def send_audio():
         # Build payload
         payload_buf, payload_mime, encode_ms, payload_sr, payload_ch = await make_audio_payload(audio_proc, actual_sr)
 
-        # Upload with retries
-        api_base = get_api_base()
-        url = f"{api_base}/v1/audio/transcriptions"
-        data_form_base = {
-            "model": get_model(),
-            "prompt": get_prompt(),
-            "response_format": os.getenv("OPENAI_TRANSCRIBE_FORMAT", "text"),
-            "language": get_language(),
-        }
+        # Upload with retries via provider abstraction
         max_retries = int(os.getenv("OPENAI_TRANSCRIBE_RETRIES", "3"))
         base_delay = float(os.getenv("OPENAI_TRANSCRIBE_BACKOFF_BASE", "0.05"))
-        enable_stream_pref = is_streaming_enabled()
+        enable_stream_pref = get_stream_flag()
 
         t_presubmit = time.time()
-        text_result, status_code, t_submit, t_complete, http2_flag = await transcribe_with_retries(
-            payload_buf,
-            payload_mime,
-            data_form_base,
-            url,
-            enable_stream_pref,
-            task_id,
-            time_start,
-            record_stop,
-            max_retries,
-            base_delay,
+        text_result, status_code, t_submit, t_complete, transport_info = await transcribe_audio(
+            payload_buf, payload_mime, task_id, time_start, record_stop, max_retries, base_delay
         )
 
         # Optional debug
@@ -151,6 +125,7 @@ async def send_audio():
             upload_s = (t_complete - t_submit)
             total_s = (t_complete - record_stop)
             wav_bytes = payload_buf.getbuffer().nbytes
+            http2_flag = transport_info.get("http2") if isinstance(transport_info, dict) else None
             console.print(
                 f"    [debug] 阶段: 队列等待 {queue_delay_ms:.0f}ms | 编码 {wav_ms:.0f}ms | 准备发送 {pre_submit_ms:.0f}ms | 上传+服务 {upload_s:.2f}s | 自抬键总计 {total_s:.2f}s | 大小 {wav_bytes/1024:.1f}KB @ {payload_sr}Hz/{payload_ch}ch [{payload_mime}] | http2={http2_flag}",
                 style="dim",
@@ -166,7 +141,7 @@ async def send_audio():
             "time_submit": t_submit,
             "time_complete": t_complete,
             "source": "mic",
-            "stream": is_streaming_enabled(),
+            "stream": get_stream_flag(),
             "debug_timing": {
                 "queue_delay_ms": max(0.0, (t_finish_entry - record_stop) * 1000.0),
                 "wav_ms": max(0.0, wav_ms),
@@ -181,7 +156,7 @@ async def send_audio():
                 "http_status": int(status_code),
                 "mime": payload_mime,
                 "bitrate": get_mp3_bitrate() if payload_mime == "audio/mpeg" else None,
-                "http2": http2_flag,
+                "http2": (transport_info.get("http2") if isinstance(transport_info, dict) else None),
             },
         }
         await Cosmic.queue_out.put(message)

@@ -5,9 +5,21 @@ import sys
 import threading
 from pathlib import Path
 from queue import Queue
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
-load_dotenv()
+# Always reload latest .env on startup (file values override inherited env)
+try:
+    # Load project .env if found
+    _dotenv_path = find_dotenv(usecwd=True)
+    if _dotenv_path:
+        load_dotenv(_dotenv_path, override=True)
+    # Load optional .env.local to override .env
+    _dotenv_local = find_dotenv('.env.local', usecwd=True)
+    if _dotenv_local:
+        load_dotenv(_dotenv_local, override=True)
+except Exception:
+    # Don't block startup on dotenv issues
+    pass
 
 import win32api
 import win32con

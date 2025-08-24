@@ -30,11 +30,21 @@ def get_api_key() -> str:
 
 
 def get_model() -> str:
-    return os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-transcribe")
+    return os.getenv("TRANSCRIBE_MODEL", "gpt-4o-transcribe")
 
 
 def get_prompt() -> str:
-    return os.getenv("OPENAI_TRANSCRIBE_PROMPT")
+    return os.getenv("TRANSCRIBE_PROMPT")
+
+
+def get_temperature() -> float | None:
+    val = os.getenv("TRANSCRIBE_TEMPERATURE")
+    if val is None or val.strip() == "":
+        return None
+    try:
+        return float(val)
+    except Exception:
+        return None
 
 
 def get_language() -> str:
@@ -67,6 +77,9 @@ def _log_persistent_established():
         f"持久连接已建立"
     )
 
+def _log_streaming_status():
+    status = "开" if is_streaming_enabled() else "关"
+    console.print(f"流式转录：{status}")
 
 def _log_persistent_closed(reason: str):
     console.print(
@@ -102,6 +115,7 @@ async def get_http_client() -> httpx.AsyncClient:
     )
     _CLIENT_GEN += 1
     _log_persistent_established()
+    _log_streaming_status()
     return _HTTP_CLIENT
 
 
@@ -288,10 +302,11 @@ async def transcribe_with_retries(
 
         client = await get_http_client()
 
+        # Use streaming on the first attempt if enabled; also allow the first retry to try streaming once more
         attempt_stream = enable_stream_pref if attempt == 0 else (enable_stream_pref and (attempt == 1))
         data_form = dict(data_form_base)
-        if attempt_stream:
-            data_form["stream"] = "true"
+        # Provider requires the 'stream' option to be sent as a string; always include it explicitly
+        data_form["stream"] = "true" if attempt_stream else "false"
         files = {"file": (fname, payload_buf, payload_mime)}
 
         err_text = None

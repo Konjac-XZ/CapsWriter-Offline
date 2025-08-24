@@ -24,7 +24,7 @@ def _get_api_key() -> str:
     return api_key
 
 def _get_model() -> str:
-    return os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-transcribe")
+    return os.getenv("TRANSCRIBE_MODEL", "gpt-4o-transcribe")
 
 
 def _get_mime_type(file: Path) -> str:
@@ -66,9 +66,9 @@ async def transcribe_send(file: Path):
 
     data = {
         "model": model,
-        # 复用用户提供的示例提示词，可按需通过环境变量覆盖 OPENAI_TRANSCRIBE_PROMPT
+        # 复用用户提供的示例提示词，可按需通过环境变量覆盖 TRANSCRIBE_PROMPT
         "prompt": os.getenv(
-            "OPENAI_TRANSCRIBE_PROMPT",
+            "TRANSCRIBE_PROMPT",
             (
             """
             The user's primary occupation is as a computer systems security engineer.
