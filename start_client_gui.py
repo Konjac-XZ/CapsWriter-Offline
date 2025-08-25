@@ -26,7 +26,17 @@ import win32con
 import win32gui
 import win32print
 from PySide6.QtCore import QPoint, Qt, QTimer, QLocale
-from PySide6.QtGui import QAction, QFont, QIcon, QWheelEvent, QFontDatabase, QTextOption, QShortcut, QKeySequence
+from PySide6.QtGui import (
+    QAction,
+    QFont,
+    QIcon,
+    QWheelEvent,
+    QFontDatabase,
+    QTextOption,
+    QShortcut,
+    QKeySequence,
+    QColor,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -46,7 +56,7 @@ from qt_material import apply_stylesheet
 
 from util.check_microphone_usage import is_microphone_in_use
 from util.check_process import check_process
-from util.config import ClientConfig as Config
+from util.config import ClientConfig as Config, ServerConfig, DeepLXConfig
 
 
 class Hint_While_Recording_At_Cursor_Position(QLabel):
@@ -94,6 +104,12 @@ class GUI(QMainWindow):
         # Shortcut: Ctrl+L clears the text box
         clear_sc = QShortcut(QKeySequence("Ctrl+L"), self)
         clear_sc.activated.connect(self.clear_text_box)
+        # Show startup info (colored)
+        try:
+            self.show_startup_info()
+        except Exception:
+            # Don't block UI if startup info fails
+            pass
         self.text_box_client.append("准备就绪。")
         
 
@@ -141,43 +157,98 @@ class GUI(QMainWindow):
         # Wrap at widget width and allow wrapping anywhere to avoid mid-glyph clipping for long CJK strings
         self.text_box_client.setLineWrapMode(QTextEdit.WidgetWidth)
         self.text_box_client.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+        # Always follow the latest output (auto-scroll to the bottom on new text)
+        try:
+            self.text_box_client.textChanged.connect(self.scroll_to_bottom)
+        except Exception:
+            pass
 
-    def create_monitor_checkbox(self):
-        # 创建一个QCheckBox控件
-        self.monitor_checkbox = QCheckBox("监听")
-        self.monitor_checkbox.setToolTip("监听客户端输出 / 不监听，仅用作笔记本")
-        self.monitor_checkbox.setMaximumSize(65, 30)
-        # 当状态改变时，调用self.on_monitor_toggled函数
-        self.monitor_checkbox.stateChanged.connect(self.on_monitor_toggled)
-        # 设置默认状态（初始化时不触发信号）
-        self.monitor_checkbox.blockSignals(True)
-        self.monitor_checkbox.setChecked(True)
-        self.monitor_checkbox.blockSignals(False)
+    def scroll_to_bottom(self):
+        """Pin the console view to the latest line after text changes."""
+        try:
+            sb = self.text_box_client.verticalScrollBar()
+            if sb is not None:
+                sb.setValue(sb.maximum())
+            else:
+                # Fallback: ensure cursor at end (rarely needed)
+                cursor = self.text_box_client.textCursor()
+                cursor.movePosition(cursor.End)
+                self.text_box_client.setTextCursor(cursor)
+                self.text_box_client.ensureCursorVisible()
+        except Exception:
+            pass
 
-    def create_wordcount_label(self):
-        self.text_box_wordCountLabel = QLabel("字符数字节数", self)
-        self.text_box_wordCountLabel.setToolTip("光标已选中字符数 / 总字符数 | 字节数")
-        self.text_box_wordCountLabel.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.text_box_client.textChanged.connect(self.update_word_count_toggled)
-        self.text_box_client.selectionChanged.connect(self.update_word_count_toggled)
+    def append_colored_line(self, text: str, color: QColor | str = "green"):
+        """Append a single line to the client text box using the given color.
 
+        Uses QTextEdit.setTextColor so rich text remains disabled but colored output is shown.
+        """
+        try:
+            if isinstance(color, str):
+                color = QColor(color)
+            prev = self.text_box_client.textColor()
+            self.text_box_client.setTextColor(color)
+            self.text_box_client.append(text)
+            # restore previous color
+            self.text_box_client.setTextColor(prev)
+        except Exception:
+            # Fallback to plain append on any error
+            try:
+                self.text_box_client.append(text)
+            except Exception:
+                pass
 
-    def create_clear_button(self):
-        # Create a button
-        self.clear_button = QPushButton(chr(0xE75C), self)
-        self.clear_button.setToolTip("清空文本框中的全部内容")
-        self.clear_button.setMaximumSize(80, 30)
-        # Connect click event
-        self.clear_button.clicked.connect(lambda: self.clear_text_box())
+    def show_startup_info(self):
+        """Gather startup information from config and print it to the text box in green."""
+        import os
+
+        def _sanitize(val: str | None) -> str:
+            if val is None:
+                return "(none)"
+            v = val
+            # strip surrounding single or double quotes
+            if (v.startswith('"') and v.endswith('"')) or (
+                v.startswith("'") and v.endswith("'")
+            ):
+                v = v[1:-1]
+            # trim whitespace
+            v = v.strip()
+            return v
+
+        # Prefer values from .env (loaded earlier via dotenv). Fall back to config.py.
+        transcribe_provider = _sanitize(os.environ.get("TRANSCRIBE_PROVIDER"))
+        transcribe_prompt = _sanitize(os.environ.get("TRANSCRIBE_PROMPT"))
+        transcribe_model = _sanitize(os.environ.get("TRANSCRIBE_MODEL"))
+        transcribe_temperature = _sanitize(os.environ.get("TRANSCRIBE_TEMPERATURE"))
+
+        if transcribe_model == "(none)":
+            try:
+                transcribe_model = ServerConfig.model
+            except Exception:
+                transcribe_model = "(unknown)"
+
+        # Normalize multiline prompt to a single indented block for display
+        if transcribe_prompt not in (None, "(none)"):
+            transcribe_prompt = " ".join(line.strip() for line in transcribe_prompt.splitlines() if line.strip())
+
+        self.text_box_client.append(f"转录服务提供商: {transcribe_provider}")
+        self.text_box_client.append(f"转录模型: {transcribe_model}")
+        self.text_box_client.append(f"转录温度: {transcribe_temperature}")
+        # Print prompt on its own line; limit length to avoid overflowing the UI
+        if transcribe_prompt and transcribe_prompt != "(none)":
+            max_len = 1000
+            prompt_to_show = transcribe_prompt if len(transcribe_prompt) <= max_len else transcribe_prompt[: max_len - 3] + "..."
+            self.text_box_client.append(f"转录提示: {prompt_to_show}")
+        else:
+            self.text_box_client.append("转录提示: (none)")
+        self.text_box_client.append("================")
+
 
     def create_systray_icon(self):
         self.tray_icon = QSystemTrayIcon(self)
         self.tray_icon.setIcon(QIcon("assets/client-icon.ico"))
-        edit_hot_en_action = QAction("Edit hot-en.txt", self)
-        edit_hot_rule_action = QAction("Edit hot-rule.txt", self)
-        edit_hot_zh_action = QAction("Edit hot-zh.txt", self)
-        edit_keyword_action = QAction("Edit keywords.txt", self)
 
+        edit_env_action = QAction("🛠️ Edit .env", self)
         explore_home_folder_action = QAction("📁 Open Home Folder With Explorer", self)
         vscode_home_folder_action = QAction("🤓 Open Home Folder With VSCode", self)
 
@@ -185,14 +256,9 @@ class GUI(QMainWindow):
         restart_client_action = QAction("🔄 Restart Client", self)
         quit_action = QAction("❌ Quit", self)
 
-        edit_hot_en_action.triggered.connect(self.edit_hot_en)
-        edit_hot_rule_action.triggered.connect(self.edit_hot_rule)
-        edit_hot_zh_action.triggered.connect(self.edit_hot_zh)
-        edit_keyword_action.triggered.connect(self.edit_keyword)
-
+        edit_env_action.triggered.connect(self.edit_env)
         explore_home_folder_action.triggered.connect(self.explore_home_folder)
         vscode_home_folder_action.triggered.connect(self.vscode_home_folder)
-
         show_action.triggered.connect(self.showNormal)
         restart_client_action.triggered.connect(self.restart_client)
         quit_action.triggered.connect(self.quit_app)
@@ -200,15 +266,8 @@ class GUI(QMainWindow):
         self.tray_icon.activated.connect(self.on_tray_icon_activated)
 
         tray_menu = QMenu()
-        edit_menu = QMenu("📝 Edit Hot Rules", tray_menu)
-
-        edit_menu.addAction(edit_hot_en_action)
-        edit_menu.addAction(edit_hot_rule_action)
-        edit_menu.addAction(edit_hot_zh_action)
-        edit_menu.addAction(edit_keyword_action)
-
-
-        tray_menu.addMenu(edit_menu)
+        # Environment configuration shortcut replaces legacy hotword menu
+        tray_menu.addAction(edit_env_action)
 
         tray_menu.addSeparator()
         tray_menu.addAction(show_action)
@@ -267,17 +326,27 @@ class GUI(QMainWindow):
         if total_text_count > 10000:  # 字符数过多时自动清空
             self.text_box_client.clear()
 
-    def edit_hot_en(self):
-        os.startfile("hot-en.txt")
-
-    def edit_hot_rule(self):
-        os.startfile("hot-rule.txt")
-
-    def edit_hot_zh(self):
-        os.startfile("hot-zh.txt")
-
-    def edit_keyword(self):
-        os.startfile("keywords.txt")
+    def edit_env(self):
+        """Open the project's .env file for editing; create it with a template if missing."""
+        env_path = Path(".env")
+        try:
+            if not env_path.exists():
+                template = (
+                    "# CapsWriter-Offline environment variables\n"
+                    "# Add key=value lines below. Examples:\n"
+                    "# OPENAI_API_KEY=\n"
+                    "# HTTP_PROXY=http://127.0.0.1:7890\n"
+                    "# HTTPS_PROXY=http://127.0.0.1:7890\n"
+                    "# See readme.md for details.\n"
+                )
+                env_path.write_text(template, encoding="utf-8")
+            os.startfile(str(env_path))
+        except Exception as e:
+            # Non-fatal; surface the error in the log area if available
+            try:
+                self.text_box_client.append(f"Failed to open .env: {e}")
+            except Exception:
+                pass
 
     def explore_home_folder(self):
         current_directory = os.getcwd()
@@ -418,6 +487,23 @@ class GUI(QMainWindow):
         while not self.output_queue_client.empty():
             try:
                 line = self.output_queue_client.get()
+                # Support structured GUI messages emitted by util.gui_output.gui_print
+                try:
+                    if isinstance(line, str) and line.startswith("CW_GUI:"):
+                        import json
+
+                        payload = json.loads(line[len("CW_GUI:") :])
+                        text = payload.get("text", "")
+                        color = payload.get("color")
+                        if color:
+                            self.append_colored_line(text, color)
+                        else:
+                            self.text_box_client.append(text)
+                        continue
+                except Exception:
+                    # Fall back to raw line on any parse error
+                    pass
+
                 self.text_box_client.append(line)
             except Exception as e:
                 self.text_box_client.append(str(e))

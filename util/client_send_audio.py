@@ -99,7 +99,7 @@ async def send_audio():
             return
 
         # Log identifiers
-        console.print(f"    录音时长：{duration:.2f}s")
+        console.print(f"录音时长：{duration:.2f}s")
 
         # Preprocess audio (mono/downsample)
         audio_proc, actual_sr = preprocess_audio(audio_concat)
@@ -127,7 +127,7 @@ async def send_audio():
             wav_bytes = payload_buf.getbuffer().nbytes
             http2_flag = transport_info.get("http2") if isinstance(transport_info, dict) else None
             console.print(
-                f"    [debug] 阶段: 队列等待 {queue_delay_ms:.0f}ms | 编码 {wav_ms:.0f}ms | 准备发送 {pre_submit_ms:.0f}ms | 上传+服务 {upload_s:.2f}s | 自抬键总计 {total_s:.2f}s | 大小 {wav_bytes/1024:.1f}KB @ {payload_sr}Hz/{payload_ch}ch [{payload_mime}] | http2={http2_flag}",
+                f"[debug] 阶段: 队列等待 {queue_delay_ms:.0f}ms | 编码 {wav_ms:.0f}ms | 准备发送 {pre_submit_ms:.0f}ms | 上传+服务 {upload_s:.2f}s | 自抬键总计 {total_s:.2f}s | 大小 {wav_bytes/1024:.1f}KB @ {payload_sr}Hz/{payload_ch}ch [{payload_mime}] | http2={http2_flag}",
                 style="dim",
             )
 

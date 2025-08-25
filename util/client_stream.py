@@ -34,7 +34,7 @@ def stream_close(signum, frame):
 def stream_reopen():
     if not threading.main_thread().is_alive():
         return
-    print("重启音频流")
+    console.print("\n正在聆听……", style="green")
 
     # 关闭旧流
     Cosmic.stream.close()
@@ -66,7 +66,7 @@ def stream_open():
             ):
                 console.print(
                     "警告：检测到的麦克风设备名称不包含 'USB'。",
-                    style="yellow",
+                    style="orange",
                 )
                 Cosmic.usb_warning_shown = True
         except Exception:
