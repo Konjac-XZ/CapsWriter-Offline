@@ -118,6 +118,20 @@ async def transcribe_audio(
         return await _run_replicate(
             payload_buf, payload_mime, task_id, time_start, record_stop, max_retries, base_delay
         )
+    if provider in ("soniox", "soniox-rest", "soniox_http"):
+        from util.soniox_transcribe_http import (
+            transcribe_with_retries as soniox_transcribe,
+        )
+        text_result, status_code, t_submit, t_complete, http2_flag = await soniox_transcribe(
+            payload_buf,
+            payload_mime,
+            task_id,
+            time_start,
+            record_stop,
+            max_retries,
+            base_delay,
+        )
+        return text_result, status_code, t_submit, t_complete, {"http2": http2_flag}
     if provider in ("elevenlabs", "11labs", "11l"):
         from util.elevenlabs_transcribe_http import (
             transcribe_with_retries as el_transcribe,
