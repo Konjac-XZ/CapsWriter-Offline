@@ -7,16 +7,21 @@ from pathlib import Path
 from queue import Queue
 from dotenv import load_dotenv, find_dotenv
 
-# Always reload latest .env on startup (file values override inherited env)
+# Project root is the directory containing this script; normalize CWD for reliability
+ROOT: Path = Path(__file__).resolve().parent
 try:
-    # Load project .env if found
-    _dotenv_path = find_dotenv(usecwd=True)
-    if _dotenv_path:
-        load_dotenv(_dotenv_path, override=True)
-    # Load optional .env.local to override .env
-    _dotenv_local = find_dotenv('.env.local', usecwd=True)
-    if _dotenv_local:
-        load_dotenv(_dotenv_local, override=True)
+    os.chdir(str(ROOT))
+except Exception:
+    pass
+
+# Always reload latest .env on startup; prefer files next to this script
+try:
+    env_file = ROOT / ".env"
+    if env_file.exists():
+        load_dotenv(str(env_file), override=True)
+    env_local_file = ROOT / ".env.local"
+    if env_local_file.exists():
+        load_dotenv(str(env_local_file), override=True)
 except Exception:
     # Don't block startup on dotenv issues
     pass
@@ -58,6 +63,26 @@ from util.check_microphone_usage import is_microphone_in_use
 from util.check_process import check_process
 from util.config import ClientConfig as Config, ServerConfig, DeepLXConfig
 
+def _resolve_pythonw_client() -> str | None:
+    """Return a usable Python interpreter for client child processes.
+
+    Preference order:
+    - runtime/pythonw_CapsWriter_Client.exe
+    - runtime/pythonw.exe
+    - runtime/python.exe
+    - current sys.executable
+    """
+    candidates: list[Path] = [
+        ROOT / "runtime" / "pythonw_CapsWriter_Client.exe",
+        ROOT / "runtime" / "pythonw.exe",
+        ROOT / "runtime" / "python.exe",
+        Path(sys.executable) if sys.executable else None,  # type: ignore[arg-type]
+    ]
+    for p in candidates:
+        if p and p.exists():
+            return str(p)
+    return None
+
 
 class Hint_While_Recording_At_Cursor_Position(QLabel):
     def __init__(self):
@@ -83,7 +108,10 @@ class GUI(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle("CapsWriter-Offline-Client")
-        self.setWindowIcon(QIcon("assets/client-icon.ico"))
+        try:
+            self.setWindowIcon(QIcon(str(ROOT / "assets" / "client-icon.ico")))
+        except Exception:
+            pass
         self.setWindowOpacity(1.0)
 
         # Use native system title bar; no custom frame
@@ -227,11 +255,17 @@ class GUI(QMainWindow):
             except Exception:
                 transcribe_model = "(unknown)"
 
+        if transcribe_provider == "openai":
+            transcribe_base_url = _sanitize(os.environ.get("OPENAI_BASE_URL"))
+        else:
+            transcribe_base_url = "(default)"
+            
         # Normalize multiline prompt to a single indented block for display
         if transcribe_prompt not in (None, "(none)"):
             transcribe_prompt = " ".join(line.strip() for line in transcribe_prompt.splitlines() if line.strip())
 
         self.text_box_client.append(f"转录服务提供商: {transcribe_provider}")
+        self.text_box_client.append(f"转录基础 URL: {transcribe_base_url}")
         self.text_box_client.append(f"转录模型: {transcribe_model}")
         self.text_box_client.append(f"转录温度: {transcribe_temperature}")
         # Print prompt on its own line; limit length to avoid overflowing the UI
@@ -246,7 +280,10 @@ class GUI(QMainWindow):
 
     def create_systray_icon(self):
         self.tray_icon = QSystemTrayIcon(self)
-        self.tray_icon.setIcon(QIcon("assets/client-icon.ico"))
+        try:
+            self.tray_icon.setIcon(QIcon(str(ROOT / "assets" / "client-icon.ico")))
+        except Exception:
+            pass
 
         edit_env_action = QAction("🛠️ Edit .env", self)
         explore_home_folder_action = QAction("📁 Open Home Folder With Explorer", self)
@@ -277,14 +314,28 @@ class GUI(QMainWindow):
         self.tray_icon.show()
 
     def restart_client(self):
-        subprocess.Popen(
-            [".\\runtime\\python.exe", ".\\util\\client_restart.py"],
-            creationflags=subprocess.CREATE_NO_WINDOW,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-        )
+        # Important: run the restart helper with the console Python (python.exe),
+        # not pythonw_CapsWriter_Client.exe. Otherwise the helper would be killed
+        # by its own taskkill (since it targets pythonw_CapsWriter_Client.exe).
+        exe_console = str(ROOT / "runtime" / "python.exe")
+        exe = exe_console if Path(exe_console).exists() else (sys.executable or exe_console)
+        try:
+            DETACHED_PROCESS = 0x00000008
+            CREATE_NEW_PROCESS_GROUP = 0x00000200
+            subprocess.Popen(
+                [exe, str(ROOT / "util" / "client_restart.py")],
+                creationflags=(subprocess.CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                cwd=str(ROOT),
+            )
+        except Exception as e:
+            # Surface the error but keep GUI alive
+            try:
+                self.text_box_client.append(f"重启失败: {e}")
+            except Exception:
+                pass
 
 
     def clear_text_box(self):
@@ -328,7 +379,7 @@ class GUI(QMainWindow):
 
     def edit_env(self):
         """Open the project's .env file for editing; create it with a template if missing."""
-        env_path = Path(".env")
+        env_path = ROOT / ".env"
         try:
             if not env_path.exists():
                 template = (
@@ -349,13 +400,24 @@ class GUI(QMainWindow):
                 pass
 
     def explore_home_folder(self):
-        current_directory = os.getcwd()
-        os.startfile(current_directory)
+        try:
+            os.startfile(str(ROOT))
+        except Exception as e:
+            try:
+                self.text_box_client.append(f"打开目录失败: {e}")
+            except Exception:
+                pass
 
     def vscode_home_folder(self):
-        current_directory = os.getcwd()
+        current_directory = str(ROOT)
         vscode_exe_path = Config.vscode_exe_path
-        subprocess.Popen([vscode_exe_path, current_directory])
+        try:
+            subprocess.Popen([vscode_exe_path, current_directory], cwd=current_directory)
+        except Exception as e:
+            try:
+                self.text_box_client.append(f"启动 VSCode 失败: {e}")
+            except Exception:
+                pass
 
     def closeEvent(self, event):
         # Minimize to system tray instead of closing the window when the user clicks the close button
@@ -398,16 +460,26 @@ class GUI(QMainWindow):
 
     def start_script(self):
         # Start core_client.py and redirect output to the client queue
+        exe = _resolve_pythonw_client()
+        if exe is None:
+            try:
+                self.text_box_client.append("未找到可用的 Python 运行时 (runtime/pythonw*_*.exe)。请检查 runtime 目录。")
+            except Exception:
+                pass
+            return
+
         if Config.use_offline_translate_function:
             self.translate_and_replace_selected_text_offline_process = subprocess.Popen(
                 [
-                    ".\\runtime\\pythonw_CapsWriter_Client.exe",
-                    ".\\util\\client_translate_and_replace_selected_text_offline.py",
+                    exe,
+                    str(ROOT / "util" / "client_translate_and_replace_selected_text_offline.py"),
                 ],
                 creationflags=subprocess.CREATE_NO_WINDOW,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                cwd=str(ROOT),
             )
             threading.Thread(
                 target=self.enqueue_output,
@@ -421,13 +493,15 @@ class GUI(QMainWindow):
         if Config.use_online_translate_function:
             self.translate_and_replace_selected_text_online_process = subprocess.Popen(
                 [
-                    ".\\runtime\\pythonw_CapsWriter_Client.exe",
-                    ".\\util\\client_translate_and_replace_selected_text_online.py",
+                    exe,
+                    str(ROOT / "util" / "client_translate_and_replace_selected_text_online.py"),
                 ],
                 creationflags=subprocess.CREATE_NO_WINDOW,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                cwd=str(ROOT),
             )
             threading.Thread(
                 target=self.enqueue_output,
@@ -441,13 +515,15 @@ class GUI(QMainWindow):
         if Config.use_search_selected_text_with_everything_function:
             self.search_selected_text_with_everything = subprocess.Popen(
                 [
-                    ".\\runtime\\pythonw_CapsWriter_Client.exe",
-                    ".\\util\\client_search_selected_text_with_everything.py",
+                    exe,
+                    str(ROOT / "util" / "client_search_selected_text_with_everything.py"),
                 ],
                 creationflags=subprocess.CREATE_NO_WINDOW,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                cwd=str(ROOT),
             )
             threading.Thread(
                 target=self.enqueue_output,
@@ -459,12 +535,13 @@ class GUI(QMainWindow):
             ).start()
 
         self.core_client_process = subprocess.Popen(
-            [".\\runtime\\pythonw_CapsWriter_Client.exe", "core_client.py"],
+            [exe, str(ROOT / "core_client.py")],
             creationflags=subprocess.CREATE_NO_WINDOW,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             encoding="utf-8",
+            cwd=str(ROOT),
         )
         threading.Thread(
             target=self.enqueue_output,
@@ -574,11 +651,13 @@ def start_client_gui():
     if (
         Config.hint_while_recording_at_edit_position_powered_by_ahk
         and not check_process("hint_while_recording.exe")
-        and Path("hint_while_recording.exe").exists()
+        and (ROOT / "hint_while_recording.exe").exists()
         # and Config.hold_mode
     ):
         subprocess.Popen(
-            ["hint_while_recording.exe"], creationflags=subprocess.CREATE_NO_WINDOW
+            [str(ROOT / "hint_while_recording.exe")],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            cwd=str(ROOT),
         )
     app = QApplication(sys.argv)
     # Force CN locale to influence font fallback toward Simplified Chinese glyphs
@@ -612,7 +691,7 @@ def start_client_gui():
             pass
         tooltip.show()
     apply_stylesheet(
-        app, theme="dark_teal.xml", css_file="util\\client_gui_theme_custom.css"
+        app, theme="dark_teal.xml", css_file=str(ROOT / "util" / "client_gui_theme_custom.css")
     )
     # Print screen info after Qt app is initialized (accurate in multi-monitor setups)
     try:
