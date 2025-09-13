@@ -5,7 +5,7 @@ import sys
 import threading
 from pathlib import Path
 from queue import Queue
-from dotenv import load_dotenv, find_dotenv
+from dotenv import load_dotenv, find_dotenv, dotenv_values
 
 # Project root is the directory containing this script; normalize CWD for reliability
 ROOT: Path = Path(__file__).resolve().parent
@@ -105,6 +105,11 @@ class GUI(QMainWindow):
         self.edgeMargin = 5  # 侧边停靠残余像素值
         self.isBerthLeft = False
         self.isBerthRight = False
+        # Track last loaded env mapping to allow proper removals on reload
+        try:
+            self._last_env_mapping: dict[str, str] = self._read_env_files_dict()
+        except Exception:
+            self._last_env_mapping = {}
 
     def init_ui(self):
         self.setWindowTitle("CapsWriter-Offline-Client")
@@ -231,17 +236,17 @@ class GUI(QMainWindow):
         import os
 
         def _sanitize(val: str | None) -> str:
+            """Normalize an env value for display.
+
+            - None -> "(none)"
+            - strip surrounding quotes and outer whitespace
+            """
             if val is None:
                 return "(none)"
-            v = val
-            # strip surrounding single or double quotes
-            if (v.startswith('"') and v.endswith('"')) or (
-                v.startswith("'") and v.endswith("'")
-            ):
-                v = v[1:-1]
-            # trim whitespace
-            v = v.strip()
-            return v
+            v = str(val).strip()
+            if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+                v = v[1:-1].strip()
+            return v or "(none)"
 
         # Prefer values from .env (loaded earlier via dotenv). Fall back to config.py.
         transcribe_provider = _sanitize(os.environ.get("TRANSCRIBE_PROVIDER"))
@@ -249,25 +254,29 @@ class GUI(QMainWindow):
         transcribe_model = _sanitize(os.environ.get("TRANSCRIBE_MODEL"))
         transcribe_temperature = _sanitize(os.environ.get("TRANSCRIBE_TEMPERATURE"))
 
+        # If the env explicitly disables model display, fall back to server config where appropriate
         if transcribe_model == "(none)":
             try:
                 transcribe_model = ServerConfig.model
             except Exception:
                 transcribe_model = "(unknown)"
 
+        # Only expose OpenAI-specific settings when provider is openai
+        transcribe_base_url: str | None = None
         if transcribe_provider == "openai":
             transcribe_base_url = _sanitize(os.environ.get("OPENAI_BASE_URL"))
-        else:
-            transcribe_base_url = "(default)"
-            
-        # Normalize multiline prompt to a single indented block for display
+
+        # Normalize multiline prompt to a single line for display
         if transcribe_prompt not in (None, "(none)"):
             transcribe_prompt = " ".join(line.strip() for line in transcribe_prompt.splitlines() if line.strip())
 
+        # Output: provider always, OpenAI-only details only when applicable
         self.text_box_client.append(f"转录服务提供商: {transcribe_provider}")
-        self.text_box_client.append(f"转录基础 URL: {transcribe_base_url}")
-        self.text_box_client.append(f"转录模型: {transcribe_model}")
-        self.text_box_client.append(f"转录温度: {transcribe_temperature}")
+        if transcribe_provider == "openai":
+            self.text_box_client.append(f"转录基础 URL: {transcribe_base_url}")
+            self.text_box_client.append(f"转录模型: {transcribe_model}")
+            self.text_box_client.append(f"转录温度: {transcribe_temperature}")
+
         # Print prompt on its own line; limit length to avoid overflowing the UI
         if transcribe_prompt and transcribe_prompt != "(none)":
             max_len = 1000
@@ -275,6 +284,7 @@ class GUI(QMainWindow):
             self.text_box_client.append(f"转录提示: {prompt_to_show}")
         else:
             self.text_box_client.append("转录提示: (none)")
+
         self.text_box_client.append("================")
 
 
@@ -286,6 +296,7 @@ class GUI(QMainWindow):
             pass
 
         edit_env_action = QAction("🛠️ Edit .env", self)
+        reload_env_action = QAction("⚡ Apply .env (fast)", self)
         explore_home_folder_action = QAction("📁 Open Home Folder With Explorer", self)
         vscode_home_folder_action = QAction("🤓 Open Home Folder With VSCode", self)
 
@@ -294,6 +305,7 @@ class GUI(QMainWindow):
         quit_action = QAction("❌ Quit", self)
 
         edit_env_action.triggered.connect(self.edit_env)
+        reload_env_action.triggered.connect(self.apply_env_fast)
         explore_home_folder_action.triggered.connect(self.explore_home_folder)
         vscode_home_folder_action.triggered.connect(self.vscode_home_folder)
         show_action.triggered.connect(self.showNormal)
@@ -302,16 +314,62 @@ class GUI(QMainWindow):
 
         self.tray_icon.activated.connect(self.on_tray_icon_activated)
 
-        tray_menu = QMenu()
+        # Keep a persistent reference to avoid GC and enable warm-up
+        self.tray_menu = QMenu()
         # Environment configuration shortcut replaces legacy hotword menu
-        tray_menu.addAction(edit_env_action)
+        self.tray_menu.addAction(edit_env_action)
+        self.tray_menu.addAction(reload_env_action)
 
-        tray_menu.addSeparator()
-        tray_menu.addAction(show_action)
-        tray_menu.addAction(restart_client_action)
-        tray_menu.addAction(quit_action)
-        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_menu.addSeparator()
+        self.tray_menu.addAction(show_action)
+        self.tray_menu.addAction(restart_client_action)
+        self.tray_menu.addAction(quit_action)
+        self.tray_icon.setContextMenu(self.tray_menu)
         self.tray_icon.show()
+
+        # Proactively warm up the tray menu to avoid first-use lag
+        try:
+            QTimer.singleShot(350, self._warm_up_tray_menu)
+        except Exception:
+            pass
+
+    def _warm_up_tray_menu(self):
+        """Force-create and layout the tray menu to eliminate first-show stutter.
+
+        We polish the menu, compute geometry, force a native handle, and briefly
+        show it off-screen before hiding it again. This primes fonts/styles.
+        """
+        try:
+            menu = getattr(self, "tray_menu", None)
+            if not isinstance(menu, QMenu):
+                return
+            # Ensure style polish and layout
+            try:
+                menu.ensurePolished()
+            except Exception:
+                pass
+            try:
+                _ = menu.sizeHint()
+                for act in menu.actions():
+                    menu.actionGeometry(act)
+            except Exception:
+                pass
+            # Force native handle creation
+            try:
+                _ = menu.winId()
+            except Exception:
+                pass
+            # Briefly show off-screen to trigger any deferred init, then hide
+            try:
+                menu.move(-2000, -2000)
+                menu.show()
+                QApplication.processEvents()
+                QTimer.singleShot(30, menu.hide)
+            except Exception:
+                pass
+        except Exception:
+            # Never let warm-up impact the app
+            pass
 
     def restart_client(self):
         # Important: run the restart helper with the console Python (python.exe),
@@ -585,6 +643,165 @@ class GUI(QMainWindow):
             except Exception as e:
                 self.text_box_client.append(str(e))
                 break
+
+    # ============ Fast env reload and worker restart ============
+    def _read_env_files_dict(self) -> dict[str, str]:
+        """Read .env and .env.local into a merged dict without mutating os.environ.
+
+        .env.local overrides .env when both define the same key.
+        """
+        base_path = ROOT / ".env"
+        local_path = ROOT / ".env.local"
+        data: dict[str, str] = {}
+        try:
+            if base_path.exists():
+                data.update({k: str(v) for k, v in dotenv_values(str(base_path)).items() if v is not None})
+        except Exception:
+            pass
+        try:
+            if local_path.exists():
+                # local overrides base
+                data.update({k: str(v) for k, v in dotenv_values(str(local_path)).items() if v is not None})
+        except Exception:
+            pass
+        return data
+
+    def _apply_env_mapping_inplace(self, new_map: dict[str, str]) -> tuple[list[tuple[str, str | None, str]], list[str]]:
+        """Update os.environ with new_map, remove keys that were previously loaded but now absent.
+
+        Returns (changed, removed):
+        - changed: list of (key, old_value, new_value)
+        - removed: list of keys removed from os.environ
+        """
+        changed: list[tuple[str, str | None, str]] = []
+        removed: list[str] = []
+        prev = getattr(self, "_last_env_mapping", {})
+
+        # Apply additions/updates
+        for k, v in new_map.items():
+            old = os.environ.get(k)
+            if old != v:
+                changed.append((k, old, v))
+                os.environ[k] = v
+
+        # Remove keys that were previously set from env files but are no longer present
+        for k in prev.keys():
+            if k not in new_map and k in os.environ:
+                removed.append(k)
+                try:
+                    del os.environ[k]
+                except Exception:
+                    pass
+
+        # Update snapshot
+        self._last_env_mapping = dict(new_map)
+        return changed, removed
+
+    def _mask_value(self, key: str, value: str | None) -> str:
+        """Mask sensitive values for display if key looks secret-like."""
+        if value is None:
+            return "(none)"
+        k = key.lower()
+        if any(s in k for s in ["key", "token", "secret", "pwd", "password", "api", "auth"]):
+            if len(value) <= 6:
+                return "*" * len(value)
+            return value[:3] + "***" + value[-3:]
+        return value
+
+    def _stop_process(self, proc: subprocess.Popen | None, name: str) -> None:
+        if not proc:
+            return
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=0.8)
+                except Exception:
+                    pass
+                if proc.poll() is None:
+                    proc.kill()
+        except Exception:
+            pass
+
+    def _start_worker(self, script_rel_path: str, attr_name: str) -> None:
+        exe = _resolve_pythonw_client()
+        if exe is None:
+            self.text_box_client.append("未找到可用的 Python 运行时。无法重启子进程。")
+            return
+        try:
+            p = subprocess.Popen(
+                [exe, str(ROOT / script_rel_path)],
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                cwd=str(ROOT),
+                env=os.environ.copy(),
+            )
+            setattr(self, attr_name, p)
+            threading.Thread(
+                target=self.enqueue_output,
+                args=(p.stdout, self.output_queue_client),
+                daemon=True,
+            ).start()
+        except Exception as e:
+            self.text_box_client.append(f"启动子进程失败({script_rel_path}): {e}")
+
+    def restart_children_with_env(self) -> None:
+        """Restart only worker subprocesses to pick up new environment, keep GUI alive."""
+        # Stop existing workers
+        self._stop_process(getattr(self, "core_client_process", None), "core_client")
+        if getattr(Config, "use_offline_translate_function", False):
+            self._stop_process(getattr(self, "translate_and_replace_selected_text_offline_process", None), "offline_trans")
+        if getattr(Config, "use_online_translate_function", False):
+            self._stop_process(getattr(self, "translate_and_replace_selected_text_online_process", None), "online_trans")
+        if getattr(Config, "use_search_selected_text_with_everything_function", False):
+            self._stop_process(getattr(self, "search_selected_text_with_everything", None), "everything")
+
+        # Start workers with updated env
+        if getattr(Config, "use_offline_translate_function", False):
+            self._start_worker("util/client_translate_and_replace_selected_text_offline.py", "translate_and_replace_selected_text_offline_process")
+        if getattr(Config, "use_online_translate_function", False):
+            self._start_worker("util/client_translate_and_replace_selected_text_online.py", "translate_and_replace_selected_text_online_process")
+        if getattr(Config, "use_search_selected_text_with_everything_function", False):
+            self._start_worker("util/client_search_selected_text_with_everything.py", "search_selected_text_with_everything")
+        # Core client last
+        self._start_worker("core_client.py", "core_client_process")
+
+    def apply_env_fast(self):
+        """Reload .env/.env.local and restart only background workers quickly."""
+        try:
+            new_map = self._read_env_files_dict()
+            changed, removed = self._apply_env_mapping_inplace(new_map)
+            ch_cnt = len(changed)
+            rm_cnt = len(removed)
+            # Brief summary with sensitive masking
+            if ch_cnt or rm_cnt:
+                self.append_colored_line(
+                    f"已重新加载 .env（修改 {ch_cnt} 项, 移除 {rm_cnt} 项）。正在快速重启后台子进程…",
+                    QColor("#00d4ff"),
+                )
+                preview_lines = []
+                for k, old, new in changed[:5]:  # show at most 5 keys
+                    preview_lines.append(f"  {k}: {self._mask_value(k, old)} -> {self._mask_value(k, new)}")
+                for k in removed[:3]:
+                    preview_lines.append(f"  {k}: removed")
+                if preview_lines:
+                    self.text_box_client.append("\n".join(preview_lines))
+            else:
+                self.text_box_client.append(".env 未检测到变化。仍将重启后台子进程以确保生效…")
+        except Exception as e:
+            self.text_box_client.append(f"读取 .env 失败: {e}")
+
+        # Restart workers to apply env
+        self.restart_children_with_env()
+        # Refresh startup info display with latest env
+        try:
+            self.text_box_client.append("==== 环境已应用（快速） ====")
+            self.show_startup_info()
+        except Exception:
+            pass
 
 
     def mousePressEvent(self, event):
