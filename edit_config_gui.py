@@ -19,6 +19,7 @@ from util.edit_config_gui.model_paths_config_page import ModelPathsConfigPage
 from util.edit_config_gui.paraformer_args_config_page import (
     ParaformerArgsConfigPage,
 )
+from util.edit_config_gui.provider_config_page import ProviderConfigPage
 from util.edit_config_gui.sensevoice_args_config_page import (
     SenseVoiceArgsConfigPage,
 )
@@ -57,6 +58,12 @@ class ConfigEditor(SiliconApplication):
             ClientConfigPage(self.config, self.config_path),
             icon=SiGlobal.siui.iconpack.get("ic_fluent_person_filled"),
             hint="客户端配置",
+            side="top",
+        )
+        self.layerMain().addPage(
+            ProviderConfigPage(),
+            icon=SiGlobal.siui.iconpack.get("ic_fluent_cloud_sync_filled"),
+            hint="转录服务提供商配置",
             side="top",
         )
         self.layerMain().addPage(

@@ -99,6 +99,10 @@ class Hint_While_Recording_At_Cursor_Position(QLabel):
 class GUI(QMainWindow):
     def __init__(self):
         super().__init__()
+        
+        # Initialize transcription providers before UI setup
+        self.initialize_transcription_providers()
+        
         self.init_ui()
         self.output_queue_client = Queue()
         self.start_script()
@@ -111,6 +115,17 @@ class GUI(QMainWindow):
         except Exception:
             self._last_env_mapping = {}
 
+    def initialize_transcription_providers(self):
+        """Initialize transcription provider configurations."""
+        try:
+            from util.transcribe_provider import initialize_providers
+            initialize_providers()
+        except ImportError:
+            # Provider manager not available, continue with env-based config
+            pass
+        except Exception as e:
+            print(f"Error initializing providers: {e}")
+
     def init_ui(self):
         self.setWindowTitle("CapsWriter-Offline-Client")
         try:
@@ -118,6 +133,16 @@ class GUI(QMainWindow):
         except Exception:
             pass
         self.setWindowOpacity(1.0)
+
+        # Keep the main window always on top and hide it from the taskbar.
+        # Use Qt.WindowStaysOnTopHint to keep above other windows and
+        # Qt.Tool to prevent a taskbar entry on Windows while still allowing
+        # the window to behave as a normal top-level window.
+        try:
+            flags = self.windowFlags() | Qt.WindowStaysOnTopHint
+            self.setWindowFlags(flags)
+        except Exception:
+            pass
 
         # Use native system title bar; no custom frame
         self.create_text_box()

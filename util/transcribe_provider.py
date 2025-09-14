@@ -11,10 +11,35 @@ from util.openai_transcribe_http import (
     transcribe_with_retries as _openai_transcribe_with_retries,
 )
 
+# Import provider manager for dynamic configuration
+try:
+    from util.provider_config import provider_manager
+    PROVIDER_MANAGER_AVAILABLE = True
+except ImportError:
+    PROVIDER_MANAGER_AVAILABLE = False
+
 
 def get_stream_flag() -> bool:
     """Provider-agnostic accessor for the streaming flag (keeps current env compatibility)."""
     return _get_stream_flag()
+
+
+def initialize_providers() -> None:
+    """Initialize provider configurations on startup."""
+    if PROVIDER_MANAGER_AVAILABLE:
+        # Load providers and set active one in environment
+        provider_manager.load_providers()
+        active_provider = provider_manager.get_active_provider()
+        if active_provider:
+            # Set environment variables based on active provider
+            provider_id = None
+            for pid, provider in provider_manager.providers.items():
+                if provider.enabled:
+                    provider_id = pid
+                    break
+            
+            if provider_id:
+                provider_manager.set_active_provider(provider_id)
 
 
 async def _run_openai(

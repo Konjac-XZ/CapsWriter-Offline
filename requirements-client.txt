@@ -20,3 +20,4 @@ python-dotenv
 pangu
 httpx[http2]
 replicate>=0.31.0
+PyYAML==6.0.2
