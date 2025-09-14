@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import threading
+import asyncio
 from pathlib import Path
 from queue import Queue
 from dotenv import load_dotenv, find_dotenv, dotenv_values
@@ -45,6 +46,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -99,10 +101,13 @@ class Hint_While_Recording_At_Cursor_Position(QLabel):
 class GUI(QMainWindow):
     def __init__(self):
         super().__init__()
-        
+
+        # Queue to store early log messages before UI is ready
+        self.early_messages = []
+
         # Initialize transcription providers before UI setup
         self.initialize_transcription_providers()
-        
+
         self.init_ui()
         self.output_queue_client = Queue()
         self.start_script()
@@ -115,16 +120,46 @@ class GUI(QMainWindow):
         except Exception:
             self._last_env_mapping = {}
 
+        # Display early messages now that UI is ready
+        for message, color in self.early_messages:
+            self.append_colored_line(message, color)
+        self.early_messages = []
+
+    def log_message(self, message: str, color: str = "#ffffff"):
+        """Log a message - stores early messages in queue if UI not ready."""
+        if hasattr(self, 'text_box_client'):
+            self.append_colored_line(message, color)
+        else:
+            self.early_messages.append((message, color))
+
     def initialize_transcription_providers(self):
         """Initialize transcription provider configurations."""
         try:
-            from util.transcribe_provider import initialize_providers
-            initialize_providers()
-        except ImportError:
-            # Provider manager not available, continue with env-based config
-            pass
+            self.log_message("正在加载转录服务商配置...", "#00d4ff")
+            from util.provider_config import provider_manager
+            self.provider_manager = provider_manager
+            self.provider_manager.load_providers()
+
+            providers = self.provider_manager.list_providers()
+            self.log_message(f"已加载 {len(providers)} 个转录服务商配置", "#00d4ff")
+            for provider in providers:
+                status = "启用" if provider['enabled'] else "禁用"
+                self.log_message(f"  - {provider['name']} ({provider['type']}) [{status}]", "#888888")
+
+            active = self.provider_manager.get_active_provider()
+            if active:
+                self.log_message(f"当前活动服务商: {active.name}", "#00ff00")
+            else:
+                self.log_message("未找到活动的转录服务商", "#ff8800")
+
+        except ImportError as e:
+            self.log_message(f"无法导入 provider_config: {e}", "#ff0000")
+            self.provider_manager = None
         except Exception as e:
-            print(f"Error initializing providers: {e}")
+            self.log_message(f"初始化转录服务商时出错: {e}", "#ff0000")
+            import traceback
+            self.log_message(f"错误详情: {traceback.format_exc()}", "#ff0000")
+            self.provider_manager = None
 
     def init_ui(self):
         self.setWindowTitle("CapsWriter-Offline-Client")
@@ -146,6 +181,7 @@ class GUI(QMainWindow):
 
         # Use native system title bar; no custom frame
         self.create_text_box()
+        self.create_provider_selector()
         self.create_systray_icon()
 
         # Layout
@@ -153,6 +189,7 @@ class GUI(QMainWindow):
         self.layout.setSpacing(0)
         self.layout.setContentsMargins(3, 3, 3, 3)
         self.layout.addWidget(self.text_box_client)
+        self.layout.addLayout(self.provider_layout)
 
         # Central widget
         central_widget = QWidget()
@@ -220,6 +257,156 @@ class GUI(QMainWindow):
             self.text_box_client.textChanged.connect(self.scroll_to_bottom)
         except Exception:
             pass
+
+    def create_provider_selector(self):
+        """Create provider selection UI below the main text box."""
+        self.provider_layout = QHBoxLayout()
+        self.provider_layout.setSpacing(8)
+        self.provider_layout.setContentsMargins(3, 3, 3, 3)
+
+        # Provider label
+        provider_label = QLabel("转录服务商:")
+        provider_label.setMinimumWidth(70)
+        self.provider_layout.addWidget(provider_label)
+
+        # Provider dropdown
+        self.provider_combo = QComboBox()
+        self.provider_combo.setMinimumWidth(200)
+        self.populate_provider_combo()
+        self.provider_combo.currentTextChanged.connect(self.on_provider_changed)
+        self.provider_layout.addWidget(self.provider_combo)
+
+        # Test All button
+        self.test_all_button = QPushButton("Test All")
+        self.test_all_button.setMinimumWidth(80)
+        self.test_all_button.setToolTip("测试所有转录服务商的可用性")
+        self.test_all_button.clicked.connect(self.test_all_providers)
+        self.provider_layout.addWidget(self.test_all_button)
+
+        # Add spacer to push everything to the left
+        self.provider_layout.addStretch()
+
+    def populate_provider_combo(self):
+        """Populate the provider combo box with available providers."""
+        self.provider_combo.clear()
+
+        if not self.provider_manager:
+            self.provider_combo.addItem("环境配置模式 (.env)", None)
+            return
+
+        providers = self.provider_manager.list_providers()
+        if not providers:
+            self.provider_combo.addItem("未找到转录服务商配置", None)
+            self.log_message("未找到任何转录服务商配置文件", "#ff8800")
+            return
+
+        active_provider = self.provider_manager.get_active_provider()
+        active_index = 0
+
+        for i, provider_info in enumerate(providers):
+            display_name = f"{provider_info['name']} ({provider_info['type']})"
+            self.provider_combo.addItem(display_name, provider_info['id'])
+
+            if active_provider and provider_info['id'] == self.provider_manager.active_provider:
+                active_index = i
+
+        if providers:
+            self.provider_combo.setCurrentIndex(active_index)
+            self.log_message(f"转录服务商选择器已准备就绪，共 {len(providers)} 个选项", "#00d4ff")
+
+    def on_provider_changed(self, display_name: str):
+        """Handle provider selection change."""
+        if not self.provider_manager:
+            return
+
+        current_data = self.provider_combo.currentData()
+        if current_data is None:
+            return
+
+        provider_id = current_data
+        if self.provider_manager.set_active_provider(provider_id):
+            provider = self.provider_manager.get_provider(provider_id)
+            if provider:
+                self.append_colored_line(f"已切换至转录服务商: {provider.name}", "#00d4ff")
+                # Restart workers to apply new provider settings
+                self.restart_children_with_env()
+
+    def test_all_providers(self):
+        """Test all providers for availability."""
+        if not self.provider_manager:
+            self.log_message("无法测试：转录服务商管理器不可用", "#ff8800")
+            return
+
+        # Check if test audio file exists
+        test_audio_path = ROOT / "AvailabilityTest.mp3"
+        if not test_audio_path.exists():
+            self.log_message("无法测试：未找到测试音频文件 AvailabilityTest.mp3", "#ff0000")
+            return
+
+        # Disable the test button during testing
+        self.test_all_button.setEnabled(False)
+        self.test_all_button.setText("测试中...")
+
+        self.log_message("开始测试所有转录服务商的可用性...", "#00d4ff")
+
+        # Run the test in a separate thread to avoid blocking the UI
+        threading.Thread(
+            target=self._run_availability_test,
+            args=(test_audio_path,),
+            daemon=True
+        ).start()
+
+    def _run_availability_test(self, test_audio_path: Path):
+        """Run availability test in a separate thread."""
+        try:
+            # Import and run the test
+            from util.provider_availability_test import run_availability_test
+
+            # Create a new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            try:
+                results = loop.run_until_complete(run_availability_test(test_audio_path))
+
+                # Format and display results
+                from util.provider_availability_test import ProviderAvailabilityTester
+                tester = ProviderAvailabilityTester(test_audio_path)
+                formatted_results = tester.format_results(results)
+
+                # Post results back to GUI thread
+                self._post_test_results(formatted_results)
+
+            finally:
+                loop.close()
+
+        except Exception as e:
+            error_message = f"测试过程中发生错误: {str(e)}"
+            self._post_test_results(error_message)
+
+    def _post_test_results(self, results: str):
+        """Post test results back to the GUI thread."""
+        # Use QTimer.singleShot to safely update GUI from another thread
+        from PySide6.QtCore import QTimer
+
+        def update_gui():
+            # Display results
+            for line in results.split('\n'):
+                if line.strip():
+                    if "✅" in line:
+                        self.log_message(line, "#00ff00")
+                    elif "❌" in line:
+                        self.log_message(line, "#ff0000")
+                    elif line.startswith("==="):
+                        self.log_message(line, "#00d4ff")
+                    else:
+                        self.log_message(line, "#ffffff")
+
+            # Re-enable the test button
+            self.test_all_button.setEnabled(True)
+            self.test_all_button.setText("Test All")
+
+        QTimer.singleShot(0, update_gui)
 
     def scroll_to_bottom(self):
         """Pin the console view to the latest line after text changes."""
@@ -876,7 +1063,13 @@ class GUI(QMainWindow):
 
     def apply_scale_factor(self):
         # 应用缩放因子
-        for widget in [self.text_box_client]:
+        widgets = [self.text_box_client]
+        if hasattr(self, 'provider_combo'):
+            widgets.append(self.provider_combo)
+        if hasattr(self, 'test_all_button'):
+            widgets.append(self.test_all_button)
+
+        for widget in widgets:
             # 检查字体大小是否已设置，如果没有设置，则使用一个默认值
             current_font = widget.font()
             if current_font.pointSizeF() < 9:
