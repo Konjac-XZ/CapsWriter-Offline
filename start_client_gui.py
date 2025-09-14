@@ -509,6 +509,7 @@ class GUI(QMainWindow):
 
         edit_env_action = QAction("🛠️ Edit .env", self)
         reload_env_action = QAction("⚡ Apply .env (fast)", self)
+        test_all_action = QAction("🧪 Test All Providers", self)
         explore_home_folder_action = QAction("📁 Open Home Folder With Explorer", self)
         vscode_home_folder_action = QAction("🤓 Open Home Folder With VSCode", self)
 
@@ -518,6 +519,7 @@ class GUI(QMainWindow):
 
         edit_env_action.triggered.connect(self.edit_env)
         reload_env_action.triggered.connect(self.apply_env_fast)
+        test_all_action.triggered.connect(self.run_test_all_providers)
         explore_home_folder_action.triggered.connect(self.explore_home_folder)
         vscode_home_folder_action.triggered.connect(self.vscode_home_folder)
         show_action.triggered.connect(self.showNormal)
@@ -531,6 +533,7 @@ class GUI(QMainWindow):
         # Environment configuration shortcut replaces legacy hotword menu
         self.tray_menu.addAction(edit_env_action)
         self.tray_menu.addAction(reload_env_action)
+        self.tray_menu.addAction(test_all_action)
 
         self.tray_menu.addSeparator()
         self.tray_menu.addAction(show_action)
@@ -544,6 +547,40 @@ class GUI(QMainWindow):
             QTimer.singleShot(350, self._warm_up_tray_menu)
         except Exception:
             pass
+
+    def run_test_all_providers(self):
+        """Launch availability test script and stream its output to the GUI."""
+        try:
+            exe = _resolve_pythonw_client()
+            if exe is None:
+                self.text_box_client.append("无法启动测试：未找到可用的 Python 运行时。")
+                return
+            script = ROOT / "util" / "run_provider_availability_test.py"
+            if not script.exists():
+                self.text_box_client.append("找不到测试脚本：util/run_provider_availability_test.py")
+                return
+            self.append_colored_line("开始测试所有 OpenAI 类型服务商（每个最多 10 秒）…", QColor("#00d4ff"))
+            p = subprocess.Popen(
+                [exe, str(script)],
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                cwd=str(ROOT),
+                env=os.environ.copy(),
+            )
+            # Stream output
+            threading.Thread(
+                target=self.enqueue_output,
+                args=(p.stdout, self.output_queue_client),
+                daemon=True,
+            ).start()
+        except Exception as e:
+            try:
+                self.text_box_client.append(f"启动可用性测试失败: {e}")
+            except Exception:
+                pass
 
     def _warm_up_tray_menu(self):
         """Force-create and layout the tray menu to eliminate first-show stutter.

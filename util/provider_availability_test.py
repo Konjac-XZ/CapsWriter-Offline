@@ -1,12 +1,12 @@
 """
 Provider availability testing module.
-Tests all configured providers by sending a test audio file and checking for successful HTTP responses.
+Tests OpenAI-compatible providers by sending a test audio file and checking for successful HTTP responses.
 """
 
 import asyncio
 import time
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Callable
 from dataclasses import dataclass
 
 from util.provider_config import provider_manager
@@ -27,12 +27,18 @@ class TestResult:
 
 
 class ProviderAvailabilityTester:
-    """Tests availability of all configured transcription providers."""
+    """Tests availability of OpenAI-compatible transcription providers."""
 
-    def __init__(self, test_audio_path: Path):
+    def __init__(self, test_audio_path: Path, progress_callback: Optional[Callable[[str], None]] = None):
         self.test_audio_path = test_audio_path
         self.test_audio_data: Optional[bytes] = None
+        self.progress_callback = progress_callback
         self.load_test_audio()
+
+    def _log_progress(self, message: str):
+        """Send progress updates via callback if available."""
+        if self.progress_callback:
+            self.progress_callback(message)
 
     def load_test_audio(self) -> None:
         """Load the test audio file into memory."""
@@ -43,7 +49,7 @@ class ProviderAvailabilityTester:
             self.test_audio_data = f.read()
 
     async def test_provider(self, provider_id: str) -> TestResult:
-        """Test a single provider."""
+        """Test a single provider with timeout."""
         provider = provider_manager.get_provider(provider_id)
         if not provider:
             return TestResult(
@@ -57,14 +63,28 @@ class ProviderAvailabilityTester:
                 error_message="Provider not found"
             )
 
+        # Skip non-OpenAI providers
+        if provider.type != "openai":
+            return TestResult(
+                provider_id=provider_id,
+                provider_name=provider.name,
+                provider_type=provider.type,
+                success=False,
+                response_time_ms=0,
+                status_code=None,
+                transcription=None,
+                error_message="Skipped: Only OpenAI-compatible providers are tested"
+            )
+
+        self._log_progress(f"正在测试 {provider.name}...")
+
         # Save original environment state to restore later
         import os
         original_env = {}
         provider_env_keys = [
             "TRANSCRIBE_PROVIDER", "OPENAI_API_KEY", "OPENAI_BASE_URL", "TRANSCRIBE_MODEL",
             "TRANSCRIBE_TEMPERATURE", "OPENAI_TRANSCRIBE_STREAM", "OPENAI_TRANSCRIBE_LANGUAGE",
-            "OPENAI_TRANSCRIBE_FORMAT", "REPLICATE_API_TOKEN", "ELEVENLABS_API_KEY",
-            "ELEVENLABS_LANGUAGE_CODE", "SONIOX_API_KEY", "SONIOX_MODEL", "SONIOX_LANGUAGE_HINTS"
+            "OPENAI_TRANSCRIBE_FORMAT", "OPENAI_HTTP_TIMEOUT"
         ]
 
         for key in provider_env_keys:
@@ -75,43 +95,40 @@ class ProviderAvailabilityTester:
         try:
             # Set environment variables for this provider
             os.environ["TRANSCRIBE_PROVIDER"] = provider.type
+            os.environ["OPENAI_API_KEY"] = provider.settings.get("api_key", "")
+            os.environ["OPENAI_BASE_URL"] = provider.settings.get("base_url", "")
+            os.environ["TRANSCRIBE_MODEL"] = provider.settings.get("model", "")
+            os.environ["TRANSCRIBE_TEMPERATURE"] = str(provider.settings.get("temperature", 0.2))
+            os.environ["OPENAI_TRANSCRIBE_STREAM"] = str(provider.settings.get("stream", False))
+            os.environ["OPENAI_TRANSCRIBE_LANGUAGE"] = provider.settings.get("language", "zh")
+            os.environ["OPENAI_TRANSCRIBE_FORMAT"] = provider.settings.get("response_format", "text")
+            # Enforce a strict per-request timeout for availability tests
+            os.environ["OPENAI_HTTP_TIMEOUT"] = "10"
 
-            if provider.type == "openai":
-                os.environ["OPENAI_API_KEY"] = provider.settings.get("api_key", "")
-                os.environ["OPENAI_BASE_URL"] = provider.settings.get("base_url", "")
-                os.environ["TRANSCRIBE_MODEL"] = provider.settings.get("model", "")
-                os.environ["TRANSCRIBE_TEMPERATURE"] = str(provider.settings.get("temperature", 0.2))
-                os.environ["OPENAI_TRANSCRIBE_STREAM"] = str(provider.settings.get("stream", False))
-                os.environ["OPENAI_TRANSCRIBE_LANGUAGE"] = provider.settings.get("language", "zh")
-                os.environ["OPENAI_TRANSCRIBE_FORMAT"] = provider.settings.get("response_format", "text")
-
-            elif provider.type == "replicate":
-                os.environ["REPLICATE_API_TOKEN"] = provider.settings.get("api_token", "")
-                os.environ["OPENAI_TRANSCRIBE_LANGUAGE"] = provider.settings.get("language", "zh")
-                os.environ["TRANSCRIBE_TEMPERATURE"] = str(provider.settings.get("temperature", 0.2))
-                os.environ["OPENAI_TRANSCRIBE_STREAM"] = str(provider.settings.get("stream", False))
-
-            elif provider.type == "elevenlabs":
-                os.environ["ELEVENLABS_API_KEY"] = provider.settings.get("api_key", "")
-                os.environ["ELEVENLABS_LANGUAGE_CODE"] = provider.settings.get("language_code", "zh")
-
-            elif provider.type == "soniox":
-                os.environ["SONIOX_API_KEY"] = provider.settings.get("api_key", "")
-                os.environ["SONIOX_MODEL"] = provider.settings.get("model", "stt-async-preview-v1")
-                os.environ["SONIOX_LANGUAGE_HINTS"] = provider.settings.get("language_hints", "zh, en")
+            # Force-recreate persistent HTTP client so new timeout applies
+            try:
+                from util.openai_transcribe_http import close_http_client
+                import asyncio as _asyncio
+                # If there's an existing client, close it before the request
+                await close_http_client(reason="availability-test-prepare")
+            except Exception:
+                pass
 
             # Determine MIME type based on file extension
             mime_type = "audio/mpeg" if self.test_audio_path.suffix.lower() == ".mp3" else "audio/wav"
 
-            # Call the transcription function
-            text_result, status_code, t_submit, t_complete, transport_info = await transcribe_audio(
-                payload_buf=self.test_audio_data,
-                payload_mime=mime_type,
-                task_id=f"test_{provider_id}_{int(time.time())}",
-                time_start=start_time,
-                record_stop=start_time + 0.1,  # Dummy record stop time
-                max_retries=1,  # Only one retry for testing
-                base_delay=1.0
+            # Call the transcription function with timeout
+            text_result, status_code, t_submit, t_complete, transport_info = await asyncio.wait_for(
+                transcribe_audio(
+                    payload_buf=self.test_audio_data,
+                    payload_mime=mime_type,
+                    task_id=f"test_{provider_id}_{int(time.time())}",
+                    time_start=start_time,
+                    record_stop=start_time + 0.1,  # Dummy record stop time
+                    max_retries=1,  # Only one retry for testing
+                    base_delay=0.2
+                ),
+                timeout=10.0  # Hard cap including networking and parsing
             )
 
             end_time = time.time()
@@ -120,7 +137,7 @@ class ProviderAvailabilityTester:
             # Consider successful if we get a 2xx status code
             success = 200 <= status_code < 300
 
-            return TestResult(
+            result = TestResult(
                 provider_id=provider_id,
                 provider_name=provider.name,
                 provider_type=provider.type,
@@ -131,9 +148,33 @@ class ProviderAvailabilityTester:
                 error_message=None if success else f"HTTP {status_code}"
             )
 
+            if success:
+                self._log_progress(f"✅ {provider.name}: {response_time_ms}ms")
+            else:
+                self._log_progress(f"❌ {provider.name}: HTTP {status_code}")
+
+            return result
+
+        except asyncio.TimeoutError:
+            end_time = time.time()
+            response_time_ms = int((end_time - start_time) * 1000)
+            self._log_progress(f"⏰ {provider.name}: 超时 (10s)")
+
+            return TestResult(
+                provider_id=provider_id,
+                provider_name=provider.name,
+                provider_type=provider.type,
+                success=False,
+                response_time_ms=response_time_ms,
+                status_code=None,
+                transcription=None,
+                error_message="Timeout after 10 seconds"
+            )
+
         except Exception as e:
             end_time = time.time()
             response_time_ms = int((end_time - start_time) * 1000)
+            self._log_progress(f"❌ {provider.name}: {str(e)[:50]}")
 
             return TestResult(
                 provider_id=provider_id,
@@ -147,6 +188,12 @@ class ProviderAvailabilityTester:
             )
 
         finally:
+            # Close the client created with the short timeout so regular ops use default later
+            try:
+                from util.openai_transcribe_http import close_http_client
+                await close_http_client(reason="availability-test-cleanup")
+            except Exception:
+                pass
             # Restore original environment variables
             for key, value in original_env.items():
                 if value is None:
@@ -155,54 +202,42 @@ class ProviderAvailabilityTester:
                     os.environ[key] = value
 
     async def test_all_providers(self) -> List[TestResult]:
-        """Test all available providers concurrently."""
-        providers = provider_manager.list_providers()
+        """Test all OpenAI-compatible providers."""
+        all_providers = provider_manager.list_providers()
 
-        if not providers:
+        # Filter to only OpenAI-compatible providers
+        openai_providers = [p for p in all_providers if p['type'] == 'openai']
+
+        if not openai_providers:
+            self._log_progress("未找到 OpenAI 兼容的转录服务商")
             return []
 
-        # Create tasks for all providers
-        tasks = []
-        for provider_info in providers:
-            task = self.test_provider(provider_info['id'])
-            tasks.append(task)
+        self._log_progress(f"找到 {len(openai_providers)} 个 OpenAI 兼容服务商，开始测试...")
 
-        # Run all tests concurrently
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Test providers one by one to avoid overwhelming servers
+        results = []
+        for provider_info in openai_providers:
+            result = await self.test_provider(provider_info['id'])
+            results.append(result)
 
-        # Convert exceptions to failed test results
-        final_results = []
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                provider_info = providers[i]
-                final_results.append(TestResult(
-                    provider_id=provider_info['id'],
-                    provider_name=provider_info['name'],
-                    provider_type=provider_info['type'],
-                    success=False,
-                    response_time_ms=0,
-                    status_code=None,
-                    transcription=None,
-                    error_message=f"Test failed: {str(result)}"
-                ))
-            else:
-                final_results.append(result)
-
-        return final_results
+        return results
 
     def format_results(self, results: List[TestResult]) -> str:
         """Format test results for display."""
         if not results:
-            return "未找到可测试的转录服务商"
+            return "未找到可测试的 OpenAI 兼容转录服务商"
 
         lines = []
-        lines.append("=== 转录服务商可用性测试结果 ===")
+        lines.append("=== OpenAI 兼容服务商可用性测试结果 ===")
         lines.append("")
 
         successful = 0
         for result in results:
+            if result.error_message == "Skipped: Only OpenAI-compatible providers are tested":
+                continue  # Don't show skipped providers in summary
+
             status = "✅ 成功" if result.success else "❌ 失败"
-            lines.append(f"{status} {result.provider_name} ({result.provider_type})")
+            lines.append(f"{status} {result.provider_name}")
             lines.append(f"    响应时间: {result.response_time_ms}ms")
 
             if result.success:
@@ -218,11 +253,12 @@ class ProviderAvailabilityTester:
                     lines.append(f"    错误: {result.error_message}")
             lines.append("")
 
-        lines.append(f"测试完成: {successful}/{len(results)} 个服务商可用")
+        tested_count = len([r for r in results if r.error_message != "Skipped: Only OpenAI-compatible providers are tested"])
+        lines.append(f"测试完成: {successful}/{tested_count} 个 OpenAI 兼容服务商可用")
         return "\n".join(lines)
 
 
-async def run_availability_test(test_audio_path: Path) -> List[TestResult]:
+async def run_availability_test(test_audio_path: Path, progress_callback: Optional[Callable[[str], None]] = None) -> List[TestResult]:
     """Convenience function to run availability test."""
-    tester = ProviderAvailabilityTester(test_audio_path)
+    tester = ProviderAvailabilityTester(test_audio_path, progress_callback)
     return await tester.test_all_providers()
