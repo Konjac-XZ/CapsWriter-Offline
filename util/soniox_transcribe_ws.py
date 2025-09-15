@@ -7,6 +7,7 @@ from typing import Tuple
 
 from util.client_cosmic import console
 from util.openai_transcribe_http import emit_partial_update
+from util.provider_config import provider_manager
 
 
 def _get_ws_url() -> str:
@@ -45,7 +46,7 @@ def _get_language_hints() -> list[str] | None:
 
 def _get_context() -> str | None:
     # Reuse provider-agnostic prompt as context to bias recognition
-    ctx = os.getenv("TRANSCRIBE_PROMPT") or os.getenv("OPENAI_TRANSCRIBE_PROMPT")
+    ctx = provider_manager.get_provider_prompt()
     if ctx and ctx.strip():
         return ctx
     return None

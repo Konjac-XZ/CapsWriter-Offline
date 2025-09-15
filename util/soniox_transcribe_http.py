@@ -9,6 +9,7 @@ from typing import Tuple
 import httpx
 
 from util.client_cosmic import console
+from util.provider_config import provider_manager
 
 
 _HTTP_CLIENT: httpx.AsyncClient | None = None
@@ -51,7 +52,7 @@ def get_language_hints() -> list[str] | None:
 
 
 def get_context() -> str | None:
-    ctx = os.getenv("TRANSCRIBE_PROMPT") or os.getenv("OPENAI_TRANSCRIBE_PROMPT")
+    ctx = provider_manager.get_provider_prompt()
     if ctx and ctx.strip():
         return ctx
     return None

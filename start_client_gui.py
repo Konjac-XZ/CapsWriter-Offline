@@ -59,9 +59,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from qt_material import apply_stylesheet
+# Intentionally defer theme import/application until after first paint for faster startup
 
-from util.check_microphone_usage import is_microphone_in_use
 from util.check_process import check_process
 from util.config import ClientConfig as Config, ServerConfig, DeepLXConfig
 
@@ -86,17 +85,7 @@ def _resolve_pythonw_client() -> str | None:
     return None
 
 
-class Hint_While_Recording_At_Cursor_Position(QLabel):
-    def __init__(self):
-        super().__init__()
-    # Ensure MDL2 icon font for glyph rendering
-        self.setFont(QFont("Segoe MDL2 Assets"))
-        self.setWindowFlags(
-            Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
-        )
-        self.setVisible(False)  # 初始时隐藏标签
-
-
+# AHK hint tooltip removed for leaner startup
 
 class GUI(QMainWindow):
     def __init__(self):
@@ -104,21 +93,14 @@ class GUI(QMainWindow):
 
         # Queue to store early log messages before UI is ready
         self.early_messages = []
-
-        # Initialize transcription providers before UI setup
-        self.initialize_transcription_providers()
+        # Ensure provider_manager attribute exists before UI uses it
+        self.provider_manager = None
 
         self.init_ui()
         self.output_queue_client = Queue()
-        self.start_script()
         self.edgeMargin = 5  # 侧边停靠残余像素值
         self.isBerthLeft = False
         self.isBerthRight = False
-        # Track last loaded env mapping to allow proper removals on reload
-        try:
-            self._last_env_mapping: dict[str, str] = self._read_env_files_dict()
-        except Exception:
-            self._last_env_mapping = {}
 
         # Display early messages now that UI is ready
         for message, color in self.early_messages:
@@ -206,6 +188,15 @@ class GUI(QMainWindow):
             # Don't block UI if startup info fails
             pass
         self.text_box_client.append("准备就绪。")
+        # Defer heavy work to after first paint
+        try:
+            QTimer.singleShot(0, self._deferred_startup)
+        except Exception:
+            # Fallback if singleShot fails
+            try:
+                self._deferred_startup()
+            except Exception:
+                pass
         
 
     @staticmethod
@@ -214,23 +205,27 @@ class GUI(QMainWindow):
 
         Prioritizes common Simplified Chinese UI fonts to avoid JP glyph fallbacks.
         """
-        preferred = [
-            "Microsoft YaHei UI",
-            "Microsoft YaHei",
-            "Noto Sans CJK SC",
-            "Noto Sans SC",
-            "Source Han Sans SC",
-            "PingFang SC",
-            "SimSun",
-        ]
+        # Use a fixed font to avoid enumerating system fonts on startup
+        return "Microsoft YaHei UI"
+
+    def _deferred_startup(self):
+        """Run expensive startup steps after the window is responsive."""
+        # Load providers (I/O + YAML parse)
         try:
-            families = set(QFontDatabase.families())
-            for name in preferred:
-                if name in families:
-                    return name
+            self.initialize_transcription_providers()
         except Exception:
             pass
-        return "Microsoft YaHei UI"
+        # Refresh UI combos now that providers are available
+        try:
+            self.populate_provider_combo()
+            self.populate_model_combo()
+        except Exception:
+            pass
+        # Start background workers (core first, helpers staggered)
+        try:
+            self.start_script()
+        except Exception:
+            pass
 
 
     # Removed custom title bar and its buttons; using native frame instead
@@ -260,59 +255,104 @@ class GUI(QMainWindow):
 
     def create_provider_selector(self):
         """Create provider selection UI below the main text box."""
-        self.provider_layout = QHBoxLayout()
+        self.provider_layout = QVBoxLayout()
         self.provider_layout.setSpacing(8)
         self.provider_layout.setContentsMargins(3, 3, 3, 3)
 
-        # Provider label
+        # Provider row
+        provider_row = QHBoxLayout()
         provider_label = QLabel("转录服务商:")
         provider_label.setMinimumWidth(70)
-        self.provider_layout.addWidget(provider_label)
+        provider_row.addWidget(provider_label)
 
-        # Provider dropdown
         self.provider_combo = QComboBox()
         self.provider_combo.setMinimumWidth(200)
         self.populate_provider_combo()
         self.provider_combo.currentTextChanged.connect(self.on_provider_changed)
-        self.provider_layout.addWidget(self.provider_combo)
+        provider_row.addWidget(self.provider_combo)
+        provider_row.addStretch()
+        self.provider_layout.addLayout(provider_row)
 
-        # Test All button
+        # Model row (only for OpenAI-type providers)
+        self.model_row = QHBoxLayout()
+        self.model_label = QLabel("模型:")
+        self.model_label.setMinimumWidth(40)
+        self.model_combo = QComboBox()
+        # Allow arbitrary model ids; users can type custom values
+        self.model_combo.setEditable(True)
+        self.model_combo.setMinimumWidth(180)
+        self.model_combo.currentTextChanged.connect(self.on_model_changed)
+        self.model_row.addWidget(self.model_label)
+        self.model_row.addWidget(self.model_combo)
+        self.model_row.addStretch()
+        self.model_label.setVisible(False)
+        self.model_combo.setVisible(False)
+        self.provider_layout.addLayout(self.model_row)
+        # Populate initial model list according to active provider
+        self.populate_model_combo()
+
+        # Test All button row
+        button_row = QHBoxLayout()
         self.test_all_button = QPushButton("Test All")
         self.test_all_button.setMinimumWidth(80)
         self.test_all_button.setToolTip("测试所有转录服务商的可用性")
         self.test_all_button.clicked.connect(self.test_all_providers)
-        self.provider_layout.addWidget(self.test_all_button)
-
-        # Add spacer to push everything to the left
-        self.provider_layout.addStretch()
+        button_row.addWidget(self.test_all_button)
+        button_row.addStretch()
+        self.provider_layout.addLayout(button_row)
 
     def populate_provider_combo(self):
         """Populate the provider combo box with available providers."""
-        self.provider_combo.clear()
+        # Avoid emitting currentTextChanged while we rebuild items to prevent
+        # unintended provider switches on startup.
+        self.provider_combo.blockSignals(True)
+        try:
+            self.provider_combo.clear()
 
-        if not self.provider_manager:
-            self.provider_combo.addItem("环境配置模式 (.env)", None)
-            return
+            if not self.provider_manager:
+                self.provider_combo.addItem("转录服务商配置系统未初始化", None)
+                return
 
-        providers = self.provider_manager.list_providers()
-        if not providers:
-            self.provider_combo.addItem("未找到转录服务商配置", None)
-            self.log_message("未找到任何转录服务商配置文件", "#ff8800")
-            return
+            providers = self.provider_manager.list_providers() or []
+            if not providers:
+                self.provider_combo.addItem("未找到转录服务商配置", None)
+                self.log_message("未找到任何转录服务商配置文件", "#ff8800")
+                return
 
-        active_provider = self.provider_manager.get_active_provider()
-        active_index = 0
+            # Normalize active provider id for robust matching (case-insensitive)
+            try:
+                active_id_raw = getattr(self.provider_manager, "active_provider", None)
+                active_id_norm = (
+                    str(active_id_raw).strip().lower() if active_id_raw is not None else None
+                )
+            except Exception:
+                active_id_norm = None
 
-        for i, provider_info in enumerate(providers):
-            display_name = f"{provider_info['name']} ({provider_info['type']})"
-            self.provider_combo.addItem(display_name, provider_info['id'])
+            active_index: int | None = None
 
-            if active_provider and provider_info['id'] == self.provider_manager.active_provider:
-                active_index = i
+            for i, provider_info in enumerate(providers):
+                display_name = f"{provider_info['name']} ({provider_info['type']})"
+                pid = provider_info.get('id')
+                self.provider_combo.addItem(display_name, pid)
 
-        if providers:
-            self.provider_combo.setCurrentIndex(active_index)
-            self.log_message(f"转录服务商选择器已准备就绪，共 {len(providers)} 个选项", "#00d4ff")
+                if active_id_norm is not None and pid is not None:
+                    try:
+                        if str(pid).strip().lower() == active_id_norm:
+                            active_index = i
+                    except Exception:
+                        pass
+
+            # Select the active provider if we found it; otherwise leave the first item selected
+            if active_index is not None:
+                # Only change if different to avoid needless churn
+                if self.provider_combo.currentIndex() != active_index:
+                    self.provider_combo.setCurrentIndex(active_index)
+
+            self.log_message(
+                f"转录服务商选择器已准备就绪，共 {len(providers)} 个选项", "#00d4ff"
+            )
+        finally:
+            self.provider_combo.blockSignals(False)
 
     def on_provider_changed(self, display_name: str):
         """Handle provider selection change."""
@@ -323,6 +363,14 @@ class GUI(QMainWindow):
         if current_data is None:
             return
 
+        # Skip if selection equals current active provider (avoid redundant switches on startup)
+        try:
+            active_id = getattr(self.provider_manager, "active_provider", None)
+            if active_id is not None and str(current_data).strip().lower() == str(active_id).strip().lower():
+                return
+        except Exception:
+            pass
+
         provider_id = current_data
         if self.provider_manager.set_active_provider(provider_id):
             provider = self.provider_manager.get_provider(provider_id)
@@ -330,31 +378,127 @@ class GUI(QMainWindow):
                 self.append_colored_line(f"已切换至转录服务商: {provider.name}", "#00d4ff")
                 # Restart workers to apply new provider settings
                 self.restart_children_with_env()
+                # Refresh model selector visibility and values
+                self.populate_model_combo()
+
+    def _collect_known_openai_models(self) -> list[str]:
+        """Collect a reasonable list of model options for OpenAI-compatible providers.
+
+        - Gather models referenced in provider YAMLs
+        - Include any current env setting
+        - Add a small set of sensible defaults
+        """
+        models: list[str] = []
+        try:
+            if self.provider_manager:
+                for p in self.provider_manager.providers.values():
+                    if getattr(p, "type", "").lower() == "openai":
+                        m = (p.settings or {}).get("model") if hasattr(p, "settings") else None
+                        if isinstance(m, str) and m.strip():
+                            models.append(m.strip())
+        except Exception:
+            pass
+        # Add env value if present
+        try:
+            m_env = os.getenv("TRANSCRIBE_MODEL")
+            if m_env and m_env.strip():
+                models.append(m_env.strip())
+        except Exception:
+            pass
+        # Sensible defaults
+        models.extend([
+            "gpt-4o-transcribe",
+            "gpt-4o-mini-transcribe",
+            "whisper-1",
+        ])
+        # De-duplicate while preserving order
+        seen = set()
+        uniq: list[str] = []
+        for m in models:
+            if m not in seen:
+                uniq.append(m)
+                seen.add(m)
+        return uniq
+
+    def populate_model_combo(self):
+        """Update the model dropdown based on the currently selected provider.
+
+        Visible only for OpenAI-type providers. Sets current value from provider.settings.model
+        (or env TRANSCRIBE_MODEL) and offers a small curated list plus any discovered values.
+        """
+        # Default to hidden
+        self.model_label.setVisible(False)
+        self.model_combo.setVisible(False)
+
+        if not self.provider_manager:
+            return
+
+        current_data = self.provider_combo.currentData()
+        if current_data is None:
+            return
+
+        provider = self.provider_manager.get_provider(current_data)
+        if not provider:
+            return
+
+        if getattr(provider, "type", "").lower() != "openai":
+            # Non-OpenAI providers don't use this selection
+            return
+
+        # At this point, show controls
+        self.model_label.setVisible(True)
+        self.model_combo.setVisible(True)
+
+        # Determine current model value
+        current_model = None
+        try:
+            current_model = (provider.settings or {}).get("model")
+        except Exception:
+            current_model = None
+        if not current_model:
+            current_model = os.getenv("TRANSCRIBE_MODEL", "gpt-4o-transcribe")
+
+        # Populate list
+        options = self._collect_known_openai_models()
+        self.model_combo.blockSignals(True)
+        try:
+            self.model_combo.clear()
+            for opt in options:
+                self.model_combo.addItem(opt)
+            # Set current text, allowing custom entries
+            self.model_combo.setEditText(str(current_model))
+        finally:
+            self.model_combo.blockSignals(False)
+
+    def on_model_changed(self, model_name: str):
+        """Handle model selection change for OpenAI providers: persist and restart workers."""
+        if not self.provider_manager:
+            return
+        current_data = self.provider_combo.currentData()
+        if current_data is None:
+            return
+        provider = self.provider_manager.get_provider(current_data)
+        if not provider or getattr(provider, "type", "").lower() != "openai":
+            return
+        model = (model_name or "").strip()
+        if not model:
+            return
+        # Persist to provider config (also updates env when active)
+        ok = False
+        try:
+            ok = self.provider_manager.update_provider_model(current_data, model)
+        except Exception:
+            ok = False
+        if ok:
+            self.append_colored_line(f"已切换转录模型: {model}", "#00d4ff")
+            # Restart workers to apply model change
+            self.restart_children_with_env()
+        else:
+            self.append_colored_line("更新模型失败（请检查配置文件权限或格式）", "#ff5555")
 
     def test_all_providers(self):
-        """Test all providers for availability."""
-        if not self.provider_manager:
-            self.log_message("无法测试：转录服务商管理器不可用", "#ff8800")
-            return
-
-        # Check if test audio file exists
-        test_audio_path = ROOT / "AvailabilityTest.mp3"
-        if not test_audio_path.exists():
-            self.log_message("无法测试：未找到测试音频文件 AvailabilityTest.mp3", "#ff0000")
-            return
-
-        # Disable the test button during testing
-        self.test_all_button.setEnabled(False)
-        self.test_all_button.setText("测试中...")
-
-        self.log_message("开始测试所有转录服务商的可用性...", "#00d4ff")
-
-        # Run the test in a separate thread to avoid blocking the UI
-        threading.Thread(
-            target=self._run_availability_test,
-            args=(test_audio_path,),
-            daemon=True
-        ).start()
+        """Test all providers for availability using the same logic as tray menu."""
+        self.run_test_all_providers()
 
     def _run_availability_test(self, test_audio_path: Path):
         """Run availability test in a separate thread."""
@@ -427,75 +571,57 @@ class GUI(QMainWindow):
         """Append a single line to the client text box using the given color.
 
         Uses QTextEdit.setTextColor so rich text remains disabled but colored output is shown.
+        Always resets to default black color after appending to prevent color bleeding.
         """
         try:
             if isinstance(color, str):
                 color = QColor(color)
-            prev = self.text_box_client.textColor()
+            # Set the desired color
             self.text_box_client.setTextColor(color)
             self.text_box_client.append(text)
-            # restore previous color
-            self.text_box_client.setTextColor(prev)
+            # Always reset to default black color to prevent color bleeding
+            self.text_box_client.setTextColor(QColor("#000000"))
         except Exception:
-            # Fallback to plain append on any error
+            # Fallback to plain append on any error, ensure color is reset
             try:
+                self.text_box_client.setTextColor(QColor("#000000"))
                 self.text_box_client.append(text)
             except Exception:
                 pass
 
     def show_startup_info(self):
-        """Gather startup information from config and print it to the text box in green."""
-        import os
+        """Show startup information using YAML-based provider configuration."""
+        if not self.provider_manager:
+            self.text_box_client.append("转录服务商配置系统未初始化")
+            self.text_box_client.append("================")
+            return
 
-        def _sanitize(val: str | None) -> str:
-            """Normalize an env value for display.
+        active = self.provider_manager.get_active_provider()
+        if active:
+            self.text_box_client.append(f"转录服务提供商: {active.name} ({active.type})")
 
-            - None -> "(none)"
-            - strip surrounding quotes and outer whitespace
-            """
-            if val is None:
-                return "(none)"
-            v = str(val).strip()
-            if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
-                v = v[1:-1].strip()
-            return v or "(none)"
+            # Show provider-specific settings
+            if hasattr(active, 'settings') and active.settings:
+                if active.type.lower() == "openai":
+                    base_url = active.settings.get("base_url", "(none)")
+                    model = active.settings.get("model", "(none)")
+                    temperature = active.settings.get("temperature", "(none)")
+                    self.text_box_client.append(f"转录基础 URL: {base_url}")
+                    self.text_box_client.append(f"转录模型: {model}")
+                    self.text_box_client.append(f"转录温度: {temperature}")
 
-        # Prefer values from .env (loaded earlier via dotenv). Fall back to config.py.
-        transcribe_provider = _sanitize(os.environ.get("TRANSCRIBE_PROVIDER"))
-        transcribe_prompt = _sanitize(os.environ.get("TRANSCRIBE_PROMPT"))
-        transcribe_model = _sanitize(os.environ.get("TRANSCRIBE_MODEL"))
-        transcribe_temperature = _sanitize(os.environ.get("TRANSCRIBE_TEMPERATURE"))
-
-        # If the env explicitly disables model display, fall back to server config where appropriate
-        if transcribe_model == "(none)":
-            try:
-                transcribe_model = ServerConfig.model
-            except Exception:
-                transcribe_model = "(unknown)"
-
-        # Only expose OpenAI-specific settings when provider is openai
-        transcribe_base_url: str | None = None
-        if transcribe_provider == "openai":
-            transcribe_base_url = _sanitize(os.environ.get("OPENAI_BASE_URL"))
-
-        # Normalize multiline prompt to a single line for display
-        if transcribe_prompt not in (None, "(none)"):
-            transcribe_prompt = " ".join(line.strip() for line in transcribe_prompt.splitlines() if line.strip())
-
-        # Output: provider always, OpenAI-only details only when applicable
-        self.text_box_client.append(f"转录服务提供商: {transcribe_provider}")
-        if transcribe_provider == "openai":
-            self.text_box_client.append(f"转录基础 URL: {transcribe_base_url}")
-            self.text_box_client.append(f"转录模型: {transcribe_model}")
-            self.text_box_client.append(f"转录温度: {transcribe_temperature}")
-
-        # Print prompt on its own line; limit length to avoid overflowing the UI
-        if transcribe_prompt and transcribe_prompt != "(none)":
-            max_len = 1000
-            prompt_to_show = transcribe_prompt if len(transcribe_prompt) <= max_len else transcribe_prompt[: max_len - 3] + "..."
-            self.text_box_client.append(f"转录提示: {prompt_to_show}")
+                    # Show prompt if available
+                    prompt = active.settings.get("prompt")
+                    if prompt:
+                        # Normalize multiline prompt to a single line for display
+                        prompt_normalized = " ".join(line.strip() for line in str(prompt).splitlines() if line.strip())
+                        max_len = 1000
+                        prompt_to_show = prompt_normalized if len(prompt_normalized) <= max_len else prompt_normalized[: max_len - 3] + "..."
+                        self.text_box_client.append(f"转录提示: {prompt_to_show}")
+                    else:
+                        self.text_box_client.append("转录提示: (none)")
         else:
-            self.text_box_client.append("转录提示: (none)")
+            self.text_box_client.append("转录服务提供商: 未配置")
 
         self.text_box_client.append("================")
 
@@ -507,8 +633,7 @@ class GUI(QMainWindow):
         except Exception:
             pass
 
-        edit_env_action = QAction("🛠️ Edit .env", self)
-        reload_env_action = QAction("⚡ Apply .env (fast)", self)
+        reload_providers_action = QAction("⚡ Reload Providers", self)
         test_all_action = QAction("🧪 Test All Providers", self)
         explore_home_folder_action = QAction("📁 Open Home Folder With Explorer", self)
         vscode_home_folder_action = QAction("🤓 Open Home Folder With VSCode", self)
@@ -517,8 +642,7 @@ class GUI(QMainWindow):
         restart_client_action = QAction("🔄 Restart Client", self)
         quit_action = QAction("❌ Quit", self)
 
-        edit_env_action.triggered.connect(self.edit_env)
-        reload_env_action.triggered.connect(self.apply_env_fast)
+        reload_providers_action.triggered.connect(self.reload_providers)
         test_all_action.triggered.connect(self.run_test_all_providers)
         explore_home_folder_action.triggered.connect(self.explore_home_folder)
         vscode_home_folder_action.triggered.connect(self.vscode_home_folder)
@@ -530,9 +654,8 @@ class GUI(QMainWindow):
 
         # Keep a persistent reference to avoid GC and enable warm-up
         self.tray_menu = QMenu()
-        # Environment configuration shortcut replaces legacy hotword menu
-        self.tray_menu.addAction(edit_env_action)
-        self.tray_menu.addAction(reload_env_action)
+        # Provider management shortcuts
+        self.tray_menu.addAction(reload_providers_action)
         self.tray_menu.addAction(test_all_action)
 
         self.tray_menu.addSeparator()
@@ -544,7 +667,8 @@ class GUI(QMainWindow):
 
         # Proactively warm up the tray menu to avoid first-use lag
         try:
-            QTimer.singleShot(350, self._warm_up_tray_menu)
+            # Delay warm-up so first paint is smoother
+            QTimer.singleShot(1200, self._warm_up_tray_menu)
         except Exception:
             pass
 
@@ -684,27 +808,21 @@ class GUI(QMainWindow):
         if total_text_count > 10000:  # 字符数过多时自动清空
             self.text_box_client.clear()
 
-    def edit_env(self):
-        """Open the project's .env file for editing; create it with a template if missing."""
-        env_path = ROOT / ".env"
+    def reload_providers(self):
+        """Reload provider configurations and refresh the UI."""
         try:
-            if not env_path.exists():
-                template = (
-                    "# CapsWriter-Offline environment variables\n"
-                    "# Add key=value lines below. Examples:\n"
-                    "# OPENAI_API_KEY=\n"
-                    "# HTTP_PROXY=http://127.0.0.1:7890\n"
-                    "# HTTPS_PROXY=http://127.0.0.1:7890\n"
-                    "# See readme.md for details.\n"
-                )
-                env_path.write_text(template, encoding="utf-8")
-            os.startfile(str(env_path))
+            if self.provider_manager:
+                self.provider_manager.load_providers()
+                self.populate_provider_combo()
+                self.populate_model_combo()
+                self.log_message("已重新加载转录服务商配置", "#00d4ff")
+
+                # Restart workers to apply any changes
+                self.restart_children_with_env()
+            else:
+                self.log_message("转录服务商配置系统未初始化", "#ff8800")
         except Exception as e:
-            # Non-fatal; surface the error in the log area if available
-            try:
-                self.text_box_client.append(f"Failed to open .env: {e}")
-            except Exception:
-                pass
+            self.log_message(f"重新加载转录服务商配置时出错: {e}", "#ff0000")
 
     def explore_home_folder(self):
         try:
@@ -746,7 +864,7 @@ class GUI(QMainWindow):
         # TODO: Quit models The above method can not completely exit the model, rename pythonw.exe to pythonw_CapsWriter.exe and taskkill. It's working but not the best way.
         try:
             subprocess.Popen(
-                "taskkill /IM start_client_gui_admin.exe /IM start_client_gui.exe /IM pythonw_CapsWriter_Client.exe /IM hint_while_recording.exe /F",
+                "taskkill /IM start_client_gui_admin.exe /IM start_client_gui.exe /IM pythonw_CapsWriter_Client.exe /F",
                 creationflags=subprocess.CREATE_NO_WINDOW,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -775,91 +893,39 @@ class GUI(QMainWindow):
                 pass
             return
 
-        if Config.use_offline_translate_function:
-            self.translate_and_replace_selected_text_offline_process = subprocess.Popen(
-                [
-                    exe,
-                    str(ROOT / "util" / "client_translate_and_replace_selected_text_offline.py"),
-                ],
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                cwd=str(ROOT),
-            )
-            threading.Thread(
-                target=self.enqueue_output,
-                args=(
-                    self.translate_and_replace_selected_text_offline_process.stdout,
-                    self.output_queue_client,
-                ),
-                daemon=True,
-            ).start()
+        # Core first using common worker launcher
+        try:
+            self._start_worker("core_client.py", "core_client_process")
+        except Exception:
+            pass
 
-        if Config.use_online_translate_function:
-            self.translate_and_replace_selected_text_online_process = subprocess.Popen(
-                [
-                    exe,
-                    str(ROOT / "util" / "client_translate_and_replace_selected_text_online.py"),
-                ],
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                cwd=str(ROOT),
-            )
-            threading.Thread(
-                target=self.enqueue_output,
-                args=(
-                    self.translate_and_replace_selected_text_online_process.stdout,
-                    self.output_queue_client,
-                ),
-                daemon=True,
-            ).start()
-
-        if Config.use_search_selected_text_with_everything_function:
-            self.search_selected_text_with_everything = subprocess.Popen(
-                [
-                    exe,
-                    str(ROOT / "util" / "client_search_selected_text_with_everything.py"),
-                ],
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                cwd=str(ROOT),
-            )
-            threading.Thread(
-                target=self.enqueue_output,
-                args=(
-                    self.search_selected_text_with_everything.stdout,
-                    self.output_queue_client,
-                ),
-                daemon=True,
-            ).start()
-
-        self.core_client_process = subprocess.Popen(
-            [exe, str(ROOT / "core_client.py")],
-            creationflags=subprocess.CREATE_NO_WINDOW,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            cwd=str(ROOT),
-        )
-        threading.Thread(
-            target=self.enqueue_output,
-            args=(self.core_client_process.stdout, self.output_queue_client),
-            daemon=True,
-        ).start()
+        # Stagger optional helpers to reduce contention
+        try:
+            if getattr(Config, "use_offline_translate_function", False):
+                QTimer.singleShot(300, lambda: self._start_worker(
+                    "util/client_translate_and_replace_selected_text_offline.py",
+                    "translate_and_replace_selected_text_offline_process"
+                ))
+            if getattr(Config, "use_online_translate_function", False):
+                QTimer.singleShot(600, lambda: self._start_worker(
+                    "util/client_translate_and_replace_selected_text_online.py",
+                    "translate_and_replace_selected_text_online_process"
+                ))
+            if getattr(Config, "use_search_selected_text_with_everything_function", False):
+                QTimer.singleShot(900, lambda: self._start_worker(
+                    "util/client_search_selected_text_with_everything.py",
+                    "search_selected_text_with_everything"
+                ))
+        except Exception:
+            pass
 
         # Update text box
-        self.update_timer = QTimer()
-        self.update_timer.timeout.connect(self.update_text_box)
-        self.update_timer.start(100)
+        try:
+            self.update_timer = QTimer()
+            self.update_timer.timeout.connect(self.update_text_box)
+            self.update_timer.start(100)
+        except Exception:
+            pass
 
     def enqueue_output(self, out, queue):
         for line in iter(out.readline, ""):
@@ -893,69 +959,7 @@ class GUI(QMainWindow):
                 self.text_box_client.append(str(e))
                 break
 
-    # ============ Fast env reload and worker restart ============
-    def _read_env_files_dict(self) -> dict[str, str]:
-        """Read .env and .env.local into a merged dict without mutating os.environ.
-
-        .env.local overrides .env when both define the same key.
-        """
-        base_path = ROOT / ".env"
-        local_path = ROOT / ".env.local"
-        data: dict[str, str] = {}
-        try:
-            if base_path.exists():
-                data.update({k: str(v) for k, v in dotenv_values(str(base_path)).items() if v is not None})
-        except Exception:
-            pass
-        try:
-            if local_path.exists():
-                # local overrides base
-                data.update({k: str(v) for k, v in dotenv_values(str(local_path)).items() if v is not None})
-        except Exception:
-            pass
-        return data
-
-    def _apply_env_mapping_inplace(self, new_map: dict[str, str]) -> tuple[list[tuple[str, str | None, str]], list[str]]:
-        """Update os.environ with new_map, remove keys that were previously loaded but now absent.
-
-        Returns (changed, removed):
-        - changed: list of (key, old_value, new_value)
-        - removed: list of keys removed from os.environ
-        """
-        changed: list[tuple[str, str | None, str]] = []
-        removed: list[str] = []
-        prev = getattr(self, "_last_env_mapping", {})
-
-        # Apply additions/updates
-        for k, v in new_map.items():
-            old = os.environ.get(k)
-            if old != v:
-                changed.append((k, old, v))
-                os.environ[k] = v
-
-        # Remove keys that were previously set from env files but are no longer present
-        for k in prev.keys():
-            if k not in new_map and k in os.environ:
-                removed.append(k)
-                try:
-                    del os.environ[k]
-                except Exception:
-                    pass
-
-        # Update snapshot
-        self._last_env_mapping = dict(new_map)
-        return changed, removed
-
-    def _mask_value(self, key: str, value: str | None) -> str:
-        """Mask sensitive values for display if key looks secret-like."""
-        if value is None:
-            return "(none)"
-        k = key.lower()
-        if any(s in k for s in ["key", "token", "secret", "pwd", "password", "api", "auth"]):
-            if len(value) <= 6:
-                return "*" * len(value)
-            return value[:3] + "***" + value[-3:]
-        return value
+    # ============ Worker restart utilities ============
 
     def _stop_process(self, proc: subprocess.Popen | None, name: str) -> None:
         if not proc:
@@ -1018,39 +1022,6 @@ class GUI(QMainWindow):
         # Core client last
         self._start_worker("core_client.py", "core_client_process")
 
-    def apply_env_fast(self):
-        """Reload .env/.env.local and restart only background workers quickly."""
-        try:
-            new_map = self._read_env_files_dict()
-            changed, removed = self._apply_env_mapping_inplace(new_map)
-            ch_cnt = len(changed)
-            rm_cnt = len(removed)
-            # Brief summary with sensitive masking
-            if ch_cnt or rm_cnt:
-                self.append_colored_line(
-                    f"已重新加载 .env（修改 {ch_cnt} 项, 移除 {rm_cnt} 项）。正在快速重启后台子进程…",
-                    QColor("#00d4ff"),
-                )
-                preview_lines = []
-                for k, old, new in changed[:5]:  # show at most 5 keys
-                    preview_lines.append(f"  {k}: {self._mask_value(k, old)} -> {self._mask_value(k, new)}")
-                for k in removed[:3]:
-                    preview_lines.append(f"  {k}: removed")
-                if preview_lines:
-                    self.text_box_client.append("\n".join(preview_lines))
-            else:
-                self.text_box_client.append(".env 未检测到变化。仍将重启后台子进程以确保生效…")
-        except Exception as e:
-            self.text_box_client.append(f"读取 .env 失败: {e}")
-
-        # Restart workers to apply env
-        self.restart_children_with_env()
-        # Refresh startup info display with latest env
-        try:
-            self.text_box_client.append("==== 环境已应用（快速） ====")
-            self.show_startup_info()
-        except Exception:
-            pass
 
 
     def mousePressEvent(self, event):
@@ -1105,6 +1076,10 @@ class GUI(QMainWindow):
             widgets.append(self.provider_combo)
         if hasattr(self, 'test_all_button'):
             widgets.append(self.test_all_button)
+        if hasattr(self, 'model_combo'):
+            widgets.append(self.model_combo)
+        if hasattr(self, 'model_label'):
+            widgets.append(self.model_label)
 
         for widget in widgets:
             # 检查字体大小是否已设置，如果没有设置，则使用一个默认值
@@ -1115,21 +1090,38 @@ class GUI(QMainWindow):
             widget.setFont(current_font)
 
 
+def _apply_theme_later(app: QApplication) -> None:
+    """Apply qt_material theme after the first paint to improve perceived startup speed.
+
+    Imports are done lazily; if anything fails, startup is not blocked.
+    """
+    try:
+        from qt_material import apply_stylesheet  # local import to avoid import cost on cold start
+    except Exception:
+        return
+
+    def do_apply():
+        try:
+            apply_stylesheet(
+                app, theme="dark_teal.xml", css_file=str(ROOT / "util" / "client_gui_theme_custom.css")
+            )
+        except Exception:
+            pass
+
+    try:
+        QTimer.singleShot(0, do_apply)
+    except Exception:
+        # Fallback: apply immediately if singleShot isn't available
+        try:
+            do_apply()
+        except Exception:
+            pass
+
+
 def start_client_gui():
     if Config.only_run_once and check_process("pythonw_CapsWriter_Client.exe"):
         raise Exception(
             "已经有一个客户端在运行了！（用户配置了 只允许运行一次，禁止多开；而且检测到 pythonw_CapsWriter_Client.exe 进程已在运行。如果你确定需要启动多个客户端同时运行，请先修改 config.py  class ClientConfig:  Only_run_once = False 。）"
-        )
-    if (
-        Config.hint_while_recording_at_edit_position_powered_by_ahk
-        and not check_process("hint_while_recording.exe")
-        and (ROOT / "hint_while_recording.exe").exists()
-        # and Config.hold_mode
-    ):
-        subprocess.Popen(
-            [str(ROOT / "hint_while_recording.exe")],
-            creationflags=subprocess.CREATE_NO_WINDOW,
-            cwd=str(ROOT),
         )
     app = QApplication(sys.argv)
     # Force CN locale to influence font fallback toward Simplified Chinese glyphs
@@ -1154,17 +1146,8 @@ def start_client_gui():
     except Exception as e:
         print(f"Error setting app font: {e}")
         pass
-    if Config.hint_while_recording_at_cursor_position:
-        tooltip = Hint_While_Recording_At_Cursor_Position()
-        # Ensure icon glyph renders using MDL2 font regardless of global font
-        try:
-            tooltip.setFont(QFont("Segoe MDL2 Assets"))
-        except Exception:
-            pass
-        tooltip.show()
-    apply_stylesheet(
-        app, theme="dark_teal.xml", css_file=str(ROOT / "util" / "client_gui_theme_custom.css")
-    )
+    # Defer theme application to improve first paint time
+    _apply_theme_later(app)
     # Print screen info after Qt app is initialized (accurate in multi-monitor setups)
     try:
         Print_Screen_Scale()

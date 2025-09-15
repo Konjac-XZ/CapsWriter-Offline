@@ -10,6 +10,7 @@ import httpx
 from util.client_cosmic import Cosmic, console
 from util.client_hot_sub import hot_sub
 from util.client_hot_update import observe_hot, update_hot_all
+from util.provider_config import provider_manager
 
 
 def _get_api_base() -> str:
@@ -66,25 +67,8 @@ async def transcribe_send(file: Path):
 
     data = {
         "model": model,
-        # 复用用户提供的示例提示词，可按需通过环境变量覆盖 TRANSCRIBE_PROMPT
-        "prompt": os.getenv(
-            "TRANSCRIBE_PROMPT",
-            (
-            """
-            The user's primary occupation is as a computer systems security engineer.
-            Recently, he has been using Ghidra to write the source code for his next research paper.
-            Consider terminology relevant to this field.
-            
-            Spaces should be added between Chinese and ASCII characters according to certain rules. Carefully handle the spacing issues in mixed Chinese and English text based on the rules provided below. 
-  
-            - Chinese characters and numbers: require a space. (e.g. 2025 年)
-            - Chinese characters and English words: require a space. (e.g. A/B 测试)
-            - Numbers and units: require a space, except for % and °. (e.g. 10 kg, 20%, 360°)
-            - Full-width Chinese punctuation and any character: do not require a space. (e.g. “你好，世界！”)
-            - Hyphens and slashes, backslashes: Do not add spaces. (e.g. 10-20, 10/20, 10\20)
-            """
-            ),
-        ),
+        # Get prompt from provider configuration
+        "prompt": provider_manager.get_provider_prompt(),
         "response_format": os.getenv("OPENAI_TRANSCRIBE_FORMAT", "text"),
         "language": os.getenv("OPENAI_TRANSCRIBE_LANGUAGE", "zh"),
     }
