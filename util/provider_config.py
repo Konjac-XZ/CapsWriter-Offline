@@ -34,7 +34,7 @@ class ProviderManager:
         if not self.config_dir.exists():
             self.config_dir.mkdir(parents=True, exist_ok=True)
             return
-        
+
         self.providers.clear()
         enabled_providers = []
 
@@ -74,6 +74,49 @@ class ProviderManager:
                 for pid, p in self.providers.items():
                     p.enabled = (pid == self.active_provider)
                 self.save_provider_states()
+
+            # Initialize environment variables for the active provider
+            self._set_environment_for_active_provider()
+
+    def _set_environment_for_active_provider(self) -> None:
+        """Set environment variables for the currently active provider."""
+        if not self.active_provider:
+            return
+
+        provider = self.providers.get(self.active_provider)
+        if not provider:
+            return
+
+        # Clear old provider settings
+        self.clear_env_settings()
+
+        # Set new provider settings
+        os.environ["TRANSCRIBE_PROVIDER"] = provider.type
+        os.environ["TRANSCRIBE_PROMPT"] = self.get_provider_prompt()
+
+        if provider.type == "openai":
+            os.environ["OPENAI_API_KEY"] = provider.settings.get("api_key", "")
+            os.environ["OPENAI_BASE_URL"] = provider.settings.get("base_url", "")
+            os.environ["TRANSCRIBE_MODEL"] = provider.settings.get("model", "")
+            os.environ["TRANSCRIBE_TEMPERATURE"] = str(provider.settings.get("temperature", 0.2))
+            os.environ["OPENAI_TRANSCRIBE_STREAM"] = str(provider.settings.get("stream", False))
+            os.environ["OPENAI_TRANSCRIBE_LANGUAGE"] = provider.settings.get("language", "zh")
+            os.environ["OPENAI_TRANSCRIBE_FORMAT"] = provider.settings.get("response_format", "text")
+
+        elif provider.type == "replicate":
+            os.environ["REPLICATE_API_TOKEN"] = provider.settings.get("api_token", "")
+            os.environ["OPENAI_TRANSCRIBE_LANGUAGE"] = provider.settings.get("language", "zh")
+            os.environ["TRANSCRIBE_TEMPERATURE"] = str(provider.settings.get("temperature", 0.2))
+            os.environ["OPENAI_TRANSCRIBE_STREAM"] = str(provider.settings.get("stream", False))
+
+        elif provider.type == "elevenlabs":
+            os.environ["ELEVENLABS_API_KEY"] = provider.settings.get("api_key", "")
+            os.environ["ELEVENLABS_LANGUAGE_CODE"] = provider.settings.get("language_code", "zh")
+
+        elif provider.type == "soniox":
+            os.environ["SONIOX_API_KEY"] = provider.settings.get("api_key", "")
+            os.environ["SONIOX_MODEL"] = provider.settings.get("model", "stt-async-preview-v1")
+            os.environ["SONIOX_LANGUAGE_HINTS"] = provider.settings.get("language_hints", "zh, en")
     
     def get_provider(self, provider_id: str) -> Optional[ProviderConfig]:
         """Get provider configuration by ID."""

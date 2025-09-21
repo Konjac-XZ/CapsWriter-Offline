@@ -107,7 +107,7 @@ class GUI(QMainWindow):
             self.append_colored_line(message, color)
         self.early_messages = []
 
-    def log_message(self, message: str, color: str = "#ffffff"):
+    def log_message(self, message: str, color: str = "#000000"):
         """Log a message - stores early messages in queue if UI not ready."""
         if hasattr(self, 'text_box_client'):
             self.append_colored_line(message, color)
@@ -117,20 +117,20 @@ class GUI(QMainWindow):
     def initialize_transcription_providers(self):
         """Initialize transcription provider configurations."""
         try:
-            self.log_message("正在加载转录服务商配置...", "#00d4ff")
+            self.log_message("正在加载转录服务商配置...")
             from util.provider_config import provider_manager
             self.provider_manager = provider_manager
             self.provider_manager.load_providers()
 
             providers = self.provider_manager.list_providers()
-            self.log_message(f"已加载 {len(providers)} 个转录服务商配置", "#00d4ff")
+            self.log_message(f"已加载 {len(providers)} 个转录服务商配置")
             for provider in providers:
                 status = "启用" if provider['enabled'] else "禁用"
                 self.log_message(f"  - {provider['name']} ({provider['type']}) [{status}]", "#888888")
 
             active = self.provider_manager.get_active_provider()
             if active:
-                self.log_message(f"当前活动服务商: {active.name}", "#00ff00")
+                self.log_message(f"当前活动服务商: {active.name}", "#008000")
             else:
                 self.log_message("未找到活动的转录服务商", "#ff8800")
 
@@ -275,7 +275,7 @@ class GUI(QMainWindow):
 
         # Model row (only for OpenAI-type providers)
         self.model_row = QHBoxLayout()
-        self.model_label = QLabel("模型:")
+        self.model_label = QLabel("　　　模型:")
         self.model_label.setMinimumWidth(40)
         self.model_combo = QComboBox()
         # Allow arbitrary model ids; users can type custom values
@@ -291,15 +291,12 @@ class GUI(QMainWindow):
         # Populate initial model list according to active provider
         self.populate_model_combo()
 
-        # Test All button row
-        button_row = QHBoxLayout()
-        self.test_all_button = QPushButton("Test All")
+        # Test All button
+        self.test_all_button = QPushButton("测试全部")
         self.test_all_button.setMinimumWidth(80)
         self.test_all_button.setToolTip("测试所有转录服务商的可用性")
         self.test_all_button.clicked.connect(self.test_all_providers)
-        button_row.addWidget(self.test_all_button)
-        button_row.addStretch()
-        self.provider_layout.addLayout(button_row)
+        self.model_row.addWidget(self.test_all_button)
 
     def populate_provider_combo(self):
         """Populate the provider combo box with available providers."""
@@ -316,7 +313,7 @@ class GUI(QMainWindow):
             providers = self.provider_manager.list_providers() or []
             if not providers:
                 self.provider_combo.addItem("未找到转录服务商配置", None)
-                self.log_message("未找到任何转录服务商配置文件", "#ff8800")
+                self.log_message("未找到任何转录服务商配置文件")
                 return
 
             # Normalize active provider id for robust matching (case-insensitive)
@@ -349,7 +346,7 @@ class GUI(QMainWindow):
                     self.provider_combo.setCurrentIndex(active_index)
 
             self.log_message(
-                f"转录服务商选择器已准备就绪，共 {len(providers)} 个选项", "#00d4ff"
+                f"转录服务商选择器已准备就绪，共 {len(providers)} 个选项"
             )
         finally:
             self.provider_combo.blockSignals(False)
@@ -375,7 +372,7 @@ class GUI(QMainWindow):
         if self.provider_manager.set_active_provider(provider_id):
             provider = self.provider_manager.get_provider(provider_id)
             if provider:
-                self.append_colored_line(f"已切换至转录服务商: {provider.name}", "#00d4ff")
+                self.append_colored_line(f"已切换至转录服务商: {provider.name}")
                 # Restart workers to apply new provider settings
                 self.restart_children_with_env()
                 # Refresh model selector visibility and values
@@ -490,7 +487,7 @@ class GUI(QMainWindow):
         except Exception:
             ok = False
         if ok:
-            self.append_colored_line(f"已切换转录模型: {model}", "#00d4ff")
+            self.append_colored_line(f"已切换转录模型: {model}")
             # Restart workers to apply model change
             self.restart_children_with_env()
         else:
@@ -538,13 +535,13 @@ class GUI(QMainWindow):
             for line in results.split('\n'):
                 if line.strip():
                     if "✅" in line:
-                        self.log_message(line, "#00ff00")
+                        self.log_message(line, "#008000")
                     elif "❌" in line:
                         self.log_message(line, "#ff0000")
                     elif line.startswith("==="):
-                        self.log_message(line, "#00d4ff")
+                        self.log_message(line)
                     else:
-                        self.log_message(line, "#ffffff")
+                        self.log_message(line, "#000000")
 
             # Re-enable the test button
             self.test_all_button.setEnabled(True)
@@ -683,7 +680,7 @@ class GUI(QMainWindow):
             if not script.exists():
                 self.text_box_client.append("找不到测试脚本：util/run_provider_availability_test.py")
                 return
-            self.append_colored_line("开始测试所有 OpenAI 类型服务商（每个最多 10 秒）…", QColor("#00d4ff"))
+            self.append_colored_line("开始测试所有 OpenAI 类型服务商（每个最多 10 秒）…", QColor("#000000"))
             p = subprocess.Popen(
                 [exe, str(script)],
                 creationflags=subprocess.CREATE_NO_WINDOW,
@@ -815,7 +812,7 @@ class GUI(QMainWindow):
                 self.provider_manager.load_providers()
                 self.populate_provider_combo()
                 self.populate_model_combo()
-                self.log_message("已重新加载转录服务商配置", "#00d4ff")
+                self.log_message("已重新加载转录服务商配置")
 
                 # Restart workers to apply any changes
                 self.restart_children_with_env()

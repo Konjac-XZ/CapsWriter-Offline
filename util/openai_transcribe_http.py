@@ -18,7 +18,10 @@ _CLIENT_GEN: int = 0
 
 
 def get_api_base() -> str:
-    return os.getenv("OPENAI_BASE_URL").rstrip("/")
+    base_url = os.getenv("OPENAI_BASE_URL")
+    if base_url is None:
+        return ""
+    return base_url.rstrip("/")
 
 
 def get_api_key() -> str:
@@ -34,7 +37,8 @@ def get_model() -> str:
 
 
 def get_prompt() -> str:
-    return os.getenv("TRANSCRIBE_PROMPT")
+    prompt = os.getenv("TRANSCRIBE_PROMPT")
+    return prompt if prompt is not None else ""
 
 
 def get_temperature() -> float | None:
