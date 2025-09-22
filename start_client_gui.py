@@ -37,6 +37,7 @@ from PySide6.QtGui import (
     QFont,
     QIcon,
     QWheelEvent,
+    QCursor,
     QFontDatabase,
     QTextOption,
     QShortcut,
@@ -219,6 +220,7 @@ class GUI(QMainWindow):
         try:
             self.populate_provider_combo()
             self.populate_model_combo()
+            self.populate_prompt_combo()
         except Exception:
             pass
         # Start background workers (core first, helpers staggered)
@@ -266,10 +268,40 @@ class GUI(QMainWindow):
         provider_row.addWidget(provider_label)
 
         self.provider_combo = QComboBox()
-        self.provider_combo.setMinimumWidth(200)
+        # Slightly smaller minimum to reduce overall width on the row
+        self.provider_combo.setMinimumWidth(160)
         self.populate_provider_combo()
         self.provider_combo.currentTextChanged.connect(self.on_provider_changed)
         provider_row.addWidget(self.provider_combo)
+
+        # Add a small spacer before the prompt controls for nicer separation
+        try:
+            provider_row.addItem(QSpacerItem(36, 20, QSizePolicy.Fixed, QSizePolicy.Minimum))
+        except Exception:
+            pass
+
+        # Prompt controls on the same row, slightly to the right
+        # Full dropdown (kept for expanded mode, hidden by default)
+        self.prompt_label = QLabel("提示词:")
+        self.prompt_label.setMinimumWidth(40)
+        self.prompt_combo = QComboBox()
+        self.prompt_combo.setMinimumWidth(220)
+        self.prompt_combo.setEditable(False)
+        self.prompt_combo.currentIndexChanged.connect(self.on_prompt_changed)
+        provider_row.addWidget(self.prompt_label)
+        provider_row.addWidget(self.prompt_combo)
+
+        # Compact prompt button (default visible) that opens a presets menu
+        self.prompt_compact_button = QPushButton("提示词 ▾")
+        try:
+            self.prompt_compact_button.setFlat(True)
+        except Exception:
+            pass
+        self.prompt_compact_button.setMinimumWidth(96)
+        self.prompt_compact_button.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        self.prompt_compact_button.clicked.connect(self.show_prompt_menu)
+        provider_row.addWidget(self.prompt_compact_button)
+
         provider_row.addStretch()
         self.provider_layout.addLayout(provider_row)
 
@@ -297,6 +329,205 @@ class GUI(QMainWindow):
         self.test_all_button.setToolTip("测试所有转录服务商的可用性")
         self.test_all_button.clicked.connect(self.test_all_providers)
         self.model_row.addWidget(self.test_all_button)
+
+        # Populate initial prompt list according to active provider
+        self.populate_prompt_combo()
+        # Default to compact mode (hide the large dropdown, use the small button)
+        try:
+            self.prompt_label.setVisible(False)
+            self.prompt_combo.setVisible(False)
+        except Exception:
+            pass
+        # Reflect current selection in compact button text/tooltip
+        try:
+            self.update_prompt_compact_button()
+        except Exception:
+            pass
+
+    def update_prompt_compact_button(self) -> None:
+        """Update the compact prompt button text and tooltip to reflect current selection."""
+        title = "全局默认"
+        current_data = self.provider_combo.currentData() if hasattr(self, "provider_combo") else None
+        try:
+            if self.provider_manager and current_data is not None:
+                p = self.provider_manager.get_provider(current_data)
+                if p and hasattr(p, "settings"):
+                    preset = (p.settings or {}).get("prompt_preset")
+                    if isinstance(preset, str) and preset.strip():
+                        title = preset.strip()
+        except Exception:
+            pass
+        label = f"提示词: {title}"
+        # Trim overly long labels for tight layouts
+        if len(label) > 18:
+            label = label[:16] + "…"
+        try:
+            self.prompt_compact_button.setText(label)
+            self.prompt_compact_button.setToolTip(f"当前提示词预置：{title}\n点击以选择预置")
+        except Exception:
+            pass
+
+    def show_prompt_menu(self) -> None:
+        """Open a menu listing prompt presets (including global default) for quick selection."""
+        menu = QMenu(self)
+        # Default option
+        act_default = QAction("使用全局默认", self)
+        act_default.triggered.connect(lambda: self.on_prompt_menu_selected("__DEFAULT__"))
+        menu.addAction(act_default)
+
+        # Presets from provider manager
+        presets = {}
+        try:
+            from util.provider_config import provider_manager as _pm
+            if hasattr(_pm, "list_prompt_presets"):
+                presets = _pm.list_prompt_presets() or {}
+        except Exception:
+            presets = {}
+        for name, meta in presets.items():
+            act = QAction(str(name), self)
+            # Short preview as tooltip
+            try:
+                text = meta.get("text") if isinstance(meta, dict) else None
+                if isinstance(text, str) and text.strip():
+                    preview = " ".join(line.strip() for line in text.splitlines() if line.strip())
+                    if len(preview) > 160:
+                        preview = preview[:157] + "..."
+                    act.setToolTip(preview)
+            except Exception:
+                pass
+            act.triggered.connect(lambda checked=False, n=str(name): self.on_prompt_menu_selected(n))
+            menu.addAction(act)
+
+        try:
+            menu.exec(self.prompt_compact_button.mapToGlobal(self.prompt_compact_button.rect().bottomLeft()))
+        except Exception:
+            # Fallback: show at cursor
+            try:
+                menu.exec(QCursor.pos())
+            except Exception:
+                pass
+
+    def on_prompt_menu_selected(self, value: str) -> None:
+        """Persist prompt selection from the compact menu and apply it."""
+        if not self.provider_manager:
+            return
+        current_data = self.provider_combo.currentData() if hasattr(self, "provider_combo") else None
+        if current_data is None:
+            return
+        ok = False
+        try:
+            if value == "__DEFAULT__":
+                ok = self.provider_manager.update_provider_prompt(current_data, prompt=None, prompt_preset=None)
+            elif isinstance(value, str) and value:
+                ok = self.provider_manager.update_provider_prompt(current_data, prompt_preset=value)
+        except Exception:
+            ok = False
+        if ok:
+            # Sync the hidden combo selection for internal consistency
+            try:
+                self.populate_prompt_combo()
+            except Exception:
+                pass
+            # Update compact button label
+            self.update_prompt_compact_button()
+            # Restart workers to apply
+            self.restart_children_with_env()
+            # Log
+            try:
+                name = "使用全局默认" if value == "__DEFAULT__" else str(value)
+                self.append_colored_line(f"已切换提示词预置: {name}")
+            except Exception:
+                pass
+        else:
+            self.append_colored_line("更新提示词失败（请检查配置文件权限或格式）", "#ff5555")
+
+    def populate_prompt_combo(self):
+        """Populate the prompt preset dropdown from prompts.yaml and current provider state."""
+        if not hasattr(self, "prompt_combo"):
+            return
+        self.prompt_combo.blockSignals(True)
+        try:
+            self.prompt_combo.clear()
+            # Default item: use global default preset
+            self.prompt_combo.addItem("使用全局默认", "__DEFAULT__")
+
+            # Load preset names from provider manager
+            presets = {}
+            try:
+                from util.provider_config import provider_manager as _pm
+                if hasattr(_pm, "list_prompt_presets"):
+                    presets = _pm.list_prompt_presets() or {}
+            except Exception:
+                presets = {}
+
+            # Keep insertion order
+            for name, meta in presets.items():
+                label = str(name)
+                self.prompt_combo.addItem(label, label)
+                # Tooltip preview of text
+                try:
+                    text = meta.get("text") if isinstance(meta, dict) else None
+                    if isinstance(text, str) and text.strip():
+                        preview = " ".join(line.strip() for line in text.splitlines() if line.strip())
+                        if len(preview) > 160:
+                            preview = preview[:157] + "..."
+                        idx = self.prompt_combo.count() - 1
+                        self.prompt_combo.setItemData(idx, preview, Qt.ToolTipRole)
+                except Exception:
+                    pass
+
+            # Determine current preset for the selected provider
+            current_preset = None
+            try:
+                current_data = self.provider_combo.currentData()
+                if self.provider_manager and current_data is not None:
+                    p = self.provider_manager.get_provider(current_data)
+                    if p and hasattr(p, "settings"):
+                        current_preset = (p.settings or {}).get("prompt_preset")
+            except Exception:
+                current_preset = None
+
+            # Select entry
+            if isinstance(current_preset, str) and current_preset:
+                chosen_index = 0
+                for i in range(self.prompt_combo.count()):
+                    if self.prompt_combo.itemData(i) == current_preset:
+                        chosen_index = i
+                        break
+                self.prompt_combo.setCurrentIndex(chosen_index)
+            else:
+                self.prompt_combo.setCurrentIndex(0)
+        finally:
+            self.prompt_combo.blockSignals(False)
+
+    def on_prompt_changed(self, index: int):
+        """Handle prompt preset selection change and persist."""
+        if not self.provider_manager:
+            return
+        current_data = self.provider_combo.currentData() if hasattr(self, "provider_combo") else None
+        if current_data is None:
+            return
+        try:
+            value = self.prompt_combo.itemData(index)
+        except Exception:
+            value = None
+        ok = False
+        try:
+            if value == "__DEFAULT__":
+                ok = self.provider_manager.update_provider_prompt(current_data, prompt=None, prompt_preset=None)
+            elif isinstance(value, str) and value:
+                ok = self.provider_manager.update_provider_prompt(current_data, prompt_preset=value)
+        except Exception:
+            ok = False
+        if ok:
+            self.append_colored_line(f"已切换提示词预置: {self.prompt_combo.currentText()}")
+            self.restart_children_with_env()
+            try:
+                self.update_prompt_compact_button()
+            except Exception:
+                pass
+        else:
+            self.append_colored_line("更新提示词失败（请检查配置文件权限或格式）", "#ff5555")
 
     def populate_provider_combo(self):
         """Populate the provider combo box with available providers."""
@@ -377,6 +608,13 @@ class GUI(QMainWindow):
                 self.restart_children_with_env()
                 # Refresh model selector visibility and values
                 self.populate_model_combo()
+                # Refresh prompt selector values
+                self.populate_prompt_combo()
+                # Update compact prompt button label
+                try:
+                    self.update_prompt_compact_button()
+                except Exception:
+                    pass
 
     def _collect_known_openai_models(self) -> list[str]:
         """Collect a reasonable list of model options for OpenAI-compatible providers.
@@ -607,13 +845,20 @@ class GUI(QMainWindow):
                     self.text_box_client.append(f"转录模型: {model}")
                     self.text_box_client.append(f"转录温度: {temperature}")
 
-                    # Show prompt if available
-                    prompt = active.settings.get("prompt")
-                    if prompt:
-                        # Normalize multiline prompt to a single line for display
-                        prompt_normalized = " ".join(line.strip() for line in str(prompt).splitlines() if line.strip())
+                    # Show resolved prompt (inline, preset, or global default)
+                    try:
+                        from util.provider_config import provider_manager as _pm
+                        resolved_prompt = _pm.get_provider_prompt()
+                    except Exception:
+                        resolved_prompt = active.settings.get("prompt")
+                    if resolved_prompt:
+                        prompt_normalized = " ".join(
+                            line.strip() for line in str(resolved_prompt).splitlines() if line.strip()
+                        )
                         max_len = 1000
-                        prompt_to_show = prompt_normalized if len(prompt_normalized) <= max_len else prompt_normalized[: max_len - 3] + "..."
+                        prompt_to_show = (
+                            prompt_normalized if len(prompt_normalized) <= max_len else prompt_normalized[: max_len - 3] + "..."
+                        )
                         self.text_box_client.append(f"转录提示: {prompt_to_show}")
                     else:
                         self.text_box_client.append("转录提示: (none)")
@@ -781,15 +1026,6 @@ class GUI(QMainWindow):
         else:
             timer.stop()
 
-    # def window_stay_on_top_toggled(self):
-    #     # 切换窗口置顶状态
-    #     if self.windowFlags() & Qt.WindowStaysOnTopHint:
-    #         self.setWindowFlags(self.windowFlags() ^ Qt.WindowStaysOnTopHint)
-    #     else:
-    #         self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
-    #     self.show()  # 重新显示窗口以应用更改
-    # Removed stay-on-top toggle tied to custom title bar button
-
     def update_word_count_toggled(self):
         select_text_count = len(self.text_box_client.textCursor().selectedText())
         select_text_bytes = len(
@@ -812,6 +1048,11 @@ class GUI(QMainWindow):
                 self.provider_manager.load_providers()
                 self.populate_provider_combo()
                 self.populate_model_combo()
+                self.populate_prompt_combo()
+                try:
+                    self.update_prompt_compact_button()
+                except Exception:
+                    pass
                 self.log_message("已重新加载转录服务商配置")
 
                 # Restart workers to apply any changes
@@ -1077,6 +1318,12 @@ class GUI(QMainWindow):
             widgets.append(self.model_combo)
         if hasattr(self, 'model_label'):
             widgets.append(self.model_label)
+        if hasattr(self, 'prompt_combo'):
+            widgets.append(self.prompt_combo)
+        if hasattr(self, 'prompt_label'):
+            widgets.append(self.prompt_label)
+        if hasattr(self, 'prompt_compact_button'):
+            widgets.append(self.prompt_compact_button)
 
         for widget in widgets:
             # 检查字体大小是否已设置，如果没有设置，则使用一个默认值

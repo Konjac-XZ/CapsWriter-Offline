@@ -129,12 +129,39 @@ def get_response_format() -> str | None:
 
 
 def get_context_text() -> str | None:
+    """Return contextual text (aka "prompt") to bias ASR.
+
+    Priority:
+    1) DASHSCOPE_CONTEXT env var (raw override)
+    2) Provider/YAML prompt preset (via ps_get_prompt)
+
+    The returned text will be truncated to a safe, configurable length to
+    avoid exceeding model-side limits (DashScope doc mentions ~10k tokens).
+    We cap by characters as an approximation.
+    """
+
+    def _truncate_context_text(s: str) -> str:
+        # Approximate guard against very large contexts; configurable via env
+        # Example: set DASHSCOPE_CONTEXT_MAX_CHARS=20000 to raise the cap
+        try:
+            max_chars = int(os.getenv("DASHSCOPE_CONTEXT_MAX_CHARS", "12000"))
+        except Exception:
+            max_chars = 12000
+        if max_chars <= 0:
+            return s
+        if len(s) <= max_chars:
+            return s
+        return s[:max_chars]
+
+    # 1) explicit env override
     context = _clean_str(os.getenv("DASHSCOPE_CONTEXT"))
     if context:
-        return context
+        return _truncate_context_text(context)
+
+    # 2) YAML/provider prompt preset resolved via DRY utility
     prompt = _clean_str(ps_get_prompt())
     if prompt:
-        return prompt
+        return _truncate_context_text(prompt)
     return None
 
 
