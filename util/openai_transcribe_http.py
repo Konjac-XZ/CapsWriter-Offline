@@ -9,6 +9,12 @@ from typing import Tuple
 import httpx
 
 from util.client_cosmic import Cosmic, console
+from util.provider_settings import (
+    get_str as ps_get_str,
+    get_prompt as ps_get_prompt,
+    get_bool as ps_get_bool,
+    get_float as ps_get_float,
+)
 
 
 # 全局可复用 HTTP 客户端，启用 keep-alive/可选 HTTP/2，减少重复握手
@@ -18,14 +24,12 @@ _CLIENT_GEN: int = 0
 
 
 def get_api_base() -> str:
-    base_url = os.getenv("OPENAI_BASE_URL")
-    if base_url is None:
-        return ""
+    base_url = ps_get_str("base_url", env="OPENAI_BASE_URL", default="") or ""
     return base_url.rstrip("/")
 
 
 def get_api_key() -> str:
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = ps_get_str("api_key", env="OPENAI_API_KEY")
     if not api_key:
         # Fail fast: require the API key to be provided via environment variable
         raise RuntimeError("OPENAI_API_KEY environment variable is required but not set")
@@ -33,30 +37,24 @@ def get_api_key() -> str:
 
 
 def get_model() -> str:
-    return os.getenv("TRANSCRIBE_MODEL", "gpt-4o-transcribe")
+    return ps_get_str("model", env="TRANSCRIBE_MODEL", default="gpt-4o-transcribe") or "gpt-4o-transcribe"
 
 
 def get_prompt() -> str:
-    prompt = os.getenv("TRANSCRIBE_PROMPT")
-    return prompt if prompt is not None else ""
+    return ps_get_prompt()
 
 
 def get_temperature() -> float | None:
-    val = os.getenv("TRANSCRIBE_TEMPERATURE")
-    if val is None or val.strip() == "":
-        return None
-    try:
-        return float(val)
-    except Exception:
-        return None
+    val = ps_get_float("temperature", env="TRANSCRIBE_TEMPERATURE", default=None)
+    return None if val is None else float(val)
 
 
 def get_language() -> str:
-    return os.getenv("OPENAI_TRANSCRIBE_LANGUAGE", "zh")
+    return ps_get_str("language", env="OPENAI_TRANSCRIBE_LANGUAGE", default="zh") or "zh"
 
 
 def is_streaming_enabled() -> bool:
-    return os.getenv("OPENAI_TRANSCRIBE_STREAM", "1").strip() not in ("0", "false", "False")
+    return ps_get_bool("stream", env="OPENAI_TRANSCRIBE_STREAM", default=True)
 
 
 def build_limits() -> httpx.Limits:

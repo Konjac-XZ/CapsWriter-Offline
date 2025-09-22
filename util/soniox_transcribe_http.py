@@ -9,7 +9,11 @@ from typing import Tuple
 import httpx
 
 from util.client_cosmic import console
-from util.provider_config import provider_manager
+from util.provider_settings import (
+    get_str as ps_get_str,
+    get_bool as ps_get_bool,
+    get_prompt as ps_get_prompt,
+)
 
 
 _HTTP_CLIENT: httpx.AsyncClient | None = None
@@ -17,30 +21,27 @@ _HTTP2_ENABLED: bool = False
 
 
 def get_api_base() -> str:
-    # Default REST base; allow override
-    return os.getenv("SONIOX_BASE_URL", "https://api.soniox.com").rstrip("/")
+    base = ps_get_str("base_url", env="SONIOX_BASE_URL", default="https://api.soniox.com") or "https://api.soniox.com"
+    return base.rstrip("/")
 
 
 def get_api_key() -> str:
-    key = os.getenv("SONIOX_API_KEY") or os.getenv("SONIOX_TEMP_API_KEY")
+    key = ps_get_str("api_key", env=["SONIOX_API_KEY", "SONIOX_TEMP_API_KEY"], default=None)
     if not key:
         raise RuntimeError("SONIOX_API_KEY (or SONIOX_TEMP_API_KEY) is required for provider=soniox")
     return key
 
 
 def get_model() -> str:
-    m = os.getenv("SONIOX_MODEL")
-    if m and m.strip():
-        return m.strip()
-    tm = os.getenv("TRANSCRIBE_MODEL", "").strip()
-    if tm:
-        return tm
+    m = ps_get_str("model", env=["SONIOX_MODEL", "TRANSCRIBE_MODEL"], default=None)
+    if m:
+        return m
     # Async REST model default
     return "stt-async-preview"
 
 
 def get_language_hints() -> list[str] | None:
-    raw = os.getenv("SONIOX_LANGUAGE_HINTS")
+    raw = ps_get_str("language_hints", env="SONIOX_LANGUAGE_HINTS", default=None)
     if raw and raw.strip():
         parts = [p.strip() for p in raw.split(",")]
         hints = [p for p in parts if p]
@@ -52,18 +53,17 @@ def get_language_hints() -> list[str] | None:
 
 
 def get_context() -> str | None:
-    ctx = provider_manager.get_provider_prompt()
-    if ctx and ctx.strip():
-        return ctx
-    return None
+    ctx = ps_get_prompt()
+    ctx = ctx.strip() if isinstance(ctx, str) else ""
+    return ctx or None
 
 
 def get_enable_diarization() -> bool:
-    return os.getenv("SONIOX_ENABLE_DIARIZATION", "0").strip() not in ("0", "false", "False")
+    return ps_get_bool("enable_diarization", env="SONIOX_ENABLE_DIARIZATION", default=False)
 
 
 def get_enable_language_identification() -> bool:
-    return os.getenv("SONIOX_ENABLE_LANGUAGE_IDENTIFICATION", "0").strip() not in ("0", "false", "False")
+    return ps_get_bool("enable_language_identification", env="SONIOX_ENABLE_LANGUAGE_IDENTIFICATION", default=False)
 
 
 def build_limits() -> httpx.Limits:

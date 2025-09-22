@@ -1,4 +1,4 @@
-"""
+﻿"""
 Provider configuration management system.
 Handles dynamic loading and switching between transcription providers.
 """
@@ -8,6 +8,99 @@ import yaml
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
+
+
+class PromptManager:
+    """Single-source manager for reusable prompts.
+
+    Loads config/prompts.yaml once and provides:
+    - Preset text lookup (with alias support)
+    - Default preset resolution
+    - Listing helpers
+    """
+
+    def __init__(self, config_root: Optional[Path] = None) -> None:
+        self.config_root = config_root or Path(__file__).parent.parent / "config"
+        self._prompts_path = self.config_root / "prompts.yaml"
+        self._cache_mtime: float | None = None
+        self._data: Dict[str, Any] = {}
+
+    def _maybe_reload(self) -> None:
+        """Reload prompts.yaml if it's changed on disk."""
+        path = self._prompts_path
+        if not path.exists():
+            self._data = {}
+            self._cache_mtime = None
+            return
+        try:
+            mtime = path.stat().st_mtime
+            if self._cache_mtime is None or mtime != self._cache_mtime:
+                with open(path, "r", encoding="utf-8") as f:
+                    self._data = yaml.safe_load(f) or {}
+                self._cache_mtime = mtime
+        except Exception as e:  # pragma: no cover
+            print(f"Error loading prompts from {path}: {e}")
+            self._data = {}
+            self._cache_mtime = None
+
+    @property
+    def data(self) -> Dict[str, Any]:
+        self._maybe_reload()
+        return self._data
+
+    def _aliases(self) -> Dict[str, str]:
+        return (self.data.get("aliases") or {}) if isinstance(self.data, dict) else {}
+
+    def _presets(self) -> Dict[str, Dict[str, Any]]:
+        presets = self.data.get("presets") or {}
+        return presets if isinstance(presets, dict) else {}
+
+    def resolve_name(self, name: Optional[str]) -> Optional[str]:
+        if not name:
+            return None
+        name = str(name).strip()
+        if not name:
+            return None
+        presets = self._presets()
+        if name in presets:
+            return name
+        alias = self._aliases().get(name)
+        if alias in presets:
+            return alias
+        # No match
+        return None
+
+    def get_text(self, name: Optional[str]) -> Optional[str]:
+        key = self.resolve_name(name)
+        if not key:
+            return None
+        preset = self._presets().get(key) or {}
+        text = preset.get("text")
+        if isinstance(text, str):
+            return text
+        return None
+
+    def get_default_preset(self) -> Optional[str]:
+        raw = self.data.get("default_preset")
+        if isinstance(raw, str):
+            return self.resolve_name(raw)
+        return None
+
+    def get_default_prompt_text(self) -> Optional[str]:
+        default_name = self.get_default_preset()
+        if default_name:
+            return self.get_text(default_name)
+        return None
+
+    def list_presets(self) -> Dict[str, Dict[str, Any]]:
+        return self._presets()
+
+    def list_aliases(self) -> Dict[str, str]:
+        return self._aliases()
+
+
+# Global prompt manager instance (single source of truth for prompts)
+prompt_manager = PromptManager()
 
 
 @dataclass
@@ -87,36 +180,8 @@ class ProviderManager:
         if not provider:
             return
 
-        # Clear old provider settings
-        self.clear_env_settings()
-
-        # Set new provider settings
-        os.environ["TRANSCRIBE_PROVIDER"] = provider.type
-        os.environ["TRANSCRIBE_PROMPT"] = self.get_provider_prompt()
-
-        if provider.type == "openai":
-            os.environ["OPENAI_API_KEY"] = provider.settings.get("api_key", "")
-            os.environ["OPENAI_BASE_URL"] = provider.settings.get("base_url", "")
-            os.environ["TRANSCRIBE_MODEL"] = provider.settings.get("model", "")
-            os.environ["TRANSCRIBE_TEMPERATURE"] = str(provider.settings.get("temperature", 0.2))
-            os.environ["OPENAI_TRANSCRIBE_STREAM"] = str(provider.settings.get("stream", False))
-            os.environ["OPENAI_TRANSCRIBE_LANGUAGE"] = provider.settings.get("language", "zh")
-            os.environ["OPENAI_TRANSCRIBE_FORMAT"] = provider.settings.get("response_format", "text")
-
-        elif provider.type == "replicate":
-            os.environ["REPLICATE_API_TOKEN"] = provider.settings.get("api_token", "")
-            os.environ["OPENAI_TRANSCRIBE_LANGUAGE"] = provider.settings.get("language", "zh")
-            os.environ["TRANSCRIBE_TEMPERATURE"] = str(provider.settings.get("temperature", 0.2))
-            os.environ["OPENAI_TRANSCRIBE_STREAM"] = str(provider.settings.get("stream", False))
-
-        elif provider.type == "elevenlabs":
-            os.environ["ELEVENLABS_API_KEY"] = provider.settings.get("api_key", "")
-            os.environ["ELEVENLABS_LANGUAGE_CODE"] = provider.settings.get("language_code", "zh")
-
-        elif provider.type == "soniox":
-            os.environ["SONIOX_API_KEY"] = provider.settings.get("api_key", "")
-            os.environ["SONIOX_MODEL"] = provider.settings.get("model", "stt-async-preview-v1")
-            os.environ["SONIOX_LANGUAGE_HINTS"] = provider.settings.get("language_hints", "zh, en")
+        # Migration note: we no longer mirror settings to environment variables.
+        # Handlers should query ProviderManager/providers' settings directly.
     
     def get_provider(self, provider_id: str) -> Optional[ProviderConfig]:
         """Get provider configuration by ID."""
@@ -127,6 +192,14 @@ class ProviderManager:
         if self.active_provider:
             return self.providers.get(self.active_provider)
         return None
+
+    def get_active_provider_type(self) -> Optional[str]:
+        p = self.get_active_provider()
+        return p.type if p else None
+
+    def get_active_settings(self) -> Dict[str, Any]:
+        p = self.get_active_provider()
+        return dict(p.settings) if p and p.settings else {}
     
     def set_active_provider(self, provider_id: str) -> bool:
         """Set the active provider and update environment variables."""
@@ -135,36 +208,9 @@ class ProviderManager:
         
         provider = self.providers[provider_id]
         
-        # Clear old provider settings
-        self.clear_env_settings()
+        # We no longer export settings to env; only track active id internally
         
-        # Set new provider settings
-        os.environ["TRANSCRIBE_PROVIDER"] = provider.type
-        os.environ["TRANSCRIBE_PROMPT"] = self.get_provider_prompt()
-        
-        if provider.type == "openai":
-            os.environ["OPENAI_API_KEY"] = provider.settings.get("api_key", "")
-            os.environ["OPENAI_BASE_URL"] = provider.settings.get("base_url", "")
-            os.environ["TRANSCRIBE_MODEL"] = provider.settings.get("model", "")
-            os.environ["TRANSCRIBE_TEMPERATURE"] = str(provider.settings.get("temperature", 0.2))
-            os.environ["OPENAI_TRANSCRIBE_STREAM"] = str(provider.settings.get("stream", False))
-            os.environ["OPENAI_TRANSCRIBE_LANGUAGE"] = provider.settings.get("language", "zh")
-            os.environ["OPENAI_TRANSCRIBE_FORMAT"] = provider.settings.get("response_format", "text")
-            
-        elif provider.type == "replicate":
-            os.environ["REPLICATE_API_TOKEN"] = provider.settings.get("api_token", "")
-            os.environ["OPENAI_TRANSCRIBE_LANGUAGE"] = provider.settings.get("language", "zh")
-            os.environ["TRANSCRIBE_TEMPERATURE"] = str(provider.settings.get("temperature", 0.2))
-            os.environ["OPENAI_TRANSCRIBE_STREAM"] = str(provider.settings.get("stream", False))
-            
-        elif provider.type == "elevenlabs":
-            os.environ["ELEVENLABS_API_KEY"] = provider.settings.get("api_key", "")
-            os.environ["ELEVENLABS_LANGUAGE_CODE"] = provider.settings.get("language_code", "zh")
-            
-        elif provider.type == "soniox":
-            os.environ["SONIOX_API_KEY"] = provider.settings.get("api_key", "")
-            os.environ["SONIOX_MODEL"] = provider.settings.get("model", "stt-async-preview-v1")
-            os.environ["SONIOX_LANGUAGE_HINTS"] = provider.settings.get("language_hints", "zh, en")
+        # Handlers will read settings from ProviderManager instead.
         
         # Update enabled status in configs
         for pid, p in self.providers.items():
@@ -175,16 +221,8 @@ class ProviderManager:
         return True
     
     def clear_env_settings(self) -> None:
-        """Clear environment variables for all providers."""
-        env_vars = [
-            "TRANSCRIBE_PROMPT", "OPENAI_API_KEY", "OPENAI_BASE_URL", "TRANSCRIBE_MODEL",
-            "TRANSCRIBE_TEMPERATURE", "OPENAI_TRANSCRIBE_STREAM",
-            "OPENAI_TRANSCRIBE_LANGUAGE", "OPENAI_TRANSCRIBE_FORMAT",
-            "REPLICATE_API_TOKEN", "ELEVENLABS_API_KEY", "ELEVENLABS_LANGUAGE_CODE",
-            "SONIOX_API_KEY", "SONIOX_MODEL", "SONIOX_LANGUAGE_HINTS"
-        ]
-        for var in env_vars:
-            os.environ.pop(var, None)
+        """No-op in YAML-first mode; kept for backward compatibility."""
+        return
     
     def save_provider_states(self) -> None:
         """Save current enabled states back to YAML files."""
@@ -218,22 +256,28 @@ class ProviderManager:
     
     def get_provider_prompt(self) -> str:
         """Get transcription prompt from active provider or default."""
+        # Prefer provider-specific overrides
         if self.active_provider:
             provider = self.providers.get(self.active_provider)
             if provider:
-                # First check for custom prompt in provider settings
-                custom_prompt = provider.settings.get("prompt")
-                if custom_prompt:
+                settings = provider.settings or {}
+                # Explicit inline prompt wins
+                custom_prompt = settings.get("prompt")
+                if isinstance(custom_prompt, str) and custom_prompt.strip():
                     return custom_prompt
 
-                # Then check for prompt preset reference
-                prompt_preset = provider.settings.get("prompt_preset")
-                if prompt_preset:
-                    preset_prompt = self.get_prompt_preset(prompt_preset)
-                    if preset_prompt:
-                        return preset_prompt
+                # Preset reference (with alias support)
+                preset_name = settings.get("prompt_preset")
+                from_text = prompt_manager.get_text(preset_name) if preset_name else None
+                if from_text:
+                    return from_text
 
-        # Fallback to environment variable or empty string
+        # Global default from prompts.yaml
+        global_default = prompt_manager.get_default_prompt_text()
+        if isinstance(global_default, str) and global_default.strip():
+            return global_default
+
+        # Back-compat: allow environment variable fallback
         return os.getenv("TRANSCRIBE_PROMPT", "")
 
     def set_provider_prompt(self, prompt: str) -> None:
@@ -241,35 +285,14 @@ class ProviderManager:
         os.environ["TRANSCRIBE_PROMPT"] = prompt
 
     def get_prompt_preset(self, preset_name: str) -> Optional[str]:
-        """Get a prompt preset by name from the prompts configuration."""
-        prompts_file = self.config_dir.parent / "prompts.yaml"
-        if not prompts_file.exists():
-            return None
-
-        try:
-            with open(prompts_file, 'r', encoding='utf-8') as f:
-                prompts_data = yaml.safe_load(f)
-
-            presets = prompts_data.get("presets", {})
-            return presets.get(preset_name, {}).get("text")
-        except Exception as e:
-            print(f"Error loading prompt preset {preset_name}: {e}")
-            return None
+        """Get a prompt preset by name (aliases supported)."""
+        return prompt_manager.get_text(preset_name)
 
     def list_prompt_presets(self) -> Dict[str, Dict[str, str]]:
         """List all available prompt presets."""
-        prompts_file = self.config_dir.parent / "prompts.yaml"
-        if not prompts_file.exists():
-            return {}
-
-        try:
-            with open(prompts_file, 'r', encoding='utf-8') as f:
-                prompts_data = yaml.safe_load(f)
-
-            return prompts_data.get("presets", {})
-        except Exception as e:
-            print(f"Error loading prompt presets: {e}")
-            return {}
+        # Keep return shape stable (name -> {name, description, text})
+        raw = prompt_manager.list_presets()
+        return {k: v for k, v in raw.items()}
 
     def update_provider_prompt(self, provider_id: str, prompt: Optional[str] = None, prompt_preset: Optional[str] = None) -> bool:
         """Update prompt setting for a provider and save to file."""

@@ -8,11 +8,23 @@ from typing import Tuple
 import httpx
 
 from util.client_cosmic import console
+try:
+    from util.provider_config import provider_manager
+except Exception:
+    provider_manager = None
 from util.openai_transcribe_http import emit_partial_update
 
 
 def _get_model() -> str:
-    """Replicate model identifier. Allow override via env TRANSCRIBE_REPLICATE_MODEL."""
+    """Replicate model identifier. Prefer YAML settings model; fallback to env."""
+    if provider_manager is not None:
+        try:
+            s = provider_manager.get_active_settings()
+            m = s.get("model")
+            if isinstance(m, str) and m.strip():
+                return "openai/" + m.strip()
+        except Exception:
+            pass
     return "openai/" + os.getenv("TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
 
 
@@ -22,7 +34,14 @@ def _get_input_key() -> str:
 
 
 def _ensure_token():
-    token = os.getenv("REPLICATE_API_TOKEN")
+    token = None
+    if provider_manager is not None:
+        try:
+            token = provider_manager.get_active_settings().get("api_token")
+        except Exception:
+            token = None
+    if not token:
+        token = os.getenv("REPLICATE_API_TOKEN")
     if not token:
         raise RuntimeError("REPLICATE_API_TOKEN environment variable is required for provider=replicate")
 
