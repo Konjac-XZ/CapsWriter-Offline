@@ -98,6 +98,54 @@ class PromptManager:
     def list_aliases(self) -> Dict[str, str]:
         return self._aliases()
 
+    def update_preset_text(self, name: str, new_text: str) -> bool:
+        """Persist updated text for a given preset back to prompts.yaml."""
+        path = self._prompts_path
+        if not path.exists():
+            return False
+
+        resolved_name = self.resolve_name(name)
+        if not resolved_name:
+            return False
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+        except Exception as e:
+            print(f"Error loading prompts from {path}: {e}")
+            return False
+
+        presets = data.setdefault("presets", {})
+        if not isinstance(presets, dict):
+            presets = {}
+            data["presets"] = presets
+
+        preset_entry = presets.get(resolved_name)
+        if not isinstance(preset_entry, dict):
+            preset_entry = {}
+            presets[resolved_name] = preset_entry
+
+        preset_entry["text"] = new_text
+
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                yaml.safe_dump(
+                    data,
+                    f,
+                    default_flow_style=False,
+                    allow_unicode=True,
+                    sort_keys=False,
+                )
+            self._data = data
+            try:
+                self._cache_mtime = path.stat().st_mtime
+            except Exception:
+                self._cache_mtime = None
+            return True
+        except Exception as e:
+            print(f"Error writing prompts to {path}: {e}")
+            return False
+
 
 # Global prompt manager instance (single source of truth for prompts)
 prompt_manager = PromptManager()
@@ -376,6 +424,10 @@ class ProviderManager:
                 return False
 
         return False
+
+    def update_prompt_preset_text(self, preset_name: str, text: str) -> bool:
+        """Update the text for a named prompt preset in prompts.yaml."""
+        return prompt_manager.update_preset_text(preset_name, text)
 
 
 # Global provider manager instance

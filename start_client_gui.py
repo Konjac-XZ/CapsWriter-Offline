@@ -47,10 +47,13 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMenu,
+    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
     QSystemTrayIcon,
@@ -85,6 +88,34 @@ def _resolve_pythonw_client() -> str | None:
 
 
 # AHK hint tooltip removed for leaner startup
+
+
+class PromptEditDialog(QDialog):
+    """Simple dialog for editing provider-specific prompts."""
+
+    def __init__(self, parent: QWidget | None = None, *, initial_text: str = ""):
+        super().__init__(parent)
+        self.setWindowTitle("修改提示词")
+        self.resize(420, 320)
+
+        layout = QVBoxLayout(self)
+        self.text_edit = QPlainTextEdit(self)
+        self.text_edit.setPlainText(initial_text)
+        layout.addWidget(self.text_edit)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel, parent=self)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        try:
+            buttons.button(QDialogButtonBox.Save).setText("保存")
+            buttons.button(QDialogButtonBox.Cancel).setText("取消")
+        except Exception:
+            pass
+        layout.addWidget(buttons)
+
+    def prompt_text(self) -> str:
+        return self.text_edit.toPlainText()
+
 
 class GUI(QMainWindow):
     def __init__(self):
@@ -262,6 +293,14 @@ class GUI(QMainWindow):
         combo.setMinimumContentsLength(0)
         combo.setStyleSheet("QComboBox { min-width: 0px; }")
 
+    def _inline_prompt_label(self, prompt_text: str) -> str:
+        """Create a compact label for inline prompts using the first non-empty snippet."""
+        snippet_parts = [line.strip() for line in prompt_text.splitlines() if line.strip()]
+        snippet = " ".join(snippet_parts)
+        if len(snippet) > 18:
+            snippet = snippet[:16] + "…"
+        return f"自定义: {snippet}" if snippet else "自定义提示词"
+
     def _build_combo_field(self, label_text: str, combo: QComboBox) -> tuple[QWidget, QLabel]:
         """Wrap a label-combo pair so the group collapses gracefully."""
         container = QWidget()
@@ -324,6 +363,12 @@ class GUI(QMainWindow):
         self.test_all_button.setToolTip("测试所有转录服务商的可用性")
         self.test_all_button.clicked.connect(self.test_all_providers)
         self.test_all_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.modify_prompt_button = QPushButton("修改提示词")
+        self.modify_prompt_button.setMinimumWidth(90)
+        self.modify_prompt_button.setToolTip("编辑当前服务商的自定义提示词")
+        self.modify_prompt_button.clicked.connect(self.show_modify_prompt_dialog)
+        self.modify_prompt_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.model_row.addWidget(self.modify_prompt_button)
         self.model_row.addWidget(self.test_all_button)
         self.model_row.addStretch()
 
@@ -369,29 +414,162 @@ class GUI(QMainWindow):
                 except Exception:
                     pass
 
-            # Determine current preset for the selected provider
-            current_preset = None
+            inline_prompt: str | None = None
+            current_preset: str | None = None
+            current_data = None
             try:
                 current_data = self.provider_combo.currentData()
                 if self.provider_manager and current_data is not None:
-                    p = self.provider_manager.get_provider(current_data)
-                    if p and hasattr(p, "settings"):
-                        current_preset = (p.settings or {}).get("prompt_preset")
+                    provider = self.provider_manager.get_provider(current_data)
+                    if provider and hasattr(provider, "settings"):
+                        settings = provider.settings or {}
+                        raw_inline = settings.get("prompt")
+                        if isinstance(raw_inline, str) and raw_inline.strip():
+                            inline_prompt = raw_inline
+                        preset_value = settings.get("prompt_preset")
+                        if isinstance(preset_value, str) and preset_value.strip():
+                            current_preset = preset_value.strip()
             except Exception:
-                current_preset = None
+                pass
 
-            # Select entry
-            if isinstance(current_preset, str) and current_preset:
-                chosen_index = 0
+            selected_index = 0
+            if inline_prompt:
+                label = self._inline_prompt_label(inline_prompt)
+                custom_index = self.prompt_combo.count()
+                self.prompt_combo.addItem(label, "__INLINE__")
+                self.prompt_combo.setItemData(custom_index, inline_prompt, Qt.ToolTipRole)
+                selected_index = custom_index
+            elif isinstance(current_preset, str) and current_preset:
                 for i in range(self.prompt_combo.count()):
                     if self.prompt_combo.itemData(i) == current_preset:
-                        chosen_index = i
+                        selected_index = i
                         break
-                self.prompt_combo.setCurrentIndex(chosen_index)
-            else:
-                self.prompt_combo.setCurrentIndex(0)
+
+            self.prompt_combo.setCurrentIndex(selected_index)
         finally:
             self.prompt_combo.blockSignals(False)
+
+    def _resolve_prompt_text_for_provider(self, provider_id: str) -> str:
+        """Determine the prompt text to show in the editor for the given provider."""
+        if not self.provider_manager:
+            return ""
+        provider = self.provider_manager.get_provider(provider_id)
+        if not provider:
+            return ""
+
+        settings = provider.settings or {}
+        inline = settings.get("prompt")
+        if isinstance(inline, str) and inline.strip():
+            return inline
+
+        preset_name = settings.get("prompt_preset")
+        if isinstance(preset_name, str) and preset_name.strip():
+            preset_text = self.provider_manager.get_prompt_preset(preset_name.strip())
+            if isinstance(preset_text, str) and preset_text.strip():
+                return preset_text
+
+        try:
+            active_id = getattr(self.provider_manager, "active_provider", None)
+            if active_id is not None and str(active_id).strip() == str(provider_id).strip():
+                prompt = self.provider_manager.get_provider_prompt()
+                if isinstance(prompt, str):
+                    return prompt
+        except Exception:
+            pass
+
+        try:
+            from util.provider_config import prompt_manager as _prompt_manager
+
+            default_text = _prompt_manager.get_default_prompt_text()
+            if isinstance(default_text, str):
+                return default_text
+        except Exception:
+            pass
+
+        return ""
+
+    def show_modify_prompt_dialog(self) -> None:
+        """Open the prompt editor dialog and persist any changes."""
+        if not self.provider_manager:
+            self.append_colored_line("转录服务商配置系统未初始化", "#ff5555")
+            return
+
+        provider_id = self.provider_combo.currentData() if hasattr(self, "provider_combo") else None
+        if not provider_id:
+            self.append_colored_line("请先选择转录服务商", "#ff5555")
+            return
+
+        try:
+            selection_value = self.prompt_combo.itemData(self.prompt_combo.currentIndex())
+        except Exception:
+            selection_value = None
+
+        preset_name: str | None = None
+        if isinstance(selection_value, str) and selection_value not in {"__INLINE__", "__DEFAULT__"}:
+            preset_name = selection_value
+
+        if preset_name:
+            initial_text = self.provider_manager.get_prompt_preset(preset_name) or ""
+        else:
+            initial_text = self._resolve_prompt_text_for_provider(provider_id)
+
+        dialog = PromptEditDialog(self, initial_text=initial_text)
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        new_prompt_raw = dialog.prompt_text()
+        new_prompt_trimmed = new_prompt_raw.strip()
+
+        if preset_name:
+            updated = False
+            try:
+                updated = self.provider_manager.update_prompt_preset_text(preset_name, new_prompt_raw)
+            except Exception:
+                updated = False
+
+            if not updated:
+                self.append_colored_line("保存提示词预设失败（请检查 prompts.yaml 权限或格式）", "#ff5555")
+                return
+
+            provider_updated = True
+            try:
+                provider_updated = self.provider_manager.update_provider_prompt(
+                    provider_id,
+                    prompt=None,
+                    prompt_preset=preset_name,
+                )
+            except Exception:
+                provider_updated = False
+
+            self.populate_prompt_combo()
+            self.restart_children_with_env()
+
+            msg = f"已更新提示词预设: {preset_name}"
+            if not provider_updated:
+                msg += "（但未能刷新当前服务商设置，请手动检查配置）"
+            self.append_colored_line(msg)
+            return
+
+        # Inline or default-backed prompt editing falls back to provider-specific overrides
+        try:
+            if new_prompt_trimmed:
+                updated = self.provider_manager.update_provider_prompt(provider_id, prompt=new_prompt_raw)
+            else:
+                updated = self.provider_manager.update_provider_prompt(provider_id, prompt=None)
+        except Exception:
+            updated = False
+
+        if not updated:
+            self.append_colored_line("保存提示词失败（请检查配置文件权限或格式）", "#ff5555")
+            return
+
+        self.populate_prompt_combo()
+        self.restart_children_with_env()
+
+        if new_prompt_trimmed:
+            self.append_colored_line("已保存自定义提示词。")
+        else:
+            self.append_colored_line("已清除自定义提示词，恢复为预设/默认值。")
 
     def on_prompt_changed(self, index: int):
         """Handle prompt preset selection change and persist."""
@@ -408,6 +586,9 @@ class GUI(QMainWindow):
         try:
             if value == "__DEFAULT__":
                 ok = self.provider_manager.update_provider_prompt(current_data, prompt=None, prompt_preset=None)
+            elif value == "__INLINE__":
+                # Inline prompts are managed via the modify dialog; no change needed.
+                return
             elif isinstance(value, str) and value:
                 ok = self.provider_manager.update_provider_prompt(current_data, prompt_preset=value)
         except Exception:
@@ -1194,6 +1375,8 @@ class GUI(QMainWindow):
             widgets.append(self.provider_combo)
         if hasattr(self, 'test_all_button'):
             widgets.append(self.test_all_button)
+        if hasattr(self, 'modify_prompt_button'):
+            widgets.append(self.modify_prompt_button)
         if hasattr(self, 'model_combo'):
             widgets.append(self.model_combo)
         if hasattr(self, 'model_label'):
