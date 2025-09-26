@@ -1,0 +1,38 @@
+# Repository Guidelines
+
+## Project Structure & Module Organization
+- `core_server.py` runs the speech-to-text and translation back-end, while `core_client.py` and `start_client_gui*.py` expose CLI and GUI clients for keyboard-driven capture.
+- Reusable logic lives in `util/` (hotword updates, websocket streams, GUI helpers); extend these modules first when adding shared behavior.
+- Configuration defaults sit in `config.toml` and supporting schemas under `config/`; UI art and documentation assets live in `assets/`.
+- Models, the embedded Python runtime, and cached downloads live under `models/`, `runtime/`, `site-packages/`, and `downloads/`; keep large binaries out of commits unless intentionally updated.
+
+## Build, Test, and Development Commands
+- `python -m pip install -r requirements-server.txt` or `requirements-client.txt` prepares a local environment without relying on the bundled runtime.
+- `./runtime/python.exe core_server.py` starts the offline ASR server using the model selected in `config.toml`.
+- `./runtime/python.exe core_client.py` launches the microphone listener; pass a media path to transcribe a file instead of live input.
+- `python start_client_gui.py` opens the Qt UI for verifying changes before packaging the standalone executables.
+
+## Coding Style & Naming Conventions
+- Follow PEP 8 with 4-space indentation, snake_case for functions/modules, and CapWords for Qt/PySide widget classes.
+- Prefer explicit type hints and structured logging via `rich` and `typer`; reserve bare `print` calls for bootstrap diagnostics.
+- Keep configuration keys lowercase_with_underscores to align with `config.Config` parsing.
+
+## Testing Guidelines
+- Use `python test_replicate.py <audio>` to exercise external provider uploads; mock network calls when promoting these flows to automated tests.
+- Place new automated checks in `tests/` and target async flows with `pytest` plus `pytest-asyncio`; mirror filenames from `util/` for traceability.
+- Verify GUI edits by running `start_client_gui.py`, then capture before/after screenshots of modified dialogs.
+
+## Commit & Pull Request Guidelines
+- Follow the existing Conventional Commit pattern (`feat:`, `refactor:`, `chore:`) and keep subject lines within 72 characters.
+- Reference related issues, list manual test steps (server, client, GUI), and attach screenshots for UI-visible changes.
+- Call out model or config migrations in the PR description so maintainers can refresh packaged runtimes or assets.
+
+## Configuration & Security Notes
+- Never commit API tokens, personal audio, or `.env` files; document required variables instead.
+- Record every change to `config.toml` defaults and provide migration snippets to keep packaged binaries in sync with source.
+
+## Tooling & Shell Usage
+- Prefer the bundled bash helpers (`bash -lc`) when invoking shell commands; always set the `workdir` parameter.
+- Use `rg`/`rg --files` for searches; fall back only if unavailable.
+- Use the `apply_patch` to edit files
+- Avoid PowerShell-specific commands.
