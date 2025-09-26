@@ -1,4 +1,5 @@
 import os
+import io
 from typing import Tuple, Dict, Any
 
 from util.openai_transcribe_http import (
@@ -60,6 +61,10 @@ async def transcribe_audio(
 
     Returns (text, status_code, t_submit, t_complete, transport_info_dict)
     """
+    # Normalize payload buffer: accept bytes/bytearray/memoryview or file-like with read/seek
+    if isinstance(payload_buf, (bytes, bytearray, memoryview)):
+        payload_buf = io.BytesIO(bytes(payload_buf))
+
     provider = None
     if PROVIDER_MANAGER_AVAILABLE:
         try:
