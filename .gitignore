@@ -4,4 +4,4 @@
 !*.py
 !*.toml
 !.gitignore
-!.md
+!*.md
