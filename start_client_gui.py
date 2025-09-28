@@ -64,7 +64,7 @@ from PySide6.QtWidgets import (
 # Intentionally defer theme import/application until after first paint for faster startup
 
 from util.check_process import check_process
-from util.config import ClientConfig as Config, ServerConfig, DeepLXConfig
+from util.config import ClientConfig as Config, ServerConfig
 
 def _resolve_pythonw_client() -> str | None:
     """Return a usable Python interpreter for client child processes.
@@ -1200,18 +1200,8 @@ class GUI(QMainWindow):
 
         # Stagger optional helpers to reduce contention
         try:
-            if getattr(Config, "use_offline_translate_function", False):
-                QTimer.singleShot(300, lambda: self._start_worker(
-                    "util/client_translate_and_replace_selected_text_offline.py",
-                    "translate_and_replace_selected_text_offline_process"
-                ))
-            if getattr(Config, "use_online_translate_function", False):
-                QTimer.singleShot(600, lambda: self._start_worker(
-                    "util/client_translate_and_replace_selected_text_online.py",
-                    "translate_and_replace_selected_text_online_process"
-                ))
             if getattr(Config, "use_search_selected_text_with_everything_function", False):
-                QTimer.singleShot(900, lambda: self._start_worker(
+                QTimer.singleShot(300, lambda: self._start_worker(
                     "util/client_search_selected_text_with_everything.py",
                     "search_selected_text_with_everything"
                 ))
@@ -1304,18 +1294,10 @@ class GUI(QMainWindow):
         """Restart only worker subprocesses to pick up new environment, keep GUI alive."""
         # Stop existing workers
         self._stop_process(getattr(self, "core_client_process", None), "core_client")
-        if getattr(Config, "use_offline_translate_function", False):
-            self._stop_process(getattr(self, "translate_and_replace_selected_text_offline_process", None), "offline_trans")
-        if getattr(Config, "use_online_translate_function", False):
-            self._stop_process(getattr(self, "translate_and_replace_selected_text_online_process", None), "online_trans")
         if getattr(Config, "use_search_selected_text_with_everything_function", False):
             self._stop_process(getattr(self, "search_selected_text_with_everything", None), "everything")
 
         # Start workers with updated env
-        if getattr(Config, "use_offline_translate_function", False):
-            self._start_worker("util/client_translate_and_replace_selected_text_offline.py", "translate_and_replace_selected_text_offline_process")
-        if getattr(Config, "use_online_translate_function", False):
-            self._start_worker("util/client_translate_and_replace_selected_text_online.py", "translate_and_replace_selected_text_online_process")
         if getattr(Config, "use_search_selected_text_with_everything_function", False):
             self._start_worker("util/client_search_selected_text_with_everything.py", "search_selected_text_with_everything")
         # Core client last

@@ -1,5 +1,0 @@
-rich==13.9.3
-PySide6==6.7.1
-tomlkit==0.13.2
-PyYAML==6.0.2
-# siui  PySide6-SiliconUI  https://github.com/H1DDENADM1N/PySide6-SiliconUI

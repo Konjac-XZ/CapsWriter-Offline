@@ -37,8 +37,6 @@ def send_signal(hwnd: int, message: int, WPARAM: int, LPARAM: int):
 def send_signal_to_hint_while_recording(
     is_microphone_in_use: bool,
     is_short_duration: bool,
-    offline_translate: bool,
-    online_translate: bool,
     hold_mode: bool,
 ):
     exe_path = Path().cwd() / "hint_while_recording.exe"
@@ -54,8 +52,6 @@ def send_signal_to_hint_while_recording(
         encoded_bools = encode_booleans(
             is_microphone_in_use,
             is_short_duration,
-            offline_translate,
-            online_translate,
             hold_mode,
         )
         result = send_signal(hwnd, 0x5555, encoded_bools, 0)
@@ -78,8 +74,6 @@ def list_all_window(hwnd: int, extra: None):
 if __name__ == "__main__":
     # win32gui.EnumWindows(list_all_window, None)
     result = send_signal_to_hint_while_recording(
-        True,
-        True,
         True,
         True,
         True,

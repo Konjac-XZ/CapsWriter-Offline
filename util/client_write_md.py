@@ -2,7 +2,7 @@ import time
 from os import makedirs
 from pathlib import Path
 
-from util.hot_kwds import kwd_list
+from typing import Iterable
 
 # def do_updata_kwd(kwd_text: str):
 #     """
@@ -44,12 +44,11 @@ def write_md(text: str, time_start: float, file_audio: Path):
     folder_path = Path() / time_year / time_month
     makedirs(folder_path, exist_ok=True)
 
-    # 列表内的元素是元组，元组内包含了：关键词、md路径
-    md_list = [
-        (kwd, folder_path / f'{kwd + "-" if kwd else ""}{time_day}.md')
-        for kwd in kwd_list
-        if text.startswith(kwd)
-    ]
+    def _iter_targets() -> Iterable[tuple[str, Path]]:
+        # 仅写入日期文件；关键词功能已移除
+        yield "", folder_path / f"{time_day}.md"
+
+    md_list = list(_iter_targets())
 
     # 为 md 文件写入识别记录
     for kwd, file_md in md_list:
@@ -59,7 +58,7 @@ def write_md(text: str, time_start: float, file_audio: Path):
 
         # 写入 md
         with open(file_md, "a", encoding="utf-8") as f:
-            text_ = text[len(kwd) :].lstrip("，。,.")
+            text_ = text[len(kwd) :].lstrip("，。,.") if kwd else text
             if file_audio is not None:
                 path_ = (
                     file_audio.relative_to(file_md.parent)

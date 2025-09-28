@@ -1,1 +1,0 @@
-04 用于测试 Helsinki-NLP--opus-mt-zh-en 离线翻译模型

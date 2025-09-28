@@ -8,8 +8,6 @@ from pathlib import Path
 
 import httpx
 from util.client_cosmic import Cosmic, console
-from util.client_hot_sub import hot_sub
-from util.client_hot_update import observe_hot, update_hot_all
 from util.provider_config import provider_manager
 
 
@@ -118,10 +116,6 @@ async def transcribe_send(file: Path):
 
 
 async def transcribe_recv(file: Path):
-    # 更新热词并监听动态变化（与旧实现保持一致）
-    update_hot_all()
-    observer = observe_hot()
-
     # 轮询等待发送侧填充结果（保持与 core_client.py 的并发结构兼容）
     key = str(file)
     while key not in Cosmic.audio_files:
@@ -138,8 +132,6 @@ async def transcribe_recv(file: Path):
 
     # 解析结果（OpenAI 兼容端点使用纯文本返回）
     text_merge = message.get("text", "").strip()
-    # 热词替换
-    text_merge = hot_sub(text_merge)
     # 将中英常见句末标点换行，便于生成 srt
     text_split = re.sub(r"([，。？.!?])", r"\1\n", text_merge)
     # 文件名

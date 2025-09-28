@@ -1,18 +1,11 @@
-import json
-
 import opencc
 import pangu
 from util.client_cosmic import Cosmic, console
-from util.client_hot_sub import hot_sub
 from util.client_rename_audio import rename_audio
 from util.client_strip_punc import strip_punc
 from util.client_type_result import type_result
 from util.client_write_md import write_md
 from util.config import ClientConfig as Config
-
-if not Cosmic.transcribe_subtitles:
-    from util.client_translate_offline import translate_offline
-    from util.client_translate_online import translate_online
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -67,20 +60,6 @@ async def recv_result():
                 converter = opencc.OpenCC(Config.opencc_converter)
                 traditional_text = converter.convert(text)
                 convert_to_traditional_chinese_done = True
-
-            # 离线翻译
-            offline_translate_done = False
-            if is_final and Cosmic.offline_translate_needed and not Cosmic.transcribe_subtitles:
-                offline_translated_text = await translate_offline(text)
-                offline_translate_done = True
-                Cosmic.offline_translate_needed = False
-
-            # 在线翻译
-            online_translate_done = False
-            if is_final and Cosmic.online_translate_needed and not Cosmic.transcribe_subtitles:
-                online_translated_text = translate_online(text)
-                online_translate_done = True
-                Cosmic.online_translate_needed = False
 
             # 仅在最终结果时进行音频重命名与 Markdown 写入
             file_audio = None
@@ -157,10 +136,10 @@ async def recv_result():
                 Cosmic._stream_had_increments = False
 
             if is_stream and not is_final:
-                # 增量：不做翻译/简繁，直接键入原文增量
+                # 增量：不做简繁转换，直接键入原文增量
                 await type_incremental(text)
             else:
-                # 最终：按原逻辑输出（含翻译/简繁），但走剪贴板粘贴
+                # 最终：按原逻辑输出（含简繁转换），但走剪贴板粘贴
                 # 若此前已有流式增量输出，则不再进行最终粘贴，避免重复
                 if is_stream and getattr(Cosmic, "_stream_had_increments", False):
                     # 完结时重置计数与标记
@@ -169,16 +148,6 @@ async def recv_result():
                     Cosmic._stream_had_increments = False
                     # 不进行任何粘贴输出
                     pass
-                elif offline_translate_done:
-                    offline_translated_text = pangu.spacing_text(offline_translated_text)
-                    offline_translated_text = _ensure_end_punctuation(offline_translated_text)
-                    await type_final(offline_translated_text)
-                    offline_translate_done = False
-                elif online_translate_done:
-                    online_translated_text = pangu.spacing_text(online_translated_text)
-                    online_translated_text = _ensure_end_punctuation(online_translated_text)
-                    await type_final(online_translated_text)
-                    online_translate_done = False
                 elif convert_to_traditional_chinese_done:
                     match Config.convert_to_traditional_chinese_main:
                         case "繁":
@@ -198,6 +167,8 @@ async def recv_result():
                                 # text 已在上方做过 pangu 与标点补全
                                 await type_final(text)
                     convert_to_traditional_chinese_done = False
+                else:
+                    await type_final(text)
             Cosmic.opposite_state = False
     except Exception as e:
         print(e)

@@ -14,13 +14,6 @@ class ServerConfig:
     model: str = config["server"]["model"]
     addr: str = config["server"]["addr"]
     speech_recognition_port: str = config["server"]["speech_recognition_port"]
-    start_online_translate_server: bool = config["server"][
-        "start_online_translate_server"
-    ]
-    start_offline_translate_server: bool = config["server"][
-        "start_offline_translate_server"
-    ]
-    offline_translate_port: str = config["server"]["offline_translate_port"]
     format_num: bool = config["server"]["format_num"]
     format_punc: bool = config["server"]["format_punc"]
     format_spell: bool = config["server"]["format_spell"]
@@ -40,28 +33,7 @@ class ServerConfig:
 class ClientConfig:
     addr: str = config["client"]["addr"]
     speech_recognition_port: str = config["client"]["speech_recognition_port"]
-    offline_translate_port: str = config["client"]["offline_translate_port"]
-    offline_translate_port_gemma2b: str = config["client"][
-        "offline_translate_port_gemma2b"
-    ]
     speech_recognition_shortcut: str = config["client"]["speech_recognition_shortcut"]
-    use_offline_translate_function: bool = config["client"][
-        "use_offline_translate_function"
-    ]
-    offline_translate_shortcut: str = config["client"]["offline_translate_shortcut"]
-    offline_translate_and_replace_the_selected_text_shortcut: str = config["client"][
-        "offline_translate_and_replace_the_selected_text_shortcut"
-    ]
-    use_online_translate_function: bool = config["client"][
-        "use_online_translate_function"
-    ]
-    online_translate_shortcut: str = config["client"]["online_translate_shortcut"]
-    online_translate_target_languages: str = config["client"][
-        "online_translate_target_languages"
-    ]
-    online_translate_and_replace_the_selected_text_shortcut: str = config["client"][
-        "online_translate_and_replace_the_selected_text_shortcut"
-    ]
     use_search_selected_text_with_everything_function: bool = config["client"][
         "use_search_selected_text_with_everything_function"
     ]
@@ -82,19 +54,12 @@ class ClientConfig:
     audio_name_len: int = config["client"]["audio_name_len"]
     reduce_audio_files: bool = config["client"]["reduce_audio_files"]
     trash_punc: str = config["client"]["trash_punc"]
-    hot_zh: bool = config["client"]["hot_zh"]
-    多音字: bool = config["client"]["多音字"]
-    声调: bool = config["client"]["声调"]
-    hot_en: bool = config["client"]["hot_en"]
-    hot_rule: bool = config["client"]["hot_rule"]
-    hot_kwd: bool = config["client"]["hot_kwd"]
     mic_seg_duration: int = config["client"]["mic_seg_duration"]
     mic_seg_overlap: int = config["client"]["mic_seg_overlap"]
     file_seg_duration: int = config["client"]["file_seg_duration"]
     file_seg_overlap: int = config["client"]["file_seg_overlap"]
     mute_other_audio: bool = config["client"]["mute_other_audio"]
     pause_other_audio: bool = config["client"]["pause_other_audio"]
-    arabic_year_number: bool = config["client"]["arabic_year_number"]
     shrink_automatically_to_tray: bool = config["client"][
         "shrink_automatically_to_tray"
     ]
@@ -123,15 +88,6 @@ class ClientConfig:
         "convert_to_traditional_chinese_main"
     ]
     opencc_converter: str = config["client"]["opencc_converter"]
-
-
-# DeepLX 配置
-class DeepLXConfig:
-    online_translate_port: str = config["deeplx"]["online_translate_port"]
-    exe_path: Path = Path(config["deeplx"]["exe_path"])
-    api: str = config["deeplx"]["api"]
-
-
 # 模型路径配置
 class ModelPaths:
     model_dir: Path = Path(config["model_paths"]["model_dir"])
@@ -140,7 +96,6 @@ class ModelPaths:
     paraformer_path: Path = Path(config["model_paths"]["paraformer_path"])
     paraformer_tokens_path: Path = Path(config["model_paths"]["paraformer_tokens_path"])
     punc_model_dir: Path = Path(config["model_paths"]["punc_model_dir"])
-    opus_mt_dir: Path = Path(config["model_paths"]["opus_mt_dir"])
 
 
 # SenseVoice 参数配置
@@ -190,7 +145,6 @@ def print_config():
     config_classes = [
         ServerConfig,
         ClientConfig,
-        DeepLXConfig,
         ModelPaths,
         SenseVoiceArgs,
         ParaformerArgs,

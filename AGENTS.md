@@ -1,8 +1,8 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `core_server.py` runs the speech-to-text and translation back-end, while `core_client.py` and `start_client_gui*.py` expose CLI and GUI clients for keyboard-driven capture.
-- Reusable logic lives in `util/` (hotword updates, websocket streams, GUI helpers); extend these modules first when adding shared behavior.
+- `core_server.py` runs the speech-to-text back-end, while `core_client.py` and `start_client_gui*.py` expose CLI and GUI clients for keyboard-driven capture.
+- Reusable logic lives in `util/` (websocket streams, GUI/helpers, clipboard integrations); extend these modules first when adding shared behavior.
 - Configuration defaults sit in `config.toml` and supporting schemas under `config/`; UI art and documentation assets live in `assets/`.
 - Models, the embedded Python runtime, and cached downloads live under `models/`, `runtime/`, `site-packages/`, and `downloads/`; keep large binaries out of commits unless intentionally updated.
 

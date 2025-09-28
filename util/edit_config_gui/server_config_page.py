@@ -35,24 +35,17 @@ class ServerConfigPage(SiPage):
             lambda: self.addr.lineEdit().setText("0.0.0.0")
         )
         self.model.valueChanged.connect(lambda: self.model_changed())
-        self.start_offline_translate_server.toggled.connect(
-            lambda: self.start_offline_translate_server_changed()
-        )
         self.in_the_meantime_start_the_client.toggled.connect(
             lambda: self.in_the_meantime_start_the_client_changed()
         )
         self.speech_recognition_port_set_default.clicked.connect(
             lambda: self.speech_recognition_port.setValue(6016)
         )
-        self.offline_translate_port_set_default.clicked.connect(
-            lambda: self.offline_translate_port.setValue(6017)
-        )
         self.save.longPressed.connect(self.save_config)
         # 数据校验绑定
         self.addr.lineEdit().editingFinished.connect(self.validate_addr)
         self.save.clicked.connect(self.validate_addr)
         self.save.clicked.connect(self.validate_speech_recognition_port)
-        self.save.clicked.connect(self.validate_offline_translate_port)
 
     def validate_addr(self):
         ip: str = self.addr.lineEdit().text()
@@ -93,29 +86,6 @@ class ServerConfigPage(SiPage):
                 SiGlobal.siui.windows["MAIN_WINDOW"].LayerRightMessageSidebar().send(
                     title="语音识别服务端口格式错误",
                     text=f'{port} - {error}\n已修改为默认值："6016"',
-                    msg_type=3,
-                    icon=SiGlobal.siui.iconpack.get("ic_fluent_warning_regular"),
-                    fold_after=5000,
-                )
-            except ValueError:
-                pass
-
-    def validate_offline_translate_port(self):
-        port: str = str(self.offline_translate_port.value())
-        is_valid, error = ValueCheck.is_local_listenable_port(port)
-        from rich import print
-
-        if is_valid:
-            print(f"[green]{port}[/green]")
-        else:
-            print(f"[red]{port} - {error if error else '无效'}[/red]")
-
-        if error:
-            self.offline_translate_port.setValue(6017)
-            try:
-                SiGlobal.siui.windows["MAIN_WINDOW"].LayerRightMessageSidebar().send(
-                    title="离线翻译服务端口格式错误",
-                    text=f'{port} - {error}\n已修改为默认值："6017"',
                     msg_type=3,
                     icon=SiGlobal.siui.iconpack.get("ic_fluent_warning_regular"),
                     fold_after=5000,
@@ -337,79 +307,6 @@ class ServerConfigPage(SiPage):
             )
             group.addWidget(self.speech_recognition_container)
 
-        with self.titled_widgets_group as group:
-            group.addTitle("翻译")
-            # 是否启用在线翻译服务
-            self.start_online_translate_server = SiSwitch(self)
-            self.start_online_translate_server.setChecked(
-                self.config["server"]["start_online_translate_server"]
-            )
-            self.start_online_translate_server_linear_attaching = SiOptionCardLinear(
-                self
-            )
-            self.start_online_translate_server_linear_attaching.setTitle(
-                "启用在线翻译服务"
-            )
-            self.start_online_translate_server_linear_attaching.load(
-                SiGlobal.siui.iconpack.get("ic_fluent_translate_filled")
-            )
-            self.start_online_translate_server_linear_attaching.addWidget(
-                self.start_online_translate_server
-            )
-            # 是否启用离线翻译服务
-            self.start_offline_translate_server = SiSwitch(self)
-            self.start_offline_translate_server.setChecked(
-                self.config["server"]["start_offline_translate_server"]
-            )
-            self.start_offline_translate_server_linear_attaching = SiOptionCardLinear(
-                self
-            )
-            self.start_offline_translate_server_linear_attaching.setTitle(
-                "启用离线翻译服务"
-            )
-            self.start_offline_translate_server_linear_attaching.load(
-                SiGlobal.siui.iconpack.get("ic_fluent_translate_auto_regular")
-            )
-            self.start_offline_translate_server_linear_attaching.addWidget(
-                self.start_offline_translate_server
-            )  # # 离线翻译服务端口
-            self.offline_translate_port = SiIntSpinBox(self)
-            self.offline_translate_port.resize(256, 32)
-            self.offline_translate_port.setMinimum(1024)
-            self.offline_translate_port.setMaximum(65535)
-            self.offline_translate_port.setValue(
-                int(self.config["server"]["offline_translate_port"])
-            )
-            self.offline_translate_port_set_default = SetDefaultButton(self)
-            self.offline_translate_port_linear_attaching = SiOptionCardLinear(self)
-            self.offline_translate_port_linear_attaching.setTitle(
-                "离线翻译服务端口", '默认值："6017" 端口号范围 1024-65535'
-            )
-            self.offline_translate_port_linear_attaching.load(
-                SiGlobal.siui.iconpack.get("ic_fluent_globe_location_regular")
-            )
-            self.offline_translate_port_linear_attaching.addWidget(
-                self.offline_translate_port_set_default
-            )
-            self.offline_translate_port_linear_attaching.addWidget(
-                self.offline_translate_port
-            )
-            # 设置项
-            self.translation_container = SiDenseVContainer(self)
-            self.translation_container.setFixedWidth(700)
-            self.translation_container.setAdjustWidgetsSize(True)
-            self.translation_container.addWidget(
-                self.start_online_translate_server_linear_attaching
-            )
-            self.translation_container.addWidget(
-                self.start_offline_translate_server_linear_attaching
-            )
-            self.start_offline_translate_server_changed()
-            self.translation_container.addWidget(
-                self.offline_translate_port_linear_attaching
-            )
-            group.addWidget(self.translation_container)
-
         # 保存按钮
         # 添加页脚的空白以增加美观性
         self.titled_widgets_group.addPlaceholder(64)
@@ -423,12 +320,6 @@ class ServerConfigPage(SiPage):
         else:
             self.format_punc.hide()
 
-    def start_offline_translate_server_changed(self):
-        if self.start_offline_translate_server.isChecked():
-            self.offline_translate_port_linear_attaching.show()
-        else:
-            self.offline_translate_port_linear_attaching.hide()
-
     def in_the_meantime_start_the_client_changed(self):
         if self.in_the_meantime_start_the_client.isChecked():
             self.in_the_meantime_start_the_client_and_run_as_admin.show()
@@ -441,15 +332,6 @@ class ServerConfigPage(SiPage):
             self.config["server"]["addr"] = self.addr.line_edit.text()
             self.config["server"]["speech_recognition_port"] = str(
                 self.speech_recognition_port.value()
-            )
-            self.config["server"]["start_online_translate_server"] = (
-                self.start_online_translate_server.isChecked()
-            )
-            self.config["server"]["start_offline_translate_server"] = (
-                self.start_offline_translate_server.isChecked()
-            )
-            self.config["server"]["offline_translate_port"] = str(
-                self.offline_translate_port.value()
             )
             self.config["server"]["format_num"] = self.format_num.isChecked()
             self.config["server"]["format_punc"] = self.format_punc.isChecked()
@@ -490,21 +372,6 @@ class ServerConfigPage(SiPage):
                 "speech_recognition_port",
                 clearly_type(self.config["server"]["speech_recognition_port"]),
                 str(self.config["server"]["speech_recognition_port"]),
-            )
-            table.add_row(
-                "start_online_translate_server",
-                clearly_type(self.config["server"]["start_online_translate_server"]),
-                str(self.config["server"]["start_online_translate_server"]),
-            )
-            table.add_row(
-                "start_offline_translate_server",
-                clearly_type(self.config["server"]["start_offline_translate_server"]),
-                str(self.config["server"]["start_offline_translate_server"]),
-            )
-            table.add_row(
-                "offline_translate_port",
-                clearly_type(self.config["server"]["offline_translate_port"]),
-                str(self.config["server"]["offline_translate_port"]),
             )
             table.add_row(
                 "format_num",

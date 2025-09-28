@@ -5,22 +5,13 @@ model = "Sensevoice"
 # Sensevoice模型虽然多了粤英日韩多语种，但是，中文识别效果大不如Paraformer模型
 # 比如转录字幕不完整，识别结果不准确、丢失标点等
 # 如果你只说中文普通话，建议使用 'Paraformer' 模型
-# 不影响简繁转换和翻译
+# 不影响简繁转换
 
 addr = "0.0.0.0"
 # 服务端监听地址
 
 speech_recognition_port = "6016"
 # 语音识别服务端口
-
-start_online_translate_server = false
-# 是否启用在线翻译服务
-
-start_offline_translate_server = false
-# 是否启用离线翻译服务
-
-offline_translate_port = "6017"
-# 离线翻译服务端口
 
 format_num = true
 # 是否将中文数字转为阿拉伯数字
@@ -62,41 +53,8 @@ addr = "192.168.31.94"
 speech_recognition_port = "6016"
 # 语音识别服务端口
 
-offline_translate_port = "6017"
-# 离线翻译服务端口
-
-offline_translate_port_gemma2b = "11434"
-# Gemma 2B 离线翻译端口
-
 speech_recognition_shortcut = "f15"
 # 控制录音的快捷键，默认是 "caps lock"
-
-use_offline_translate_function = false
-# 是否启用离线翻译功能
-
-offline_translate_shortcut = "left shift"
-# 控制离线翻译的快捷键，默认是 "left shift"，按住 Left Shift 再按 CapsLock 进行离线翻译
-
-offline_translate_and_replace_the_selected_text_shortcut = "ctrl + alt + p"
-# 控制离线翻译将光标选中的中文翻译并替换为英文的快捷键
-# 如果未选中任何文字，会将剪贴板的文字翻译为英文并粘贴
-
-use_online_translate_function = false
-# 是否启用在线翻译功能
-
-online_translate_shortcut = "right shift"
-# 控制在线翻译的快捷键，默认是 Right Shift，按住 Right Shift 再按 CapsLock 进行在线翻译
-# 在线翻译基于 DeepLX，过于频繁的请求可能导致 IP 被封
-# 如果出现 429 错误，则表示你的 IP 被 DeepL 暂时屏蔽了，请不要在短时间内频繁请求
-
-online_translate_target_languages = "JA"
-# 在线翻译目标语言
-# 常用的 EN JA RU，更多选择参考 https://www.deepl.com/docs-api/translate-text
-
-online_translate_and_replace_the_selected_text_shortcut = "ctrl + alt + ["
-# 控制在线翻译将光标选中的中文翻译并替换为在线翻译目标语言的快捷键
-# 如果未选中任何文字，会将剪贴板的文字翻译为目标语言并粘贴
-
 use_search_selected_text_with_everything_function = true
 # 是否启用使用 Everything 搜索选中文字的功能
 
@@ -143,24 +101,6 @@ reduce_audio_files = true
 trash_punc = "，。,."
 # 识别结果要消除的末尾标点
 
-hot_zh = true
-# 是否启用中文热词替换，中文热词存储在 hot_zh.txt 文件里
-
-"多音字" = true
-# true 表示多音字匹配
-
-"声调" = false
-# false 表示忽略声调区别，这样「黄章」就能匹配「慌张」
-
-hot_en = true
-# 是否启用英文热词替换，英文热词存储在 hot_en.txt 文件里
-
-hot_rule = true
-# 是否启用自定义规则替换，自定义规则存储在 hot_rule.txt 文件里
-
-hot_kwd = true
-# 是否启用关键词日记功能，自定义关键词存储在 keyword.txt 文件里
-
 mic_seg_duration = 15
 # 麦克风听写时分段长度：15 秒
 
@@ -178,9 +118,6 @@ mute_other_audio = true
 
 pause_other_audio = true
 # 录音时是否暂停其他音频播放
-
-arabic_year_number = true
-# 将 ****年 大写汉字替换为阿拉伯数字 ****年，例如一八四八年 替换为 1848 年
 
 shrink_automatically_to_tray = false
 # 启动后是否自动缩小至托盘
@@ -259,19 +196,6 @@ opencc_converter = "s2t.json"
 # jp2t.json New Japanese Kanji (Shinjitai) to Traditional Chinese Characters (Kyūjitai) 日文新字体到繁体（OpenCC 标准，旧字体）
 
 
-# ======================DeepLX 配置==================================
-
-[deeplx]
-online_translate_port = "1188"
-# DeepLX 在线翻译服务端口
-
-exe_path = "deeplx_windows_amd64.exe"
-# DeepLX 可执行文件路径
-
-api = "http://127.0.0.1:1188/translate"
-# DeepLX API 地址
-
-
 # ======================模型路径配置==================================
 
 [model_paths]
@@ -292,10 +216,6 @@ paraformer_tokens_path = "models/paraformer-offline-zh/tokens.txt"
 
 punc_model_dir = "models/punc_ct-transformer_cn-en"
 # 标点模型目录
-
-opus_mt_dir = "models/Helsinki-NLP--opus-mt-zh-en"
-# 离线翻译模型目录
-
 
 # ======================SenseVoice 参数配置==================================
 

@@ -29,10 +29,6 @@ async def type_result(text):
             keyboard.release(55)
             keyboard.release(9)
         else:
-            if keyboard.is_pressed(Config.offline_translate_shortcut):
-                keyboard.release(Config.offline_translate_shortcut)
-            if keyboard.is_pressed(Config.online_translate_shortcut):
-                keyboard.release(Config.online_translate_shortcut)
             keyboard.send("ctrl + v")
 
         # 还原剪贴板
