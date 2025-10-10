@@ -8,46 +8,35 @@ from typing import Tuple
 import httpx
 
 from util.client_cosmic import console
-try:
-    from util.provider_config import provider_manager
-except Exception:
-    provider_manager = None
 from util.openai_transcribe_http import emit_partial_update
+from util.provider_settings import (
+    get_bool as ps_get_bool,
+    get_str as ps_get_str,
+)
 
 
 def _get_model() -> str:
-    """Replicate model identifier. Prefer YAML settings model; fallback to env."""
-    if provider_manager is not None:
-        try:
-            s = provider_manager.get_active_settings()
-            m = s.get("model")
-            if isinstance(m, str) and m.strip():
-                return "openai/" + m.strip()
-        except Exception:
-            pass
-    return "openai/" + os.getenv("TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
+    """Replicate model identifier sourced from provider settings."""
+    model = ps_get_str("model", default="gpt-4o-mini-transcribe") or "gpt-4o-mini-transcribe"
+    return "openai/" + model.strip()
 
 
 def _get_input_key() -> str:
     """The input field name for audio on Replicate; default to 'audio_file' for wide compatibility."""
-    return os.getenv("TRANSCRIBE_REPLICATE_AUDIO_KEY", "audio_file")
+    key = ps_get_str("input_key", default="audio_file")
+    return key if key else "audio_file"
 
 
 def _ensure_token():
-    token = None
-    if provider_manager is not None:
-        try:
-            token = provider_manager.get_active_settings().get("api_token")
-        except Exception:
-            token = None
+    token = ps_get_str("api_token", default=None)
     if not token:
-        token = os.getenv("REPLICATE_API_TOKEN")
-    if not token:
-        raise RuntimeError("REPLICATE_API_TOKEN environment variable is required for provider=replicate")
+        raise RuntimeError("Replicate API token must be set in config/providers/replicate.yaml")
+    # Replicate SDK expects REPLICATE_API_TOKEN in the process environment.
+    os.environ["REPLICATE_API_TOKEN"] = token
 
 
 def _replicate_debug() -> bool:
-    return os.getenv("REPLICATE_DEBUG", "1").strip() not in ("0", "false", "False")
+    return ps_get_bool("debug", default=True)
 
 
 def _log_send_info(model: str, input_key: str, audio_input, payload_mime: str | None = None):
@@ -99,21 +88,14 @@ def _mime_to_suffix(payload_mime: str) -> str:
 
 
 async def _upload_file_to_host(payload_buf: io.BytesIO, payload_mime: str) -> str:
-    """Upload audio to a third-party host (default: Litterbox) and return a public URL.
-
-    Env overrides:
-      - THIRD_PARTY_UPLOAD_URL (default: https://litterbox.catbox.moe/resources/internals/api.php)
-      - THIRD_PARTY_UPLOAD_TIME (default: 1h)
-      - THIRD_PARTY_UPLOAD_FIELD (default: fileToUpload)
-      - THIRD_PARTY_UPLOAD_REQTYPE (default: fileupload)
-    """
-    upload_url = os.getenv(
-        "THIRD_PARTY_UPLOAD_URL",
-        "https://litterbox.catbox.moe/resources/internals/api.php",
-    )
-    time_param = os.getenv("THIRD_PARTY_UPLOAD_TIME", "1h")
-    field_name = os.getenv("THIRD_PARTY_UPLOAD_FIELD", "fileToUpload")
-    reqtype = os.getenv("THIRD_PARTY_UPLOAD_REQTYPE", "fileupload")
+    """Upload audio to the configured third-party host and return a public URL."""
+    upload_url = ps_get_str(
+        "upload_url",
+        default="https://litterbox.catbox.moe/resources/internals/api.php",
+    ) or "https://litterbox.catbox.moe/resources/internals/api.php"
+    time_param = ps_get_str("upload_time", default="1h") or "1h"
+    field_name = ps_get_str("upload_field", default="fileToUpload") or "fileToUpload"
+    reqtype = ps_get_str("upload_reqtype", default="fileupload") or "fileupload"
 
     suffix = _mime_to_suffix(payload_mime)
     filename = f"audio_file{suffix}"

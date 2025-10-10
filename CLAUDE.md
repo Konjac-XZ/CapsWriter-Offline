@@ -1,172 +1,111 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) when working inside this fork of CapsWriter-Offline.
 
 ## Project Overview
 
-**Important**: This is a personal fork that has undergone sweeping architectural changes from the original CapsWriter-Offline project. While the original was a complete offline server-client speech recognition system, this fork has evolved into a **cloud-based transcription client** that connects directly to proprietary cloud models.
+**Important:** This repository has been slimmed down to a **client-only, cloud-backed transcription tool**. The upstream self-hosted server, translation flows, and hotword system were removed. The remaining code captures audio on Windows, forwards it to remote transcription providers (OpenAI-compatible), and types the results back into the OS.
 
-### Current Architecture (Personal Fork)
-- **Client-only system**: No local server required
-- **Cloud transcription**: Connects directly to proprietary cloud models via various APIs
-- **Simplified feature set**: Focused on core speech-to-text functionality
-- **Legacy code**: Much of the visible codebase is unused/legacy from the original offline implementation
+### Current Architecture
+- **Client only:** No Python server, WebSocket bridge, or local ASR models remain.
+- **Cloud transcription:** Providers are defined under `config/providers/*.yaml` and accessed through OpenAI-style HTTP APIs.
+- **Focused features:** Recording, cloud clipboard sharing, markdown journaling, and provider switching.
+- **Minimal docs:** Historical documentation (e.g. `readme.md`) was deleted; this file is the active orientation guide.
 
-### What's Actually Used
-- **Client GUI** (`start_client_gui.py`): Main application interface
-- **Provider System**: Dynamic switching between cloud transcription services
-- **Configuration**: Provider management and API credentials
-- **Audio Input**: Microphone capture and keyboard shortcuts (CapsLock)
+### Active Components
+- `start_client_gui.py` / `start_client_gui.exe` – main Qt GUI.
+- `core_client.py` – CLI client that shares the same pipeline; preferred for debugging.
+- `util/client_*`, `util/openai_transcribe_*`, `util/transcribe_provider.py` – audio capture, payload building, provider dispatch, output typing.
+- Provider system (`config/providers/*.yaml`, `util/provider_config.py`, `provider_switch.py`).
+- `config.toml` (client section) – hotkeys, audio saving, clipboard behaviour, etc. The server section is vestigial and slated for removal.
+- `edit_config_gui.py` – GUI wrapper around provider/model settings. The old client configuration page was deleted; tweak client defaults directly in `config.toml` for now.
 
-### What's Legacy/Unused
-- **Server components** (`core_server.py`, `start_server_gui.py`): Original offline LLM server (not used)
-- **Local AI models** (models/ directory): Offline speech recognition models (not used)  
-- **Translation features**: Simultaneous translation functionality (dropped)
-- **WebSocket communication**: Original server-client communication (not used)
-- **Most util/ modules**: Many utilities for offline processing (not used)
+### Removed / Legacy Items
+- `core_server.py`, `start_server_gui.py`, and all `util/server_*` helpers – deleted.
+- Translation and hotword modules, shortcuts, configuration toggles, and text assets – deleted.
+- Extra requirement files (`requirements-editconfiggui.txt`, `requirements-server.txt`) – deleted.
+- Historical docs, screenshots, and README – deleted.
+- Leftover binaries such as `start_server_gui.exe` still exist but are not part of the supported workflow.
 
-## Active Components
+## Core Functionality
 
-### Core Functionality
-- **Cloud Transcription**: Direct API calls to proprietary cloud models (OpenAI-compatible, Replicate, ElevenLabs, Soniox)
-- **Provider Management**: Dynamic switching between transcription services without .env editing
-- **Audio Input**: Microphone capture triggered by CapsLock keyboard shortcut
-- **Text Output**: Real-time transcription results displayed in GUI and auto-typed
-
-### Configuration System
-- **Provider Configs**: `config/providers/*.yaml` - Individual cloud service configurations
-- **Dynamic Switching**: GUI-based and CLI provider management
-- **API Credentials**: Secure storage of API keys and endpoints per provider
-
-## Development Commands
-
-### Running the Application
-```bash
-# Main client application (only component actually used)
-python start_client_gui.py
-
-# Configuration GUI for provider management
-python edit_config_gui.py
-```
-
-### Legacy Commands (Not Used)
-```bash
-# These are from the original offline system - not used in current fork:
-# .\runtime\python.exe .\core_server.py      # Original offline server
-# .\runtime\python.exe .\core_client.py      # Original terminal client  
-# python start_server_gui.py                 # Original server GUI
-```
-
-### Testing
-Test the current cloud-based functionality:
-- Use CapsLock key for voice input testing with active cloud provider
-- Use GUI provider switcher to test different transcription services
-- Test audio file transcription (if still functional in current fork)
-
-### Legacy Testing (Not Applicable)
-```bash
-# These were for the original offline system:
-# - Drag audio/video files to client GUI for transcription testing
-# - Use Shift+CapsLock combinations for translation testing (dropped feature)
-```
-
-### Provider Management
-```bash
-# List all available transcription providers
-python provider_switch.py --list
-
-# Switch to a specific provider
-python provider_switch.py --switch qianduoduo
-
-# Show current active provider
-python provider_switch.py --current
-
-# Reload provider configurations
-python provider_switch.py --reload
-```
-
-### Dependencies
-Active dependencies (for current cloud-based fork):
-- `requirements-client.txt` - Client GUI and cloud API dependencies
-- `requirements-editconfiggui.txt` - Configuration GUI dependencies
-
-Legacy dependencies (not used):
-- `requirements-server.txt` - Original offline server dependencies (not used)
+- **Audio capture:** Global hotkeys (CapsLock by default) trigger recordings via `util/client_shortcut_handler.py`. Drag-and-drop in the GUI or passing a file to `core_client.py` uploads audio files instead of live mic input.
+- **Cloud transcription:** Audio is converted with `util/openai_transcribe_audio.py` and submitted through `util/transcribe_provider.py`, which routes to OpenAI-compatible, Replicate, ElevenLabs, Soniox, or Alibaba Cloud endpoints depending on the active provider.
+- **Text output:** Streaming updates appear in-console/GUI; final results are spaced with `pangu`, optional simplified↔traditional conversion happens in `util/client_recv_result.py`, and clipboard/cloud clipboard helpers live under `util/cloud_clipboard*.py`.
+- **Logging:** Optional audio file persistence and markdown journaling (`util/client_write_md.py`) remain available, though keyword diary logic was removed with hotwords.
 
 ## Configuration System
 
-### Active Configuration
-- **Provider Configs**: `config/providers/*.yaml` - Cloud service API credentials and settings
-- **Provider Management**: `util/provider_config.py` - Handles dynamic provider switching
-- **Environment Variables**: Automatically set by provider manager when switching
+- **Provider configs:** YAML files under `config/providers/` define API metadata, prompts, base URLs, and defaults per provider.
+- **Provider manager:** `util/provider_config.py` rewrites a `.provider_state.json` cache and sets environment variables so the client picks up the selected backend.
+- **`config.toml`:** Still supplies client UX defaults. Server keys are legacy; avoid touching them unless you are finishing their removal.
+- **Config editor:** `edit_config_gui.py` now presents provider/model pages only. Client settings must be edited manually until the editor is rebuilt.
 
-### Legacy Configuration (Mostly Unused)
-- `config.toml` - Original comprehensive configuration (most sections not used)
-- Configuration classes in `util/config.py` - Original server/client settings (mostly unused)
+### Provider YAML Snapshot
 
-## Important File Structure
+```yaml
+name: "Provider Name"
+type: openai | replicate | elevenlabs | soniox | alibaba
+description: "Human-readable summary"
+settings:
+  api_key: "${ENV_VAR_OR_PLACEHOLDER}"
+  base_url: "https://api.example.com"
+  model: "gpt-4o-transcribe"
+  prompt: |
+    Optional multi-line system prompt
+enabled: true
+```
 
-### Active Files (Actually Used)
-- `start_client_gui.py` - Main application entry point
-- `config/providers/*.yaml` - Cloud service configurations  
-- `util/provider_config.py` - Provider management system
-- `util/transcribe_provider.py` - Cloud API integration
-- `util/edit_config_gui/provider_config_page.py` - Provider GUI
-- `provider_switch.py` - CLI provider management tool
+YAML values may reference environment variables (`${VAR}`) so secrets can stay outside the repo.
 
-### Legacy Files (Large Codebase, Mostly Unused)
-- `core_server.py`, `start_server_gui.py` - Original offline server
-- `core_client.py` - Original terminal client
-- `models/` - Original offline AI models directory
-- `util/server_*` - Server-side utilities (not used)
-- `util/client_translate_*` - Translation features (dropped)
-- Most other `util/` modules - Original offline functionality
+## Running & Testing
+
+```bash
+# GUI client (uses current Python env)
+python start_client_gui.py
+
+# CLI client for development/testing (same cloud pipeline)
+python core_client.py [optional-media-file]
+
+# Provider/config editor (provider + model pages)
+python edit_config_gui.py
+```
+
+Smoke-test checklist:
+- Ensure `OPENAI_API_KEY` (or provider-specific env vars) is set; provider manager can stub demo keys for local tinkering.
+- Tap CapsLock (or your configured shortcut) to verify streaming transcription end-to-end.
+- Drag an audio file onto the GUI or pass a file to `core_client.py` to exercise batch uploads.
+- Use both the GUI provider page and `provider_switch.py` to confirm provider switching and prompt overrides.
+
+### Provider Management CLI
+
+```bash
+# List configured providers
+python provider_switch.py --list
+
+# Switch active provider (updates env + cache)
+python provider_switch.py --switch qianduoduo
+
+# Show current provider
+python provider_switch.py --current
+
+# Reload YAML after manual edits
+python provider_switch.py --reload
+```
+
+## Dependencies
+
+- Install development dependencies with `python -m pip install -r requirements-client.txt`.
+- Packaged builds rely on the bundled `runtime/` folder, but standard development uses the local interpreter.
+- No additional requirement files remain for the (now deleted) server or config editor variants.
 
 ## Development Notes
 
-### Current Architecture Focus
-- **Cloud-first**: All transcription happens via external APIs
-- **Simplified**: Core functionality is voice input → cloud API → text output
-- **Provider-agnostic**: Can switch between different cloud services dynamically
-- **Personal use**: Heavily customized fork for single-user scenarios
+- **Cloud-first pipeline:** Everything ultimately runs through `transcribe_audio` or provider-specific HTTP helpers. When debugging transcription issues, start there.
+- **No translation/hotword hooks:** Ensure new features do not resurrect the removed shortcuts or config keys unless explicitly requested.
+- **Focus areas:** Client UX (GUI + CLI), provider management, and progressive cleanup of leftover server-era config.
+- **Backwards compatibility:** Some files (e.g., binaries in the root, `runtime/`, `site-packages/`) remain for packaging; remove them only with deliberate migration steps.
 
-### Legacy Code Considerations
-- **Large unused codebase**: Much of the visible code is from the original offline system
-- **Don't be confused**: Server components, model files, and many utilities are not used
-- **Focus on active files**: When making changes, focus on the "Active Files" listed above
-- **Backwards compatibility**: Some legacy code remains to avoid breaking imports
+---
 
-## Dynamic Provider System
-
-### Provider Configuration
-The system now supports dynamic switching between transcription providers without modifying .env files:
-
-- **Provider Configs**: `config/providers/*.yaml` - Individual provider configurations
-- **Provider Manager**: `util/provider_config.py` - Handles provider switching and environment setup
-- **GUI Integration**: Added to `edit_config_gui.py` for easy provider switching
-- **CLI Tool**: `provider_switch.py` for command-line provider management
-
-### Supported Providers
-- **OpenAI-compatible**: QianDuoDuo, Local New-API, Haomiao, Azapi
-- **Replicate**: Replicate AI transcription service
-- **ElevenLabs**: ElevenLabs speech-to-text API
-- **Soniox**: Soniox speech recognition API
-
-### Provider YAML Structure
-```yaml
-name: "Provider Name"
-type: "openai|replicate|elevenlabs|soniox"
-description: "Provider description"
-settings:
-  api_key: "your-api-key"
-  base_url: "https://api.example.com"
-  # provider-specific settings...
-enabled: true|false
-```
-
-### Usage
-1. Use GUI config editor to switch providers visually
-2. Use CLI tool for scripting and automation
-3. Providers automatically set environment variables on switch
-4. Original .env fallback maintained for compatibility
-- Do not attempt to run this program—you will run into dependency issues and won’t see anything worthwhile.
+- Do not try to revive or run the deleted server stack; it no longer has supporting modules or dependencies.
