@@ -5,6 +5,7 @@ Tests OpenAI-compatible providers by sending a test audio file and checking for 
 
 import asyncio
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any, Callable
 from dataclasses import dataclass
@@ -34,6 +35,32 @@ class ProviderAvailabilityTester:
         self.test_audio_data: Optional[bytes] = None
         self.progress_callback = progress_callback
         self.load_test_audio()
+
+    @contextmanager
+    def _activate_provider(self, provider_id: str):
+        """Temporarily mark a provider as active so shared helpers read its settings."""
+        # provider_manager is always available via import, but guard for completeness
+        manager = provider_manager
+        if manager is None:
+            yield
+            return
+
+        original_active = getattr(manager, "active_provider", None)
+        original_enabled = {pid: prov.enabled for pid, prov in manager.providers.items()}
+
+        target = manager.providers.get(provider_id)
+        if target is not None:
+            target.enabled = True
+            manager.active_provider = provider_id
+
+        try:
+            yield
+        finally:
+            manager.active_provider = original_active
+            for pid, state in original_enabled.items():
+                prov = manager.providers.get(pid)
+                if prov is not None:
+                    prov.enabled = state
 
     def _log_progress(self, message: str):
         """Send progress updates via callback if available."""
@@ -93,43 +120,43 @@ class ProviderAvailabilityTester:
         start_time = time.time()
 
         try:
-            # Set environment variables for this provider
-            os.environ["TRANSCRIBE_PROVIDER"] = provider.type
-            os.environ["OPENAI_API_KEY"] = provider.settings.get("api_key", "")
-            os.environ["OPENAI_BASE_URL"] = provider.settings.get("base_url", "")
-            os.environ["TRANSCRIBE_MODEL"] = provider.settings.get("model", "")
-            os.environ["TRANSCRIBE_TEMPERATURE"] = str(provider.settings.get("temperature", 0.2))
-            os.environ["OPENAI_TRANSCRIBE_STREAM"] = str(provider.settings.get("stream", False))
-            os.environ["OPENAI_TRANSCRIBE_LANGUAGE"] = provider.settings.get("language", "zh")
-            os.environ["OPENAI_TRANSCRIBE_FORMAT"] = provider.settings.get("response_format", "text")
-            # Enforce a strict per-request timeout for availability tests
-            os.environ["OPENAI_HTTP_TIMEOUT"] = "10"
+            with self._activate_provider(provider_id):
+                # Set environment variables for this provider
+                os.environ["TRANSCRIBE_PROVIDER"] = provider.type
+                os.environ["OPENAI_API_KEY"] = provider.settings.get("api_key", "")
+                os.environ["OPENAI_BASE_URL"] = provider.settings.get("base_url", "")
+                os.environ["TRANSCRIBE_MODEL"] = provider.settings.get("model", "")
+                os.environ["TRANSCRIBE_TEMPERATURE"] = str(provider.settings.get("temperature", 0.2))
+                os.environ["OPENAI_TRANSCRIBE_STREAM"] = str(provider.settings.get("stream", False))
+                os.environ["OPENAI_TRANSCRIBE_LANGUAGE"] = provider.settings.get("language", "zh")
+                os.environ["OPENAI_TRANSCRIBE_FORMAT"] = provider.settings.get("response_format", "text")
+                # Enforce a strict per-request timeout for availability tests
+                os.environ["OPENAI_HTTP_TIMEOUT"] = "10"
 
-            # Force-recreate persistent HTTP client so new timeout applies
-            try:
-                from util.openai_transcribe_http import close_http_client
-                import asyncio as _asyncio
-                # If there's an existing client, close it before the request
-                await close_http_client(reason="availability-test-prepare")
-            except Exception:
-                pass
+                # Force-recreate persistent HTTP client so new timeout applies
+                try:
+                    from util.openai_transcribe_http import close_http_client
+                    # If there's an existing client, close it before the request
+                    await close_http_client(reason="availability-test-prepare")
+                except Exception:
+                    pass
 
-            # Determine MIME type based on file extension
-            mime_type = "audio/mpeg" if self.test_audio_path.suffix.lower() == ".mp3" else "audio/wav"
+                # Determine MIME type based on file extension
+                mime_type = "audio/mpeg" if self.test_audio_path.suffix.lower() == ".mp3" else "audio/wav"
 
-            # Call the transcription function with timeout
-            text_result, status_code, t_submit, t_complete, transport_info = await asyncio.wait_for(
-                transcribe_audio(
-                    payload_buf=self.test_audio_data,
-                    payload_mime=mime_type,
-                    task_id=f"test_{provider_id}_{int(time.time())}",
-                    time_start=start_time,
-                    record_stop=start_time + 0.1,  # Dummy record stop time
-                    max_retries=1,  # Only one retry for testing
-                    base_delay=0.2
-                ),
-                timeout=10.0  # Hard cap including networking and parsing
-            )
+                # Call the transcription function with timeout
+                text_result, status_code, t_submit, t_complete, transport_info = await asyncio.wait_for(
+                    transcribe_audio(
+                        payload_buf=self.test_audio_data,
+                        payload_mime=mime_type,
+                        task_id=f"test_{provider_id}_{int(time.time())}",
+                        time_start=start_time,
+                        record_stop=start_time + 0.1,  # Dummy record stop time
+                        max_retries=1,  # Only one retry for testing
+                        base_delay=0.2
+                    ),
+                    timeout=10.0  # Hard cap including networking and parsing
+                )
 
             end_time = time.time()
             response_time_ms = int((end_time - start_time) * 1000)
