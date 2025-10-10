@@ -263,7 +263,7 @@ async def nonstream_transcribe(
     if resp.status_code >= 500 or resp.status_code in (408, 429):
         return "", status_code, t_complete, resp.text
     if resp.status_code >= 400:
-        console.print(f"服务响应错误：{resp.status_code} {resp.text}", style="bright_red")
+        console.print(f"OpenAI 服务响应错误：{resp.status_code} {resp.text}", style="bright_red")
         return "", status_code, t_complete, None
     text_result = resp.text
     if len(text_result) >= 2 and text_result.startswith("\"") and text_result.endswith("\""):

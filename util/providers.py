@@ -127,6 +127,36 @@ class ReplicateProvider(TranscriptionProvider):
         return text_result, status_code, t_submit, t_complete, {"http2": False}
 
 
+class ElevenLabsProvider(TranscriptionProvider):
+    def name(self) -> str:
+        return "elevenlabs"
+
+    async def transcribe(
+        self,
+        payload_buf: io.BytesIO,
+        payload_mime: str,
+        task_id: str,
+        time_start: float,
+        record_stop: float,
+        max_retries: int,
+        base_delay: float,
+    ) -> Tuple[str, int, float, float, Dict[str, Any]]:
+        from util.elevenlabs_transcribe_http import (
+            transcribe_with_retries as elevenlabs_transcribe,
+        )
+
+        text_result, status_code, t_submit, t_complete, http2_flag = await elevenlabs_transcribe(
+            payload_buf,
+            payload_mime,
+            task_id,
+            time_start,
+            record_stop,
+            max_retries,
+            base_delay,
+        )
+        return text_result, status_code, t_submit, t_complete, {"http2": http2_flag}
+
+
 class DashScopeProvider(TranscriptionProvider):
     def name(self) -> str:
         return "dashscope"
@@ -193,6 +223,8 @@ def make_provider(kind: str) -> TranscriptionProvider:
         return OpenAIProvider()
     if kind == "replicate":
         return ReplicateProvider()
+    if kind in ("elevenlabs", "eleven-labs", "xi"):
+        return ElevenLabsProvider()
     if kind in ("dashscope", "alibabacloud"):
         return DashScopeProvider()
     if kind in ("soniox", "soniox-rest", "soniox_http"):

@@ -75,7 +75,16 @@ async def transcribe_audio(
     if not provider:
         # Back-compat fallback
         provider = os.getenv("TRANSCRIBE_PROVIDER", "openai").strip().lower()
-    if provider in ("openai", "replicate", "dashscope", "alibabacloud", "soniox", "soniox-rest", "soniox_http"):
+    if provider in (
+        "openai",
+        "replicate",
+        "elevenlabs",
+        "dashscope",
+        "alibabacloud",
+        "soniox",
+        "soniox-rest",
+        "soniox_http",
+    ):
         prov = make_provider(provider)
         return await prov.transcribe(
             payload_buf, payload_mime, task_id, time_start, record_stop, max_retries, base_delay

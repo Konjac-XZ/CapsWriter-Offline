@@ -1,7 +1,6 @@
 import atexit
 import io
 import json
-import os
 import random
 import time
 from typing import Tuple
@@ -9,6 +8,12 @@ from typing import Tuple
 import httpx
 
 from util.client_cosmic import console
+from util.provider_settings import (
+    get_bool as ps_get_bool,
+    get_float as ps_get_float,
+    get_int as ps_get_int,
+    get_str as ps_get_str,
+)
 
 
 _HTTP_CLIENT: httpx.AsyncClient | None = None
@@ -16,73 +21,57 @@ _HTTP2_ENABLED: bool = False
 
 
 def get_api_base() -> str:
-    return os.getenv("ELEVENLABS_BASE_URL", "https://api.elevenlabs.io").rstrip("/")
+    base = ps_get_str("base_url", default="https://api.elevenlabs.io") or "https://api.elevenlabs.io"
+    return base.rstrip("/")
 
 
 def get_api_key() -> str:
-    api_key = os.getenv("ELEVENLABS_API_KEY")
+    api_key = ps_get_str("api_key", default=None)
+    console.print(f"ElevenLabs API Key: {api_key}")
     if not api_key:
-        raise RuntimeError("ELEVENLABS_API_KEY environment variable is required for provider=elevenlabs")
+        raise RuntimeError("ElevenLabs API key must be set in config/providers/elevenlabs.yaml")
     return api_key
 
 
 def get_model() -> str:
-    # Allow override; default to scribe_v1 per docs
-    model = os.getenv("ELEVENLABS_STT_MODEL")
-    if model and model.strip():
-        return model.strip()
-    # Fallback: if TRANSCRIBE_MODEL looks like an ElevenLabs STT model, use it; else default
-    fallback = os.getenv("TRANSCRIBE_MODEL", "").strip()
-    if fallback.lower().startswith("scribe"):
-        return fallback
+    model = ps_get_str("model", default=None)
+    if model:
+        return model
     return "scribe_v1"
 
 
 def get_language_code() -> str | None:
-    # Prefer ELEVENLABS_LANGUAGE_CODE, else reuse OPENAI_TRANSCRIBE_LANGUAGE
-    lang = os.getenv("ELEVENLABS_LANGUAGE_CODE")
-    if lang and lang.strip():
-        return lang.strip()
-    lang = os.getenv("OPENAI_TRANSCRIBE_LANGUAGE")
-    if lang and lang.strip():
-        return lang.strip()
-    return None
+    return ps_get_str("language_code", default=None)
 
 
 def get_diarize() -> bool:
-    return os.getenv("ELEVENLABS_DIARIZE", "0").strip() not in ("0", "false", "False")
+    return ps_get_bool("diarize", default=False)
 
 
 def get_tag_audio_events() -> bool:
-    return os.getenv("ELEVENLABS_TAG_AUDIO_EVENTS", "1").strip() not in ("0", "false", "False")
+    return ps_get_bool("tag_audio_events", default=True)
 
 
 def get_num_speakers() -> int | None:
-    raw = os.getenv("ELEVENLABS_NUM_SPEAKERS")
-    if not raw:
+    raw = ps_get_int("num_speakers", default=None)
+    if raw is None:
         return None
     try:
-        v = int(raw)
-        if v >= 1:
-            return v
+        if raw >= 1:
+            return int(raw)
     except Exception:
-        pass
+        return None
     return None
 
 
 def get_temperature() -> float | None:
-    # Keep provider-agnostic env support
-    raw = os.getenv("TRANSCRIBE_TEMPERATURE")
-    if raw is None or raw.strip() == "":
-        return None
-    try:
-        return float(raw)
-    except Exception:
-        return None
+    return ps_get_float("temperature", default=None)
 
 
 def build_limits() -> httpx.Limits:
-    keepalive_expiry = float(os.getenv("ELEVENLABS_KEEPALIVE_EXPIRY", "90"))
+    keepalive_expiry = ps_get_float("keepalive_expiry", default=90.0)
+    if not keepalive_expiry or keepalive_expiry <= 0:
+        keepalive_expiry = 90.0
     return httpx.Limits(
         max_keepalive_connections=5,
         max_connections=10,
@@ -112,7 +101,7 @@ async def get_http_client() -> httpx.AsyncClient:
     global _HTTP_CLIENT, _HTTP2_ENABLED
     if _HTTP_CLIENT is not None:
         return _HTTP_CLIENT
-    http2 = os.getenv("ELEVENLABS_HTTP2", "1").strip() not in ("0", "false", "False")
+    http2 = ps_get_bool("http2", default=True)
     _HTTP2_ENABLED = http2
     _HTTP_CLIENT = httpx.AsyncClient(
         timeout=httpx.Timeout(120.0),
