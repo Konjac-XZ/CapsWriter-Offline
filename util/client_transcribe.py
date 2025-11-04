@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 import httpx
+from util.response_parse import extract_text_from_body
 from util.client_cosmic import Cosmic, console
 from util.provider_config import provider_manager
 
@@ -63,13 +64,23 @@ async def transcribe_send(file: Path):
         # 不要手动设置 Content-Type，httpx 会自动处理 multipart 边界
     }
 
+    # Respect active OpenAI provider's omit_response_format flag if available
+    omit_rf = False
+    try:
+        active = provider_manager.get_active_provider()
+        if active and isinstance(active.settings, dict):
+            omit_rf = bool(active.settings.get("openai_omit_response_format", False))
+    except Exception:
+        omit_rf = False
+
     data = {
         "model": model,
         # Get prompt from provider configuration
         "prompt": provider_manager.get_provider_prompt(),
-        "response_format": os.getenv("OPENAI_TRANSCRIBE_FORMAT", "text"),
         "language": os.getenv("OPENAI_TRANSCRIBE_LANGUAGE", "zh"),
     }
+    if not omit_rf:
+        data["response_format"] = os.getenv("OPENAI_TRANSCRIBE_FORMAT", "text")
 
     mime = _get_mime_type(file)
     time_start = time.time()
@@ -90,7 +101,14 @@ async def transcribe_send(file: Path):
             }
             return
 
-        text_result = resp.text
+        # 解析正文：支持纯文本、JSON 对象、或带标签的 JSON 行（如 “识别结果：{...}”）
+        body = resp.text
+        parsed = None
+        try:
+            parsed = extract_text_from_body(body)
+        except Exception:
+            parsed = None
+        text_result = parsed if isinstance(parsed, str) and parsed.strip() != "" else body
         # 某些服务会返回带引号的纯文本，尽量去除首尾引号（若存在）
         if (
             len(text_result) >= 2

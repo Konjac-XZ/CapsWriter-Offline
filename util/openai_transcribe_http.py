@@ -7,6 +7,7 @@ import time
 from typing import Tuple
 
 import httpx
+from util.response_parse import extract_text_from_body, extract_json_from_labeled_line
 
 from util.client_cosmic import Cosmic, console
 from util.provider_settings import (
@@ -218,6 +219,7 @@ async def sse_transcribe(
                 break
             new_text = None
             try:
+                # First try strict JSON
                 obj = json.loads(s)
                 if isinstance(obj, dict):
                     if "delta" in obj and isinstance(obj["delta"], str):
@@ -238,8 +240,36 @@ async def sse_transcribe(
                     current_text = obj
                     new_text = current_text
             except Exception:
-                current_text += s
-                new_text = current_text
+                # Try to handle lines like: "识别结果：{...json...}"
+                try:
+                    obj2 = extract_json_from_labeled_line(s)
+                except Exception:
+                    obj2 = None
+                if isinstance(obj2, dict):
+                    if "delta" in obj2 and isinstance(obj2["delta"], str):
+                        current_text += obj2["delta"]
+                        new_text = current_text
+                    elif "text" in obj2 and isinstance(obj2["text"], str):
+                        current_text = obj2["text"]
+                        new_text = current_text
+                    else:
+                        # Fallback to best-effort body parsing
+                        txt = extract_text_from_body(s)
+                        if isinstance(txt, str) and txt:
+                            current_text = txt
+                            new_text = current_text
+                        else:
+                            current_text += s
+                            new_text = current_text
+                else:
+                    # Fallback to best-effort body parsing
+                    txt = extract_text_from_body(s)
+                    if isinstance(txt, str) and txt:
+                        current_text = txt
+                        new_text = current_text
+                    else:
+                        current_text += s
+                        new_text = current_text
 
             now = time.time()
             if new_text is not None and (now - last_emit >= 0.05) and len(new_text) > 0:
@@ -265,7 +295,15 @@ async def nonstream_transcribe(
     if resp.status_code >= 400:
         console.print(f"OpenAI 服务响应错误：{resp.status_code} {resp.text}", style="bright_red")
         return "", status_code, t_complete, None
-    text_result = resp.text
+    # Parse plain-text, JSON, or labeled JSON bodies to extract transcript text
+    body = resp.text
+    parsed = None
+    try:
+        parsed = extract_text_from_body(body)
+    except Exception:
+        parsed = None
+    text_result = parsed if isinstance(parsed, str) and parsed.strip() != "" else body
+    # Some providers return quoted plain text (e.g., "你好")
     if len(text_result) >= 2 and text_result.startswith("\"") and text_result.endswith("\""):
         text_result = text_result[1:-1]
     return text_result, status_code, t_complete, None

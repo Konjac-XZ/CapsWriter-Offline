@@ -129,7 +129,12 @@ class ProviderAvailabilityTester:
                 os.environ["TRANSCRIBE_TEMPERATURE"] = str(provider.settings.get("temperature", 0.2))
                 os.environ["OPENAI_TRANSCRIBE_STREAM"] = str(provider.settings.get("stream", False))
                 os.environ["OPENAI_TRANSCRIBE_LANGUAGE"] = provider.settings.get("language", "zh")
-                os.environ["OPENAI_TRANSCRIBE_FORMAT"] = provider.settings.get("response_format", "text")
+                # Respect OpenAI-only flag to omit response_format
+                if not bool(provider.settings.get("openai_omit_response_format", False)):
+                    os.environ["OPENAI_TRANSCRIBE_FORMAT"] = provider.settings.get("response_format", "text")
+                else:
+                    if "OPENAI_TRANSCRIBE_FORMAT" in os.environ:
+                        del os.environ["OPENAI_TRANSCRIBE_FORMAT"]
                 # Enforce a strict per-request timeout for availability tests
                 os.environ["OPENAI_HTTP_TIMEOUT"] = "10"
 

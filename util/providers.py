@@ -6,6 +6,7 @@ from typing import Any, Dict, Tuple
 
 from util.provider_settings import (
     get_str as ps_get_str,
+    get_bool as ps_get_bool,
 )
 
 
@@ -56,13 +57,17 @@ class OpenAIProvider(TranscriptionProvider):
 
         api_base = get_api_base()
         url = f"{api_base}/v1/audio/transcriptions"
+        # Build base form fields; allow providers to omit response_format if upstream adds it automatically
         data_form_base = {
             "model": _get_model(),
             "prompt": _get_prompt(),
-            "response_format": ps_get_str("response_format", env="OPENAI_TRANSCRIBE_FORMAT", default="text")
-            or "text",
             "language": _get_language(),
         }
+        # Only include response_format if not explicitly omitted by provider configuration
+        if not ps_get_bool("openai_omit_response_format", default=False):
+            data_form_base["response_format"] = (
+                ps_get_str("response_format", env="OPENAI_TRANSCRIBE_FORMAT", default="text") or "text"
+            )
         _temp = _get_temperature()
         if _temp is not None:
             data_form_base["temperature"] = _temp
