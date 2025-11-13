@@ -173,7 +173,7 @@ def get_stream_enabled() -> bool:
 
 
 def get_enable_itn() -> bool:
-    return ps_get_bool("enable_itn", env="DASHSCOPE_ENABLE_ITN", default=False)
+    return True  # ITN enabled by default
 
 
 def get_enable_lid() -> bool:
