@@ -2,10 +2,7 @@ import io
 import os
 import time
 import random
-import json
 from typing import Tuple
-
-import httpx
 
 from util.client_cosmic import console
 from util.openai_transcribe_http import emit_partial_update
@@ -37,6 +34,16 @@ def _ensure_token():
 
 def _replicate_debug() -> bool:
     return ps_get_bool("debug", default=True)
+
+
+def _log_stage_elapsed(stage: str, elapsed: float, attempt: int | None = None) -> None:
+    """Emit a timing log for a given stage when debug logging is enabled."""
+    if not _replicate_debug():
+        return
+    prefix = "[Replicate Debug]"
+    if attempt is not None:
+        prefix += f" [attempt {attempt}]"
+    console.print(f"{prefix} {stage} took {elapsed:.3f}s", style="dim")
 
 
 def _log_send_info(model: str, input_key: str, audio_input, payload_mime: str | None = None):
@@ -87,80 +94,49 @@ def _mime_to_suffix(payload_mime: str) -> str:
     return ".wav"
 
 
-async def _upload_file_to_host(payload_buf: io.BytesIO, payload_mime: str) -> str:
-    """Upload audio to the configured third-party host and return a public URL."""
-    upload_url = ps_get_str(
-        "upload_url",
-        default="https://litterbox.catbox.moe/resources/internals/api.php",
-    ) or "https://litterbox.catbox.moe/resources/internals/api.php"
-    time_param = ps_get_str("upload_time", default="1h") or "1h"
-    field_name = ps_get_str("upload_field", default="fileToUpload") or "fileToUpload"
-    reqtype = ps_get_str("upload_reqtype", default="fileupload") or "fileupload"
-
-    suffix = _mime_to_suffix(payload_mime)
-    filename = f"audio_file{suffix}"
-
+def _payload_bytes(payload_buf: io.BytesIO) -> bytes:
+    """Extract raw bytes from the provided buffer, rewinding if possible."""
     try:
         payload_buf.seek(0)
     except Exception:
         pass
-
     try:
         data = payload_buf.getvalue()
     except Exception:
         data = payload_buf.read()
     if not data:
         raise ValueError("Audio buffer is empty (0 bytes)")
+    return data
 
-    files = {
-        field_name: (filename, data, "application/octet-stream"),
-    }
-    form = {
-        "reqtype": reqtype,
-        "time": time_param,
-    }
 
-    if _replicate_debug():
-        console.print(
-            f"[Upload Debug] -> {upload_url} filename={filename} bytes={len(data)} field={field_name} time={time_param}",
-            style="dim",
-        )
-
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(upload_url, data=form, files=files)
-        if resp.status_code >= 400:
-            raise Exception(f"Third-party upload failed: {resp.status_code} {resp.text}")
-        url = resp.text.strip()
-        if not url.startswith("http"):
-            # Some hosts may return plain path; try to parse JSON or fail loudly
-            try:
-                obj = resp.json()
-                url = obj.get("url") or obj.get("urls", {}).get("get") or url
-            except Exception:
-                pass
-        if _replicate_debug():
-            console.print(f"[Upload Debug] <- {url}", style="dim")
-        if not url.startswith("http"):
-            raise Exception(f"Unexpected upload response: {resp.text}")
-        return url
+def _make_audio_input(payload_bytes: bytes, payload_mime: str) -> io.BytesIO:
+    """Create a BytesIO file-like object suited for Replicate uploads."""
+    suffix = _mime_to_suffix(payload_mime)
+    bio = io.BytesIO(payload_bytes)
+    bio.name = f"audio_file{suffix}"
+    return bio
 
 
 async def _streaming_run(
-    audio_url: str,
+    audio_input,
     language: str,
     task_id: str,
     time_start: float,
     record_stop: float,
     prompt: str | None = None,
     temperature: float | None = None,
+    attempt: int | None = None,
 ) -> Tuple[str, int, float, float]:
     import replicate
 
     model = _get_model()
     input_key = _get_input_key()
-    # Pass the uploaded URL to Replicate
-    _log_send_info(model, input_key, audio_url, None)
-    inputs = {"language": language, input_key: audio_url}
+    try:
+        audio_input.seek(0)
+    except Exception:
+        pass
+    _log_send_info(model, input_key, audio_input, None)
+    inputs = {"language": language, input_key: audio_input}
     if prompt:
         inputs["prompt"] = prompt
     if temperature is not None:
@@ -169,12 +145,16 @@ async def _streaming_run(
     t_submit = time.time()
     current = ""
     last_emit = 0.0
+    first_event_time = None
     try:
         for event in replicate.stream(model, input=inputs):
             # Each event renders to the next chunk of text
             chunk = str(event)
             if not chunk:
                 continue
+            if first_event_time is None:
+                first_event_time = time.time()
+                _log_stage_elapsed("upload stage (stream)", first_event_time - t_submit, attempt)
             current += chunk
             now = time.time()
             if now - last_emit >= 0.05:
@@ -185,41 +165,67 @@ async def _streaming_run(
         console.print(f"Replicate 流式转录异常：{e}", style="bright_yellow")
         # Treat as failure; caller may retry non-streaming
         t_complete = time.time()
+        if first_event_time is None:
+            first_event_time = t_complete
+            _log_stage_elapsed("upload stage (stream)", first_event_time - t_submit, attempt)
+        _log_stage_elapsed("recognition stage (stream)", t_complete - first_event_time, attempt)
         return current, 503, t_submit, t_complete
 
     t_complete = time.time()
+    if first_event_time is None:
+        first_event_time = t_complete
+        _log_stage_elapsed("upload stage (stream)", first_event_time - t_submit, attempt)
+    _log_stage_elapsed("recognition stage (stream)", t_complete - first_event_time, attempt)
     return current, 200, t_submit, t_complete
 
 
 async def _nonstream_run(
-    audio_url: str,
+    audio_input,
     language: str,
     prompt: str | None = None,
     temperature: float | None = None,
+    attempt: int | None = None,
 ) -> Tuple[str, int, float, float]:
     import replicate
 
     model = _get_model()
     input_key = _get_input_key()
-    _log_send_info(model, input_key, audio_url, None)
-    inputs = {"language": language, input_key: audio_url}
+    try:
+        audio_input.seek(0)
+    except Exception:
+        pass
+    _log_send_info(model, input_key, audio_input, None)
+    inputs = {"language": language, input_key: audio_input}
     if prompt:
         inputs["prompt"] = prompt
     if temperature is not None:
         inputs["temperature"] = float(temperature)
 
     t_submit = time.time()
+    current_chunks: list[str] = []
+    first_event_time = None
     try:
-        text = replicate.run(model, input=inputs)
+        for event in replicate.stream(model, input=inputs):
+            chunk = str(event)
+            if not chunk:
+                continue
+            if first_event_time is None:
+                first_event_time = time.time()
+                _log_stage_elapsed("upload stage (non-stream)", first_event_time - t_submit, attempt)
+            current_chunks.append(chunk)
         t_complete = time.time()
-        # replicate.run may return a list/iterator or dict depending on model; normalize to str
-        if isinstance(text, (list, tuple)):
-            text = "".join(str(x) for x in text)
-        elif not isinstance(text, str):
-            text = str(text)
+        if first_event_time is None:
+            first_event_time = t_complete
+            _log_stage_elapsed("upload stage (non-stream)", first_event_time - t_submit, attempt)
+        _log_stage_elapsed("recognition stage (non-stream)", t_complete - first_event_time, attempt)
+        text = "".join(current_chunks)
         return text, 200, t_submit, t_complete
     except Exception as e:
         t_complete = time.time()
+        if first_event_time is None:
+            first_event_time = t_complete
+            _log_stage_elapsed("upload stage (non-stream)", first_event_time - t_submit, attempt)
+        _log_stage_elapsed("recognition stage (non-stream)", t_complete - first_event_time, attempt)
         console.print(f"Replicate 非流式转录异常：{e}", style="bright_yellow")
         return "", 503, t_submit, t_complete
 
@@ -239,41 +245,34 @@ async def transcribe_with_retries(
 ) -> Tuple[str, int, float, float]:
     """Replicate retry wrapper. Tries streaming first if enabled, then falls back with backoff."""
     _ensure_token()
-
-    # Determine suffix for temp file upload
-    suffix = ".mp3" if payload_mime == "audio/mpeg" else ".wav"
+    payload_bytes = _payload_bytes(payload_buf)
 
     text_result = ""
     status_code = 0
     t_submit = time.time()
     t_complete = t_submit
 
-    # Upload audio once per attempt via third-party host
+    # Send audio directly to Replicate. Streaming is attempted once; fall back to sync with retries.
     for attempt in range(max_retries):
-        audio_url = None
         try:
-            audio_url = await _upload_file_to_host(payload_buf, payload_mime)
-        except Exception as e:
-            console.print(f"Replicate 文件上传失败（第 {attempt + 1}/{max_retries} 次）：{e}", style="bright_red")
-            if attempt + 1 >= max_retries:
-                break
-            delay = base_delay * (2 ** attempt) + random.uniform(0.0, 0.1)
-            import asyncio
-
-            await asyncio.sleep(delay)
-            continue
-
-        try:
-            # Pass the uploaded URL to the model
             if enable_stream_pref and attempt == 0:
+                stream_input = _make_audio_input(payload_bytes, payload_mime)
                 text_result, status_code, t_submit, t_complete = await _streaming_run(
-                    audio_url, language, task_id, time_start, record_stop, prompt, temperature
+                    stream_input,
+                    language,
+                    task_id,
+                    time_start,
+                    record_stop,
+                    prompt,
+                    temperature,
+                    attempt + 1,
                 )
                 if status_code == 200:
                     break
             # Non-streaming path or retry after streaming failure
+            run_input = _make_audio_input(payload_bytes, payload_mime)
             text_result, status_code, t_submit, t_complete = await _nonstream_run(
-                audio_url, language, prompt, temperature
+                run_input, language, prompt, temperature, attempt + 1
             )
             if status_code == 200:
                 break
