@@ -1,3 +1,4 @@
+import base64
 import io
 import os
 import time
@@ -36,14 +37,13 @@ def _replicate_debug() -> bool:
     return ps_get_bool("debug", default=True)
 
 
-def _log_stage_elapsed(stage: str, elapsed: float, attempt: int | None = None) -> None:
-    """Emit a timing log for a given stage when debug logging is enabled."""
-    if not _replicate_debug():
-        return
-    prefix = "[Replicate Debug]"
-    if attempt is not None:
-        prefix += f" [attempt {attempt}]"
-    console.print(f"{prefix} {stage} took {elapsed:.3f}s", style="dim")
+def _get_audio_transport_mode() -> str:
+    """Return preferred audio payload transport: 'file' or 'data_uri'."""
+    mode = ps_get_str("audio_transport", default="file") or "file"
+    mode = mode.strip().lower()
+    if mode not in {"file", "data_uri"}:
+        mode = "file"
+    return mode
 
 
 def _log_send_info(model: str, input_key: str, audio_input, payload_mime: str | None = None):
@@ -67,9 +67,13 @@ def _log_send_info(model: str, input_key: str, audio_input, payload_mime: str | 
         # If it's a path string, show existence and size
         try:
             if isinstance(audio_input, str):
-                info["path"] = audio_input
-                if os.path.exists(audio_input):
-                    info["size_bytes"] = os.path.getsize(audio_input)
+                if audio_input.startswith("data:"):
+                    info["path"] = "data-uri"
+                    info["data_uri_chars"] = len(audio_input)
+                else:
+                    info["path"] = audio_input
+                    if os.path.exists(audio_input):
+                        info["size_bytes"] = os.path.getsize(audio_input)
         except Exception:
             pass
         console.print("[Replicate Debug] Sending:", info, style="dim")
@@ -109,12 +113,19 @@ def _payload_bytes(payload_buf: io.BytesIO) -> bytes:
     return data
 
 
-def _make_audio_input(payload_bytes: bytes, payload_mime: str) -> io.BytesIO:
+def _make_audio_input_file(payload_bytes: bytes, payload_mime: str) -> io.BytesIO:
     """Create a BytesIO file-like object suited for Replicate uploads."""
     suffix = _mime_to_suffix(payload_mime)
     bio = io.BytesIO(payload_bytes)
     bio.name = f"audio_file{suffix}"
     return bio
+
+
+def _make_audio_input_data_uri(payload_bytes: bytes, payload_mime: str) -> str:
+    """Create a data URI string for Replicate uploads; best for small files."""
+    mime = payload_mime or "application/octet-stream"
+    encoded = base64.b64encode(payload_bytes).decode("ascii")
+    return f"data:{mime};base64,{encoded}"
 
 
 async def _streaming_run(
@@ -125,7 +136,6 @@ async def _streaming_run(
     record_stop: float,
     prompt: str | None = None,
     temperature: float | None = None,
-    attempt: int | None = None,
 ) -> Tuple[str, int, float, float]:
     import replicate
 
@@ -145,16 +155,12 @@ async def _streaming_run(
     t_submit = time.time()
     current = ""
     last_emit = 0.0
-    first_event_time = None
     try:
         for event in replicate.stream(model, input=inputs):
             # Each event renders to the next chunk of text
             chunk = str(event)
             if not chunk:
                 continue
-            if first_event_time is None:
-                first_event_time = time.time()
-                _log_stage_elapsed("upload stage (stream)", first_event_time - t_submit, attempt)
             current += chunk
             now = time.time()
             if now - last_emit >= 0.05:
@@ -165,17 +171,9 @@ async def _streaming_run(
         console.print(f"Replicate 流式转录异常：{e}", style="bright_yellow")
         # Treat as failure; caller may retry non-streaming
         t_complete = time.time()
-        if first_event_time is None:
-            first_event_time = t_complete
-            _log_stage_elapsed("upload stage (stream)", first_event_time - t_submit, attempt)
-        _log_stage_elapsed("recognition stage (stream)", t_complete - first_event_time, attempt)
         return current, 503, t_submit, t_complete
 
     t_complete = time.time()
-    if first_event_time is None:
-        first_event_time = t_complete
-        _log_stage_elapsed("upload stage (stream)", first_event_time - t_submit, attempt)
-    _log_stage_elapsed("recognition stage (stream)", t_complete - first_event_time, attempt)
     return current, 200, t_submit, t_complete
 
 
@@ -184,7 +182,6 @@ async def _nonstream_run(
     language: str,
     prompt: str | None = None,
     temperature: float | None = None,
-    attempt: int | None = None,
 ) -> Tuple[str, int, float, float]:
     import replicate
 
@@ -202,30 +199,17 @@ async def _nonstream_run(
         inputs["temperature"] = float(temperature)
 
     t_submit = time.time()
-    current_chunks: list[str] = []
-    first_event_time = None
     try:
-        for event in replicate.stream(model, input=inputs):
-            chunk = str(event)
-            if not chunk:
-                continue
-            if first_event_time is None:
-                first_event_time = time.time()
-                _log_stage_elapsed("upload stage (non-stream)", first_event_time - t_submit, attempt)
-            current_chunks.append(chunk)
+        text = replicate.run(model, input=inputs)
         t_complete = time.time()
-        if first_event_time is None:
-            first_event_time = t_complete
-            _log_stage_elapsed("upload stage (non-stream)", first_event_time - t_submit, attempt)
-        _log_stage_elapsed("recognition stage (non-stream)", t_complete - first_event_time, attempt)
-        text = "".join(current_chunks)
+        # replicate.run may return a list/iterator or dict depending on model; normalize to str
+        if isinstance(text, (list, tuple)):
+            text = "".join(str(x) for x in text)
+        elif not isinstance(text, str):
+            text = str(text)
         return text, 200, t_submit, t_complete
     except Exception as e:
         t_complete = time.time()
-        if first_event_time is None:
-            first_event_time = t_complete
-            _log_stage_elapsed("upload stage (non-stream)", first_event_time - t_submit, attempt)
-        _log_stage_elapsed("recognition stage (non-stream)", t_complete - first_event_time, attempt)
         console.print(f"Replicate 非流式转录异常：{e}", style="bright_yellow")
         return "", 503, t_submit, t_complete
 
@@ -252,11 +236,24 @@ async def transcribe_with_retries(
     t_submit = time.time()
     t_complete = t_submit
 
+    transport_mode = _get_audio_transport_mode()
+    if _replicate_debug():
+        console.print(f"[Replicate Debug] Using transport mode: {transport_mode}", style="dim")
+    data_uri_cache: str | None = None
+
+    def _build_audio_input():
+        nonlocal data_uri_cache
+        if transport_mode == "data_uri":
+            if data_uri_cache is None:
+                data_uri_cache = _make_audio_input_data_uri(payload_bytes, payload_mime)
+            return data_uri_cache
+        return _make_audio_input_file(payload_bytes, payload_mime)
+
     # Send audio directly to Replicate. Streaming is attempted once; fall back to sync with retries.
     for attempt in range(max_retries):
         try:
             if enable_stream_pref and attempt == 0:
-                stream_input = _make_audio_input(payload_bytes, payload_mime)
+                stream_input = _build_audio_input()
                 text_result, status_code, t_submit, t_complete = await _streaming_run(
                     stream_input,
                     language,
@@ -265,14 +262,13 @@ async def transcribe_with_retries(
                     record_stop,
                     prompt,
                     temperature,
-                    attempt + 1,
                 )
                 if status_code == 200:
                     break
             # Non-streaming path or retry after streaming failure
-            run_input = _make_audio_input(payload_bytes, payload_mime)
+            run_input = _build_audio_input()
             text_result, status_code, t_submit, t_complete = await _nonstream_run(
-                run_input, language, prompt, temperature, attempt + 1
+                run_input, language, prompt, temperature
             )
             if status_code == 200:
                 break
