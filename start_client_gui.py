@@ -70,15 +70,13 @@ def _resolve_pythonw_client() -> str | None:
     """Return a usable Python interpreter for client child processes.
 
     Preference order:
-    - runtime/pythonw_CapsWriter_Client.exe
-    - runtime/pythonw.exe
-    - runtime/python.exe
-    - current sys.executable
+    - .venv/Scripts/pythonw.exe (uv-managed venv)
+    - .venv/Scripts/python.exe (uv-managed venv)
+    - current sys.executable (fallback)
     """
     candidates: list[Path] = [
-        ROOT / "runtime" / "pythonw_CapsWriter_Client.exe",
-        ROOT / "runtime" / "pythonw.exe",
-        ROOT / "runtime" / "python.exe",
+        ROOT / ".venv" / "Scripts" / "pythonw.exe",
+        ROOT / ".venv" / "Scripts" / "python.exe",
         Path(sys.executable) if sys.executable else None,  # type: ignore[arg-type]
     ]
     for p in candidates:
@@ -1053,10 +1051,11 @@ class GUI(QMainWindow):
 
     def restart_client(self):
         # Important: run the restart helper with the console Python (python.exe),
-        # not pythonw_CapsWriter_Client.exe. Otherwise the helper would be killed
-        # by its own taskkill (since it targets pythonw_CapsWriter_Client.exe).
-        exe_console = str(ROOT / "runtime" / "python.exe")
-        exe = exe_console if Path(exe_console).exists() else (sys.executable or exe_console)
+        # not pythonw.exe. Otherwise the helper would be killed by its own taskkill.
+        exe_console = str(ROOT / ".venv" / "Scripts" / "python.exe")
+        if not Path(exe_console).exists():
+            exe_console = sys.executable
+        exe = exe_console
         try:
             DETACHED_PROCESS = 0x00000008
             CREATE_NEW_PROCESS_GROUP = 0x00000200
@@ -1187,7 +1186,7 @@ class GUI(QMainWindow):
         exe = _resolve_pythonw_client()
         if exe is None:
             try:
-                self.text_box_client.append("未找到可用的 Python 运行时 (runtime/pythonw*_*.exe)。请检查 runtime 目录。")
+                self.text_box_client.append("未找到可用的 Python 运行时。请确保已运行 'uv sync' 安装依赖。")
             except Exception:
                 pass
             return
@@ -1515,7 +1514,9 @@ if __name__ == "__main__":
     if files:  # 如果有文件需要处理
         CapsWriter_path = Path(__file__).parent
         script_path = CapsWriter_path / "core_client.py"
-        python_exe_path = CapsWriter_path / "runtime" / "python.exe"
+        python_exe_path = CapsWriter_path / ".venv" / "Scripts" / "python.exe"
+        if not python_exe_path.exists():
+            python_exe_path = Path(sys.executable)
         files_quoted = [str(file) for file in files]
         command = [str(python_exe_path), str(script_path)] + files_quoted
         try:

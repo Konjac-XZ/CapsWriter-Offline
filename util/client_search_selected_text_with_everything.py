@@ -1,6 +1,6 @@
 # 调用 everything 搜索光标选中的字符
 
-# .\runtime\python.exe .\util\client_search_selected_text_with_everything.py
+# uv run python .\util\client_search_selected_text_with_everything.py
 
 
 import asyncio

@@ -4,13 +4,13 @@
 - `core_server.py` runs the speech-to-text back-end, while `core_client.py` and `start_client_gui*.py` expose CLI and GUI clients for keyboard-driven capture.
 - Reusable logic lives in `util/` (websocket streams, GUI/helpers, clipboard integrations); extend these modules first when adding shared behavior.
 - Configuration defaults sit in `config.toml` and supporting schemas under `config/`; UI art and documentation assets live in `assets/`.
-- Models, the embedded Python runtime, and cached downloads live under `models/`, `runtime/`, `site-packages/`, and `downloads/`; keep large binaries out of commits unless intentionally updated.
+- Models and cached downloads live under `models/` and `downloads/`; keep large binaries out of commits unless intentionally updated.
 
 ## Build, Test, and Development Commands
-- `python -m pip install -r requirements-server.txt` or `requirements-client.txt` prepares a local environment without relying on the bundled runtime.
-- `./runtime/python.exe core_server.py` starts the offline ASR server using the model selected in `config.toml`.
-- `./runtime/python.exe core_client.py` launches the microphone listener; pass a media path to transcribe a file instead of live input.
-- `python start_client_gui.py` opens the Qt UI for verifying changes before packaging the standalone executables.
+- `uv sync` installs all dependencies into a managed virtual environment.
+- `uv run python core_server.py` starts the offline ASR server using the model selected in `config.toml` (note: server functionality has been removed).
+- `uv run python core_client.py` launches the microphone listener; pass a media path to transcribe a file instead of live input.
+- `uv run python start_client_gui.py` opens the Qt UI for verifying changes.
 
 ## Coding Style & Naming Conventions
 - Follow PEP 8 with 4-space indentation, snake_case for functions/modules, and CapWords for Qt/PySide widget classes.
@@ -25,7 +25,7 @@
 ## Commit & Pull Request Guidelines
 - Follow the existing Conventional Commit pattern (`feat:`, `refactor:`, `chore:`) and keep subject lines within 72 characters.
 - Reference related issues, list manual test steps (server, client, GUI), and attach screenshots for UI-visible changes.
-- Call out model or config migrations in the PR description so maintainers can refresh packaged runtimes or assets.
+- Call out model or config migrations in the PR description so maintainers can refresh packaged assets.
 
 ## Configuration & Security Notes
 - Never commit API tokens, personal audio, or `.env` files; document required variables instead.

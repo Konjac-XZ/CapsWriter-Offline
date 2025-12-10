@@ -25,7 +25,7 @@ Guidance for Claude Code (claude.ai/code) when working inside this fork of CapsW
 - Translation and hotword modules, shortcuts, configuration toggles, and text assets – deleted.
 - Extra requirement files (`requirements-editconfiggui.txt`, `requirements-server.txt`) – deleted.
 - Historical docs, screenshots, and README – deleted.
-- Leftover binaries such as `start_server_gui.exe` still exist but are not part of the supported workflow.
+- Bundled `runtime/` and `site-packages/` directories – deleted in favor of uv-managed virtual environment.
 
 ## Core Functionality
 
@@ -60,15 +60,27 @@ YAML values may reference environment variables (`${VAR}`) so secrets can stay o
 
 ## Running & Testing
 
+### Initial Setup
+
 ```bash
-# GUI client (uses current Python env)
-python start_client_gui.py
+# Install uv if not already installed
+pip install uv
 
-# CLI client for development/testing (same cloud pipeline)
-python core_client.py [optional-media-file]
+# Install dependencies
+uv sync
+```
 
-# Provider/config editor (provider + model pages)
-python edit_config_gui.py
+### Running the Application
+
+```bash
+# GUI client
+uv run python start_client_gui.py
+
+# CLI client for development/testing
+uv run python core_client.py [optional-media-file]
+
+# Provider/config editor
+uv run python edit_config_gui.py
 ```
 
 Smoke-test checklist:
@@ -95,16 +107,17 @@ python provider_switch.py --reload
 
 ## Dependencies
 
-- Install development dependencies with `python -m pip install -r requirements-client.txt`.
-- Packaged builds rely on the bundled `runtime/` folder, but standard development uses the local interpreter.
-- No additional requirement files remain for the (now deleted) server or config editor variants.
+- Install dependencies with `uv sync`
+- Dependencies are managed via `pyproject.toml`
+- A lockfile (`uv.lock`) ensures reproducible builds
+- No additional requirement files remain
 
 ## Development Notes
 
 - **Cloud-first pipeline:** Everything ultimately runs through `transcribe_audio` or provider-specific HTTP helpers. When debugging transcription issues, start there.
 - **No translation/hotword hooks:** Ensure new features do not resurrect the removed shortcuts or config keys unless explicitly requested.
 - **Focus areas:** Client UX (GUI + CLI), provider management, and progressive cleanup of leftover server-era config.
-- **Backwards compatibility:** Some files (e.g., binaries in the root, `runtime/`, `site-packages/`) remain for packaging; remove them only with deliberate migration steps.
+- **Virtual environment:** All dependencies are isolated in `.venv/`, managed by uv.
 
 ---
 

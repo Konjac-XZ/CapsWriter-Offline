@@ -1,7 +1,43 @@
-*
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# uv
+.uv/
+uv.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
+downloads/
+models/
+*.wav
+*.mp3
+.provider_state.json
+config_backup.toml
+
+# Keep these tracked
 !assets/
-!util
+!util/
+!config/
 !*.py
 !*.toml
-!.gitignore
 !*.md
+!*.yaml
