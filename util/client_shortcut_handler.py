@@ -4,7 +4,6 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 
 import keyboard
-from flask import sessions
 from pycaw.pycaw import AudioUtilities
 
 from util.client_cosmic import Cosmic

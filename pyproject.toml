@@ -26,6 +26,7 @@ dependencies = [
     "pangu==4.0.6.1",
     "replicate==0.31.0",
     "PyYAML==6.0.2",
+    "dashscope>=1.25.3",
 ]
 
 [dependency-groups]

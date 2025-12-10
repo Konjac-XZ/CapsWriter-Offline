@@ -41,3 +41,4 @@ config_backup.toml
 !*.toml
 !*.md
 !*.yaml
+config
