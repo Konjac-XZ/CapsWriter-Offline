@@ -9,7 +9,17 @@ from queue import Queue
 from dotenv import load_dotenv, find_dotenv, dotenv_values
 
 # Project root is the directory containing this script; normalize CWD for reliability
-ROOT: Path = Path(__file__).resolve().parent
+# When running from PyInstaller, ROOT points to the exe's directory (repo root)
+# and BUNDLE_ROOT points to the temporary extraction folder for bundled resources
+if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+    # Running in PyInstaller bundle
+    ROOT: Path = Path(sys.executable).resolve().parent
+    BUNDLE_ROOT: Path = Path(sys._MEIPASS)
+else:
+    # Running as script
+    ROOT: Path = Path(__file__).resolve().parent
+    BUNDLE_ROOT: Path = ROOT
+
 try:
     os.chdir(str(ROOT))
 except Exception:
@@ -174,7 +184,7 @@ class GUI(QMainWindow):
     def init_ui(self):
         self.setWindowTitle("CapsWriter-Offline-Client")
         try:
-            self.setWindowIcon(QIcon(str(ROOT / "assets" / "client-icon.ico")))
+            self.setWindowIcon(QIcon(str(BUNDLE_ROOT / "assets" / "client-icon.ico")))
         except Exception:
             pass
         self.setWindowOpacity(1.0)
@@ -934,7 +944,7 @@ class GUI(QMainWindow):
     def create_systray_icon(self):
         self.tray_icon = QSystemTrayIcon(self)
         try:
-            self.tray_icon.setIcon(QIcon(str(ROOT / "assets" / "client-icon.ico")))
+            self.tray_icon.setIcon(QIcon(str(BUNDLE_ROOT / "assets" / "client-icon.ico")))
         except Exception:
             pass
 
@@ -1389,7 +1399,7 @@ def _apply_theme_later(app: QApplication) -> None:
     def do_apply():
         try:
             apply_stylesheet(
-                app, theme="dark_teal.xml", css_file=str(ROOT / "util" / "client_gui_theme_custom.css")
+                app, theme="dark_teal.xml", css_file=str(BUNDLE_ROOT / "util" / "client_gui_theme_custom.css")
             )
         except Exception:
             pass

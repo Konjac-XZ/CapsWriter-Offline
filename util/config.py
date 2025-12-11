@@ -1,9 +1,17 @@
+import sys
 from pathlib import Path
 
 from tomlkit import parse
 
 # 加载TOML配置文件
-config_toml_path = Path(__file__).parent.parent / "config.toml"
+# When running from PyInstaller, look for config.toml next to the executable
+if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+    # Running in PyInstaller bundle - config.toml is in the same directory as the .exe
+    config_toml_path = Path(sys.executable).parent / "config.toml"
+else:
+    # Running as script - use relative path
+    config_toml_path = Path(__file__).parent.parent / "config.toml"
+
 with config_toml_path.open("r", encoding="utf-8") as f:
     config_str = f.read()
     config = parse(config_str)

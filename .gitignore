@@ -42,3 +42,6 @@ config_backup.toml
 !*.md
 !*.yaml
 config
+
+build/
+start_client_gui.exe
