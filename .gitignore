@@ -45,3 +45,6 @@ config
 
 build/
 start_client_gui.exe
+
+site-packages/
+tmp_dashscope/

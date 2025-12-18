@@ -35,7 +35,15 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # Explicitly exclude PyQt5 to avoid mixed Qt bindings when PyQt5 is present
+    excludes=[
+        'PyQt5',
+        'PyQt5.QtCore',
+        'PyQt5.QtGui',
+        'PyQt5.QtWidgets',
+        'PyQt5.QtNetwork',
+        'PyQt5.QtPrintSupport',
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
