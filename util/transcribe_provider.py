@@ -84,6 +84,9 @@ async def transcribe_audio(
         "soniox",
         "soniox-rest",
         "soniox_http",
+        "gemini",
+        "google-gemini",
+        "google",
     ):
         prov = make_provider(provider)
         return await prov.transcribe(

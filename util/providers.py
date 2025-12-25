@@ -222,6 +222,36 @@ class SonioxProvider(TranscriptionProvider):
         return text_result, status_code, t_submit, t_complete, {"http2": http2_flag}
 
 
+class GeminiProvider(TranscriptionProvider):
+    def name(self) -> str:
+        return "gemini"
+
+    async def transcribe(
+        self,
+        payload_buf: io.BytesIO,
+        payload_mime: str,
+        task_id: str,
+        time_start: float,
+        record_stop: float,
+        max_retries: int,
+        base_delay: float,
+    ) -> Tuple[str, int, float, float, Dict[str, Any]]:
+        from util.gemini_transcribe_http import (
+            transcribe_with_retries as gemini_transcribe,
+        )
+
+        text_result, status_code, t_submit, t_complete, http2_flag = await gemini_transcribe(
+            payload_buf,
+            payload_mime,
+            task_id,
+            time_start,
+            record_stop,
+            max_retries,
+            base_delay,
+        )
+        return text_result, status_code, t_submit, t_complete, {"http2": http2_flag}
+
+
 def make_provider(kind: str) -> TranscriptionProvider:
     kind = (kind or "").strip().lower()
     if kind in ("openai", "oai"):
@@ -234,5 +264,7 @@ def make_provider(kind: str) -> TranscriptionProvider:
         return DashScopeProvider()
     if kind in ("soniox", "soniox-rest", "soniox_http"):
         return SonioxProvider()
+    if kind in ("gemini", "google-gemini", "google"):
+        return GeminiProvider()
     # Default
     return OpenAIProvider()

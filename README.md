@@ -16,8 +16,10 @@ Cloud-backed transcription tool for Windows with support for multiple providers.
 
 3. Configure your API key:
    ```bash
-   # Set your provider API key (e.g., OpenAI)
+   # Set your provider API key (e.g., OpenAI or Gemini)
    set OPENAI_API_KEY=your_key_here
+   # or
+   set GEMINI_API_KEY=your_key_here
    ```
 
 4. Run the GUI:
@@ -28,6 +30,7 @@ Cloud-backed transcription tool for Windows with support for multiple providers.
 ## Configuration
 
 - Providers: Edit YAML files in `config/providers/`
+- Gemini: Fill `config/providers/gemini.yaml` (or set `GEMINI_API_KEY`/`GOOGLE_API_KEY`) and enable the provider before use
 - Client settings: Edit `config.toml`
 - Use `python provider_switch.py --list` to see available providers
 

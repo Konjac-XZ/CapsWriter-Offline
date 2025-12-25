@@ -9,12 +9,70 @@ import subprocess as sp
 
 import numpy as np
 
+from util.provider_settings import get_int as ps_get_int
+
+
+_DEFAULT_SAMPLE_RATE: dict[str, int] = {
+    "openai": 44100,
+    "replicate": 44100,
+    "elevenlabs": 44100,
+    "dashscope": 44100,
+    "alibabacloud": 44100,
+    "soniox": 44100,
+    # Keep Gemini distinct so users can opt into a different rate without affecting others
+    "gemini": 16000,
+}
+
+
+def _canonical_provider_type(provider: str | None) -> str:
+    p = (provider or "openai").strip().lower()
+    if p in ("gemini", "google-gemini", "google"):
+        return "gemini"
+    if p in ("soniox-rest", "soniox_http"):
+        return "soniox"
+    return p or "openai"
+
+
+def _get_active_provider_type() -> str:
+    try:
+        from util.provider_config import provider_manager  # local import to avoid cycles
+
+        ptype = provider_manager.get_active_provider_type()
+        if ptype:
+            return _canonical_provider_type(ptype)
+    except Exception:
+        pass
+
+    env_provider = os.getenv("TRANSCRIBE_PROVIDER", "openai")
+    return _canonical_provider_type(env_provider)
+
 
 def _get_target_sample_rate() -> int:
+    provider_type = _get_active_provider_type()
+    env_names = {
+        "openai": ("OPENAI_TRANSCRIBE_SAMPLE_RATE", "TRANSCRIBE_SAMPLE_RATE"),
+        "replicate": ("REPLICATE_TRANSCRIBE_SAMPLE_RATE", "TRANSCRIBE_SAMPLE_RATE"),
+        "elevenlabs": ("ELEVENLABS_TRANSCRIBE_SAMPLE_RATE", "TRANSCRIBE_SAMPLE_RATE"),
+        "dashscope": ("DASHSCOPE_TRANSCRIBE_SAMPLE_RATE", "TRANSCRIBE_SAMPLE_RATE"),
+        "alibabacloud": ("ALIBABACLOUD_TRANSCRIBE_SAMPLE_RATE", "TRANSCRIBE_SAMPLE_RATE"),
+        "soniox": ("SONIOX_TRANSCRIBE_SAMPLE_RATE", "TRANSCRIBE_SAMPLE_RATE"),
+        "gemini": ("GEMINI_TRANSCRIBE_SAMPLE_RATE", "TRANSCRIBE_SAMPLE_RATE"),
+    }.get(provider_type, ("TRANSCRIBE_SAMPLE_RATE",))
+
+    default_sr = _DEFAULT_SAMPLE_RATE.get(provider_type, 44100)
+
     try:
-        return int(os.getenv("OPENAI_TRANSCRIBE_SAMPLE_RATE", "44100"))
+        sr = ps_get_int("sample_rate", env=env_names, default=default_sr)
+        resolved = int(sr) if sr else default_sr
+        if os.getenv("CAPSWRITER_DEBUG_SAMPLE_RATE"):
+            # Lightweight diagnostic to confirm provider-aware sample-rate selection is active
+            print(
+                f"[sr-debug] provider_type={provider_type} env={env_names} "
+                f"default={default_sr} resolved={resolved}"
+            )
+        return resolved
     except Exception:
-        return 48000
+        return default_sr
 
 
 def _force_mono() -> bool:
