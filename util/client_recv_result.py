@@ -1,6 +1,7 @@
 import opencc
 import pangu
 from util.client_cosmic import Cosmic, console
+from util.client_regex_replace import regex_replace
 from util.client_rename_audio import rename_audio
 from util.client_strip_punc import strip_punc
 from util.client_type_result import type_result
@@ -52,6 +53,9 @@ async def recv_result():
             # 流式时：对中间增量不做末尾标点剥离，避免抖动
             if not (is_stream and not is_final):
                 text = strip_punc(text)
+
+            # 正则替换（在 strip_punc 之后、pangu / opencc 之前执行）
+            text = regex_replace(text)
 
             # 简繁转换
             convert_to_traditional_chinese_done = False
