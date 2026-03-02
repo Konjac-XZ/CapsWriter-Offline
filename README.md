@@ -27,6 +27,78 @@ Cloud-backed transcription tool for Windows with support for multiple providers.
    uv run python start_client_gui.py
    ```
 
+## Startup Profiling
+
+Use these tools to diagnose slow startup without changing normal behavior.
+
+1. Install optional profiling dependencies:
+   ```bash
+   uv sync --group profiling
+   ```
+
+2. Profile startup with built-in `cProfile` (works even without extra deps):
+   ```bash
+   uv run python start_client_gui.py --profile-startup --profile-tool cprofile --profile-duration-ms 8000
+   ```
+
+3. Try richer traces (if installed):
+   ```bash
+   uv run python start_client_gui.py --profile-startup --profile-tool pyinstrument --profile-duration-ms 8000
+   uv run python start_client_gui.py --profile-startup --profile-tool viztracer --profile-duration-ms 8000
+   uv run python start_client_gui.py --profile-startup --profile-tool yappi --profile-duration-ms 8000
+   ```
+
+4. Output files are written to `profiles/startup/` by default. You can override via:
+   ```bash
+   uv run python start_client_gui.py --profile-startup --profile-output profiles/startup/my_run --profile-tool cprofile
+   ```
+
+Environment variable mode is also supported:
+
+```bash
+set CW_PROFILE_STARTUP=1
+set CW_PROFILE_TOOL=pyinstrument
+set CW_PROFILE_DURATION_MS=8000
+uv run python start_client_gui.py
+```
+
+### Fast startup mode (default)
+
+`qt_material` theme application is disabled by default to reduce startup latency.
+
+- Enable theme explicitly:
+   ```bash
+   set CW_ENABLE_QT_MATERIAL=1
+   uv run python start_client_gui.py
+   ```
+- Optional delayed apply (milliseconds, default `3000`):
+   ```bash
+   set CW_THEME_DELAY_MS=5000
+   uv run python start_client_gui.py
+   ```
+
+- Tray menu warm-up is deferred by default (15s). Optional override:
+   ```bash
+   set CW_TRAY_WARMUP_DELAY_MS=30000
+   uv run python start_client_gui.py
+   ```
+
+## Build Native Launcher (Windows)
+
+To build a silent `start_client_gui.exe` launcher (no console window), open a **Developer Command Prompt for Visual Studio** in the repository root and run:
+
+```bat
+build_gui.bat
+```
+
+The generated `start_client_gui.exe` only starts:
+
+```bat
+uv run python start_client_gui.py
+```
+
+Launcher behavior: before starting, it terminates any existing running `start_client_gui.py` process, then starts a fresh one.
+
 ## Configuration
 
 - Providers: Edit YAML files in `config/providers/`

@@ -1,9 +1,13 @@
 import argparse
+import cProfile
 import os
+import pstats
 import subprocess
 import sys
 import threading
 import asyncio
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from queue import Queue
 from dotenv import load_dotenv, find_dotenv, dotenv_values
@@ -73,7 +77,6 @@ from PySide6.QtWidgets import (
 )
 # Intentionally defer theme import/application until after first paint for faster startup
 
-from util.check_process import check_process
 from util.config import ClientConfig as Config, ServerConfig
 
 def _resolve_pythonw_client() -> str | None:
@@ -93,6 +96,139 @@ def _resolve_pythonw_client() -> str | None:
         if p and p.exists():
             return str(p)
     return None
+
+
+@dataclass
+class StartupProfileOptions:
+    enabled: bool = False
+    tool: str = "cprofile"
+    output: Path | None = None
+    duration_ms: int = 5000
+
+
+def _default_profile_output(tool: str) -> Path:
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    profile_dir = ROOT / "profiles" / "startup"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    return profile_dir / f"startup_{tool}_{timestamp}"
+
+
+class StartupProfiler:
+    """Optional startup profiler with multiple backends and safe fallback."""
+
+    def __init__(self, options: StartupProfileOptions | None = None):
+        self.options = options or StartupProfileOptions()
+        self.enabled = bool(self.options.enabled)
+        self.tool = (self.options.tool or "cprofile").strip().lower()
+        self.output_base = self.options.output or _default_profile_output(self.tool)
+        self.output_base.parent.mkdir(parents=True, exist_ok=True)
+        self._started_at: float | None = None
+        self._cprofile: cProfile.Profile | None = None
+        self._pyinstrument = None
+        self._viztracer = None
+        self._yappi = None
+
+    def start(self) -> None:
+        if not self.enabled:
+            return
+        self._started_at = time.perf_counter()
+        try:
+            if self.tool == "cprofile":
+                self._cprofile = cProfile.Profile()
+                self._cprofile.enable()
+                print(f"[startup-profiler] cProfile started -> {self.output_base.with_suffix('.pstats')}")
+                return
+
+            if self.tool == "pyinstrument":
+                from pyinstrument import Profiler
+
+                self._pyinstrument = Profiler(async_mode="disabled")
+                self._pyinstrument.start()
+                print(f"[startup-profiler] pyinstrument started -> {self.output_base.with_suffix('.html')}")
+                return
+
+            if self.tool == "viztracer":
+                from viztracer import VizTracer
+
+                self._viztracer = VizTracer(output_file=str(self.output_base.with_suffix(".json")))
+                self._viztracer.start()
+                print(f"[startup-profiler] viztracer started -> {self.output_base.with_suffix('.json')}")
+                return
+
+            if self.tool == "yappi":
+                import yappi
+
+                self._yappi = yappi
+                self._yappi.clear_stats()
+                self._yappi.set_clock_type("wall")
+                self._yappi.start()
+                print(f"[startup-profiler] yappi started -> {self.output_base.with_suffix('.pstat')}")
+                return
+
+            print(f"[startup-profiler] unknown tool '{self.tool}', fallback to cprofile")
+            self.tool = "cprofile"
+            self._cprofile = cProfile.Profile()
+            self._cprofile.enable()
+        except Exception as e:
+            print(f"[startup-profiler] failed to start '{self.tool}': {e}; fallback to cprofile")
+            self.tool = "cprofile"
+            self._cprofile = cProfile.Profile()
+            self._cprofile.enable()
+
+    def stop(self, reason: str = "") -> None:
+        if not self.enabled:
+            return
+
+        elapsed_ms = None
+        if self._started_at is not None:
+            elapsed_ms = int((time.perf_counter() - self._started_at) * 1000)
+
+        try:
+            if self.tool == "cprofile" and self._cprofile is not None:
+                pstats_path = self.output_base.with_suffix(".pstats")
+                summary_path = self.output_base.with_suffix(".txt")
+                self._cprofile.disable()
+                self._cprofile.dump_stats(str(pstats_path))
+
+                with summary_path.open("w", encoding="utf-8") as f:
+                    stats = pstats.Stats(self._cprofile, stream=f)
+                    stats.sort_stats("cumulative")
+                    stats.print_stats(100)
+
+                print(f"[startup-profiler] cProfile saved: {pstats_path}")
+                print(f"[startup-profiler] cProfile summary: {summary_path}")
+
+            elif self.tool == "pyinstrument" and self._pyinstrument is not None:
+                txt_path = self.output_base.with_suffix(".txt")
+                html_path = self.output_base.with_suffix(".html")
+                self._pyinstrument.stop()
+
+                txt_path.write_text(self._pyinstrument.output_text(unicode=True, color=False), encoding="utf-8")
+                html_path.write_text(self._pyinstrument.output_html(), encoding="utf-8")
+
+                print(f"[startup-profiler] pyinstrument text: {txt_path}")
+                print(f"[startup-profiler] pyinstrument html: {html_path}")
+
+            elif self.tool == "viztracer" and self._viztracer is not None:
+                json_path = self.output_base.with_suffix(".json")
+                self._viztracer.stop()
+                self._viztracer.save()
+                print(f"[startup-profiler] viztracer trace: {json_path}")
+
+            elif self.tool == "yappi" and self._yappi is not None:
+                pstat_path = self.output_base.with_suffix(".pstat")
+                self._yappi.stop()
+                stats = self._yappi.get_func_stats()
+                stats.save(str(pstat_path), type="pstat")
+                print(f"[startup-profiler] yappi stats: {pstat_path}")
+
+            if elapsed_ms is not None:
+                reason_str = f" ({reason})" if reason else ""
+                print(f"[startup-profiler] captured ~{elapsed_ms}ms{reason_str}")
+        except Exception as e:
+            print(f"[startup-profiler] failed to save profile output: {e}")
+        finally:
+            self.enabled = False
 
 
 # AHK hint tooltip removed for leaner startup
@@ -982,8 +1118,11 @@ class GUI(QMainWindow):
 
         # Proactively warm up the tray menu to avoid first-use lag
         try:
-            # Delay warm-up so first paint is smoother
-            QTimer.singleShot(1200, self._warm_up_tray_menu)
+            # Defer warm-up well past startup to avoid competing with initial work
+            delay_ms = int(os.getenv("CW_TRAY_WARMUP_DELAY_MS", "15000"))
+            if delay_ms < 0:
+                delay_ms = 0
+            QTimer.singleShot(delay_ms, self._warm_up_tray_menu)
         except Exception:
             pass
 
@@ -1024,8 +1163,7 @@ class GUI(QMainWindow):
     def _warm_up_tray_menu(self):
         """Force-create and layout the tray menu to eliminate first-show stutter.
 
-        We polish the menu, compute geometry, force a native handle, and briefly
-        show it off-screen before hiding it again. This primes fonts/styles.
+        Kept intentionally lightweight and deferred to avoid affecting startup.
         """
         try:
             menu = getattr(self, "tray_menu", None)
@@ -1045,14 +1183,6 @@ class GUI(QMainWindow):
             # Force native handle creation
             try:
                 _ = menu.winId()
-            except Exception:
-                pass
-            # Briefly show off-screen to trigger any deferred init, then hide
-            try:
-                menu.move(-2000, -2000)
-                menu.show()
-                QApplication.processEvents()
-                QTimer.singleShot(30, menu.hide)
             except Exception:
                 pass
         except Exception:
@@ -1391,6 +1521,15 @@ def _apply_theme_later(app: QApplication) -> None:
 
     Imports are done lazily; if anything fails, startup is not blocked.
     """
+    enable_theme = os.getenv("CW_ENABLE_QT_MATERIAL", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if not enable_theme:
+        return
+
     try:
         from qt_material import apply_stylesheet  # local import to avoid import cost on cold start
     except Exception:
@@ -1405,7 +1544,10 @@ def _apply_theme_later(app: QApplication) -> None:
             pass
 
     try:
-        QTimer.singleShot(0, do_apply)
+        delay_ms = int(os.getenv("CW_THEME_DELAY_MS", "3000"))
+        if delay_ms < 0:
+            delay_ms = 0
+        QTimer.singleShot(delay_ms, do_apply)
     except Exception:
         # Fallback: apply immediately if singleShot isn't available
         try:
@@ -1414,11 +1556,9 @@ def _apply_theme_later(app: QApplication) -> None:
             pass
 
 
-def start_client_gui():
-    if Config.only_run_once and check_process("pythonw_CapsWriter_Client.exe"):
-        raise Exception(
-            "已经有一个客户端在运行了！（用户配置了 只允许运行一次，禁止多开；而且检测到 pythonw_CapsWriter_Client.exe 进程已在运行。如果你确定需要启动多个客户端同时运行，请先修改 config.py  class ClientConfig:  Only_run_once = False 。）"
-        )
+def start_client_gui(profile_options: StartupProfileOptions | None = None):
+    startup_profiler = StartupProfiler(profile_options)
+    startup_profiler.start()
     app = QApplication(sys.argv)
     # Force CN locale to influence font fallback toward Simplified Chinese glyphs
     try:
@@ -1454,6 +1594,12 @@ def start_client_gui():
     gui = GUI()
     if not Config.shrink_automatically_to_tray:
         gui.show()
+    try:
+        if startup_profiler.enabled:
+            delay = max(100, int((profile_options.duration_ms if profile_options else 5000)))
+            QTimer.singleShot(delay, lambda: startup_profiler.stop("startup window"))
+    except Exception:
+        startup_profiler.stop("timer schedule failed")
     sys.exit(app.exec())
 
 
@@ -1510,7 +1656,51 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="处理文件")
     parser.add_argument("files", nargs="*", type=Path, help="要处理的文件")
     parser.add_argument("--file-list", type=Path, help="包含文件列表的文本文件")
+    parser.add_argument(
+        "--profile-startup",
+        action="store_true",
+        help="启用启动性能分析（输出到 profiles/startup）",
+    )
+    parser.add_argument(
+        "--profile-tool",
+        choices=["cprofile", "pyinstrument", "viztracer", "yappi"],
+        default=None,
+        help="选择性能分析工具",
+    )
+    parser.add_argument(
+        "--profile-output",
+        type=Path,
+        default=None,
+        help="指定分析输出文件前缀（不带扩展名）",
+    )
+    parser.add_argument(
+        "--profile-duration-ms",
+        type=int,
+        default=int(os.getenv("CW_PROFILE_DURATION_MS", "5000")),
+        help="启动分析持续时间（毫秒）",
+    )
     args = parser.parse_args()
+
+    profile_env_enabled = os.getenv("CW_PROFILE_STARTUP", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    profile_enabled = bool(args.profile_startup or profile_env_enabled)
+    profile_tool = (
+        args.profile_tool
+        or os.getenv("CW_PROFILE_TOOL", "cprofile").strip().lower()
+        or "cprofile"
+    )
+    profile_output_env = os.getenv("CW_PROFILE_OUTPUT", "").strip()
+    profile_output = args.profile_output or (Path(profile_output_env) if profile_output_env else None)
+    profile_options = StartupProfileOptions(
+        enabled=profile_enabled,
+        tool=profile_tool,
+        output=profile_output,
+        duration_ms=max(100, int(args.profile_duration_ms or 5000)),
+    )
 
     if args.file_list:  # 如果传递了 --file-list 参数
         try:
@@ -1535,4 +1725,4 @@ if __name__ == "__main__":
             print(f"Error starting the process: {e}")
     else:
         # GUI
-        start_client_gui()
+        start_client_gui(profile_options=profile_options)

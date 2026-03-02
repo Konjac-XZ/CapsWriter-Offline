@@ -49,3 +49,12 @@ start_client_gui.exe
 site-packages/
 tmp_dashscope/
 .serena
+
+_internal/
+dist/
+profiles/
+
+start_client_gui_launcher*
+
+!start_client_gui_launcher.cpp
+

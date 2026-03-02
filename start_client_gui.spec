@@ -5,8 +5,8 @@ PyInstaller spec file for CapsWriter-Offline GUI client.
 Build command:
     pyinstaller start_client_gui.spec
 
-The resulting executable will be in dist/start_client_gui.exe
-Copy it to the repository root for distribution.
+The resulting executable will be in dist/start_client_gui/start_client_gui.exe
+with all runtime dependencies in the same directory (onedir mode).
 """
 
 block_cipher = None
@@ -18,6 +18,7 @@ a = Analysis(
     datas=[
         ('assets', 'assets'),
         ('config', 'config'),
+        ('config.toml', '.'),
         ('util/client_gui_theme_custom.css', 'util'),
     ],
     hiddenimports=[
@@ -55,15 +56,14 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    [],
+    exclude_binaries=True,
     name='start_client_gui',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,  # No console window
@@ -73,4 +73,15 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon='assets/client-icon.ico'
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name='start_client_gui',
 )
