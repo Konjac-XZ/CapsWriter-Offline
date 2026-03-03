@@ -78,9 +78,7 @@ class ClientConfig:
     hint_while_recording_at_edit_position_powered_by_ahk: bool = config["client"][
         "hint_while_recording_at_edit_position_powered_by_ahk"
     ]
-    hint_while_recording_at_cursor_position: bool = config["client"][
-        "hint_while_recording_at_cursor_position"
-    ]
+
     check_microphone_usage_by: str = config["client"]["check_microphone_usage_by"]
     enable_double_click_opposite_state: bool = config["client"][
         "enable_double_click_opposite_state"

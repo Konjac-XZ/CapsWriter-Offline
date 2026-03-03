@@ -150,7 +150,6 @@ async def transcribe_recv(file: Path):
 
     # 解析结果（OpenAI 兼容端点使用纯文本返回）
     text_merge = message.get("text", "").strip()
-    # 将中英常见句末标点换行，便于生成 srt
     text_split = re.sub(r"([，。？.!?])", r"\1\n", text_merge)
     # 文件名
     txt_filename = Path(file).with_suffix(".txt")
@@ -161,7 +160,6 @@ async def transcribe_recv(file: Path):
         f.write(text_merge)
     with open(txt_filename, "w", encoding="utf-8") as f:
         f.write(text_split)
-    # 已禁用字幕（srt）生成功能
 
     process_duration = message["time_complete"] - message["time_start"]
     console.print(f"\033[K    处理耗时：{process_duration:.2f}s")

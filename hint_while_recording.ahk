@@ -1,5 +1,4 @@
 ﻿; 为原来的脚本提供了另一种显示方式(使用BeautifulToolTip库),并且提供修改配置的功能,在这个`hint_while_recording.ini`文件修改。
-; 使用BeautifulToolTip库显示的好处是不会改变焦点,从而退出全屏幕模式(需要在`config.py` 的 `hint_while_recording_at_cursor_position = False`配合使用)。另外比较漂亮。坏处是增加了30MB记忆体的占用。
 
 ; hint_while_recording:
 ; Author:[H1DDENADM1N](https://github.com/H1DDENADM1N/CapsWriter-Offline)

@@ -22,7 +22,6 @@ if sys.argv[1:]:
     Cosmic.transcribe_subtitles = True
 else:
     Cosmic.transcribe_subtitles = False
-from util.client_adjust_srt import adjust_srt
 from util.client_recv_result import recv_result
 from util.client_shortcut_handler import bond_shortcut
 from util.client_stream import stream_close, stream_open

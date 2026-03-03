@@ -155,8 +155,7 @@ stop_music_volume = "100"
 hint_while_recording_at_edit_position_powered_by_ahk = false
 # 是否启用基于 AHK 的输入光标位置的输入状态提示功能
 
-hint_while_recording_at_cursor_position = false
-# 是否启用跟随鼠标光标位置的新版输入状态提示功能
+
 
 check_microphone_usage_by = "注册表"
 # "按键" 或 "注册表"
