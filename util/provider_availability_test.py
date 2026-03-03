@@ -140,7 +140,7 @@ class ProviderAvailabilityTester:
 
                 # Force-recreate persistent HTTP client so new timeout applies
                 try:
-                    from util.openai_transcribe_http import close_http_client
+                    from util.transcribe.openai.openai_transcribe_http import close_http_client
                     # If there's an existing client, close it before the request
                     await close_http_client(reason="availability-test-prepare")
                 except Exception:
@@ -222,7 +222,7 @@ class ProviderAvailabilityTester:
         finally:
             # Close the client created with the short timeout so regular ops use default later
             try:
-                from util.openai_transcribe_http import close_http_client
+                from util.transcribe.openai.openai_transcribe_http import close_http_client
                 await close_http_client(reason="availability-test-cleanup")
             except Exception:
                 pass

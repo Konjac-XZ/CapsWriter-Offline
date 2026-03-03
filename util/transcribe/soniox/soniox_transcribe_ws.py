@@ -6,7 +6,7 @@ import time
 from typing import Tuple
 
 from util.client_cosmic import console
-from util.openai_transcribe_http import emit_partial_update
+from util.transcribe.openai.openai_transcribe_http import emit_partial_update
 from util.provider_config import provider_manager
 
 

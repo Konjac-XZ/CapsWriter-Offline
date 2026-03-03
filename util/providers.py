@@ -45,7 +45,7 @@ class OpenAIProvider(TranscriptionProvider):
         max_retries: int,
         base_delay: float,
     ) -> Tuple[str, int, float, float, Dict[str, Any]]:
-        from util.openai_transcribe_http import (
+        from util.transcribe.openai.openai_transcribe_http import (
             get_api_base,
             get_model as _get_model,
             get_prompt as _get_prompt,
@@ -102,8 +102,8 @@ class ReplicateProvider(TranscriptionProvider):
         max_retries: int,
         base_delay: float,
     ) -> Tuple[str, int, float, float, Dict[str, Any]]:
-        from util.replicate_transcribe_http import transcribe_with_retries as rep_transcribe
-        from util.openai_transcribe_http import is_streaming_enabled as _get_stream_flag
+        from util.transcribe.replicate.replicate_transcribe_http import transcribe_with_retries as rep_transcribe
+        from util.transcribe.openai.openai_transcribe_http import is_streaming_enabled as _get_stream_flag
         import os
 
         enable_stream_pref = _get_stream_flag()
@@ -146,7 +146,7 @@ class ElevenLabsProvider(TranscriptionProvider):
         max_retries: int,
         base_delay: float,
     ) -> Tuple[str, int, float, float, Dict[str, Any]]:
-        from util.elevenlabs_transcribe_http import (
+        from util.transcribe.elevenlabs.elevenlabs_transcribe_http import (
             transcribe_with_retries as elevenlabs_transcribe,
         )
 
@@ -176,7 +176,7 @@ class DashScopeProvider(TranscriptionProvider):
         max_retries: int,
         base_delay: float,
     ) -> Tuple[str, int, float, float, Dict[str, Any]]:
-        from util.dashscope_transcribe_http import (
+        from util.transcribe.dashscope.dashscope_transcribe_http import (
             transcribe_with_retries as dashscope_transcribe,
         )
 
@@ -206,7 +206,7 @@ class SonioxProvider(TranscriptionProvider):
         max_retries: int,
         base_delay: float,
     ) -> Tuple[str, int, float, float, Dict[str, Any]]:
-        from util.soniox_transcribe_http import (
+        from util.transcribe.soniox.soniox_transcribe_http import (
             transcribe_with_retries as soniox_transcribe,
         )
 
@@ -236,7 +236,7 @@ class GeminiProvider(TranscriptionProvider):
         max_retries: int,
         base_delay: float,
     ) -> Tuple[str, int, float, float, Dict[str, Any]]:
-        from util.gemini_transcribe_http import (
+        from util.transcribe.gemini.gemini_transcribe_http import (
             transcribe_with_retries as gemini_transcribe,
         )
 

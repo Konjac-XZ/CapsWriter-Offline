@@ -18,9 +18,9 @@ from util.client_write_file import write_file
 from util.config import ClientConfig as Config
 
 # New modules for clearer separation of concerns
-from util.openai_transcribe_audio import preprocess_audio
-from util.openai_transcribe_audio import make_audio_payload
-from util.openai_transcribe_audio import get_mp3_bitrate
+from util.transcribe.openai.openai_transcribe_audio import preprocess_audio
+from util.transcribe.openai.openai_transcribe_audio import make_audio_payload
+from util.transcribe.openai.openai_transcribe_audio import get_mp3_bitrate
 from util.transcribe_provider import transcribe_audio, get_stream_flag
 
 

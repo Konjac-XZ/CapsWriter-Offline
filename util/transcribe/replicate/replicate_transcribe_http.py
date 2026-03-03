@@ -6,7 +6,7 @@ import random
 from typing import Tuple
 
 from util.client_cosmic import console
-from util.openai_transcribe_http import emit_partial_update
+from util.transcribe.openai.openai_transcribe_http import emit_partial_update
 from util.provider_settings import (
     get_bool as ps_get_bool,
     get_str as ps_get_str,

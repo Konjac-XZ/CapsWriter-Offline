@@ -2,7 +2,7 @@ import os
 import io
 from typing import Tuple, Dict, Any
 
-from util.openai_transcribe_http import (
+from util.transcribe.openai.openai_transcribe_http import (
     is_streaming_enabled as _get_stream_flag,
 )
 from util.providers import make_provider
