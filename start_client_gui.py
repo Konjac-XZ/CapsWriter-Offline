@@ -1337,16 +1337,6 @@ class GUI(QMainWindow):
         except Exception:
             pass
 
-        # Stagger optional helpers to reduce contention
-        try:
-            if getattr(Config, "use_search_selected_text_with_everything_function", False):
-                QTimer.singleShot(300, lambda: self._start_worker(
-                    "util/client_search_selected_text_with_everything.py",
-                    "search_selected_text_with_everything"
-                ))
-        except Exception:
-            pass
-
         # Update text box
         try:
             self.update_timer = QTimer()
@@ -1433,12 +1423,7 @@ class GUI(QMainWindow):
         """Restart only worker subprocesses to pick up new environment, keep GUI alive."""
         # Stop existing workers
         self._stop_process(getattr(self, "core_client_process", None), "core_client")
-        if getattr(Config, "use_search_selected_text_with_everything_function", False):
-            self._stop_process(getattr(self, "search_selected_text_with_everything", None), "everything")
-
-        # Start workers with updated env
-        if getattr(Config, "use_search_selected_text_with_everything_function", False):
-            self._start_worker("util/client_search_selected_text_with_everything.py", "search_selected_text_with_everything")
+        
         # Core client last
         self._start_worker("core_client.py", "core_client_process")
 

@@ -55,15 +55,7 @@ speech_recognition_port = "6016"
 
 speech_recognition_shortcut = "f15"
 # 控制录音的快捷键，默认是 "caps lock"
-use_search_selected_text_with_everything_function = true
-# 是否启用使用 Everything 搜索选中文字的功能
 
-search_selected_text_with_everything_shortcut = "ctrl + alt + f"
-# 调用 Everything 搜索光标选中的字符
-# 使用前需先安装 Everything，https://www.voidtools.com/zh-cn/downloads/
-
-everything_exe_path = "C:\\Program Files\\Everything\\Everything.exe"
-# 设置 Everything 可执行文件位置
 
 hold_mode = false
 # 长按模式，按下录音，松开停止，像对讲机一样用

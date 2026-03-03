@@ -42,13 +42,6 @@ class ClientConfig:
     addr: str = config["client"]["addr"]
     speech_recognition_port: str = config["client"]["speech_recognition_port"]
     speech_recognition_shortcut: str = config["client"]["speech_recognition_shortcut"]
-    use_search_selected_text_with_everything_function: bool = config["client"][
-        "use_search_selected_text_with_everything_function"
-    ]
-    search_selected_text_with_everything_shortcut: str = config["client"][
-        "search_selected_text_with_everything_shortcut"
-    ]
-    everything_exe_path: str = config["client"]["everything_exe_path"]
     hold_mode: bool = config["client"]["hold_mode"]
     suppress: bool = config["client"]["suppress"]
     restore_key: bool = config["client"]["restore_key"]
