@@ -49,10 +49,12 @@ def _load_rules() -> list[tuple[re.Pattern, str]]:
             continue
         pattern_str = item.get("pattern")
         replacement = item.get("replacement", "")
+        ignore_case = item.get("ignore_case", True)  # 默认设置为不区分大小写
         if not pattern_str:
             continue
         try:
-            compiled = re.compile(pattern_str)
+            flags = re.IGNORECASE if ignore_case else 0
+            compiled = re.compile(pattern_str, flags=flags)
             rules.append((compiled, replacement))
         except re.error as e:
             print(f"[regex_replace] 规则 #{idx} 正则编译失败: {e}  (pattern={pattern_str!r})")
