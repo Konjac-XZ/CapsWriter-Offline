@@ -9,9 +9,6 @@ from pycaw.pycaw import AudioUtilities
 from util.client_cosmic import Cosmic
 from util.client_pause_other_audio import audio_playering_app_name
 from util.client_send_audio import send_audio
-from util.client_send_signal_to_hint_while_recording import (
-    send_signal_to_hint_while_recording,
-)
 from util.client_stream import stream_reopen
 from util.config import ClientConfig as Config
 from util.my_status import Status
@@ -251,11 +248,6 @@ def click_mode(e: keyboard.KeyboardEvent):
 
         # 任务不在进行中, 且不判定为`短击`, 就开始任务, 同时标记 任务在进行中狀态
         elif not double_clicked and not is_short_duration:
-            send_signal_to_hint_while_recording(
-                True,
-                is_short_duration,
-                Config.hold_mode,
-            )
             launch_task()
             # `double_clicked`变量 在此处函数中 改为常駐 因此不需要以下的config判断
             # if Config.enable_double_click_opposite_state:
@@ -265,11 +257,6 @@ def click_mode(e: keyboard.KeyboardEvent):
         # 任务在进行中, 且不判定为`短击`, 就结束和完成任务
         elif double_clicked and not is_short_duration:
             finish_task()
-            send_signal_to_hint_while_recording(
-                False,
-                is_short_duration,
-                Config.hold_mode,
-            )
             # if Config.enable_double_click_opposite_state:
             double_clicked = False
             key_pressed = False
@@ -280,11 +267,6 @@ def click_mode(e: keyboard.KeyboardEvent):
             double_clicked and is_short_duration
             # and Config.enable_double_click_opposite_state
         ):
-            send_signal_to_hint_while_recording(
-                True,
-                is_short_duration,
-                Config.hold_mode,
-            )
             Cosmic.opposite_state = not Cosmic.opposite_state
             key_pressed = False
             # return
@@ -324,11 +306,6 @@ def hold_mode(e: keyboard.KeyboardEvent):
         # 根據上一次是否短時間內(`is_short_duration`)按下錄音鍵,來判斷是否需要輸出 `簡/繁`
         if double_clicked and Config.enable_double_click_opposite_state:
             Cosmic.opposite_state = not Cosmic.opposite_state
-        send_signal_to_hint_while_recording(
-            True,
-            is_short_duration,
-            Config.hold_mode,
-        )
         # 记录开始时间
         launch_task()
 
@@ -353,11 +330,6 @@ def hold_mode(e: keyboard.KeyboardEvent):
             if Config.enable_double_click_opposite_state:
                 double_clicked = False
 
-        send_signal_to_hint_while_recording(
-            False,
-            is_short_duration,
-            Config.hold_mode,
-        )
 
 
 # ==================== 绑定 handler ===============================
