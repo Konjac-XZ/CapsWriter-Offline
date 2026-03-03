@@ -11,7 +11,7 @@ from typing import Dict, List, Tuple, Optional, Any, Callable
 from dataclasses import dataclass
 
 from util.provider_config import provider_manager
-from util.transcribe_provider import transcribe_audio
+from util.transcribe.api import transcribe_audio
 
 
 @dataclass

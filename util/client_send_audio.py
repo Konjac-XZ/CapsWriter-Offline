@@ -21,7 +21,7 @@ from util.config import ClientConfig as Config
 from util.transcribe.openai.openai_transcribe_audio import preprocess_audio
 from util.transcribe.openai.openai_transcribe_audio import make_audio_payload
 from util.transcribe.openai.openai_transcribe_audio import get_mp3_bitrate
-from util.transcribe_provider import transcribe_audio, get_stream_flag
+from util.transcribe.api import transcribe_audio, get_stream_flag
 
 
 async def _gather_audio_once(task_id: str) -> tuple[np.ndarray, float, float, float, float, str | None]:

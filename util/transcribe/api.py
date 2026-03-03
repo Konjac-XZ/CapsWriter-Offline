@@ -5,7 +5,7 @@ from typing import Tuple, Dict, Any
 from util.transcribe.openai.openai_transcribe_http import (
     is_streaming_enabled as _get_stream_flag,
 )
-from util.providers import make_provider
+from util.transcribe.providers import make_provider
 
 # Import provider manager for dynamic configuration
 try:
