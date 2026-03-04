@@ -32,6 +32,16 @@ key_pressed = False
 sessions = []
 
 
+def _safe_session_process_name(session) -> str | None:
+    process = getattr(session, "Process", None)
+    if not process:
+        return None
+    try:
+        return process.name()
+    except Exception:
+        return None
+
+
 def shortcut_correct(e: keyboard.KeyboardEvent):
     # 在我的 Windows 电脑上，left ctrl 和 right ctrl 的 keycode 都是一样的，
     # keyboard 库按 keycode 判断触发
@@ -51,21 +61,27 @@ def mute_all_sessions():
     global sessions
     sessions = AudioUtilities.GetAllSessions()
     for session in sessions:
-        process_name = session.Process and session.Process.name()
+        process_name = _safe_session_process_name(session)
         # 排除 ffplay.exe
         if process_name != "ffplay.exe":
-            volume = session.SimpleAudioVolume
-            volume.SetMute(1, None)
+            try:
+                volume = session.SimpleAudioVolume
+                volume.SetMute(1, None)
+            except Exception:
+                continue
 
 
 def unmute_all_sessions():
     global sessions
     for session in sessions:
-        process_name = session.Process and session.Process.name()
+        process_name = _safe_session_process_name(session)
         # 排除 ffplay.exe
         if process_name != "ffplay.exe":
-            volume = session.SimpleAudioVolume
-            volume.SetMute(0, None)
+            try:
+                volume = session.SimpleAudioVolume
+                volume.SetMute(0, None)
+            except Exception:
+                continue
 
 
 def launch_task():
