@@ -83,9 +83,7 @@ def unmute_all_sessions():
 
 def launch_task():
     # 开始任务时播放提示音
-    import shutil
-
-    if shutil.which("ffplay") and Config.play_start_music:
+    if Config.play_start_music:
         from util.client_play_music import play_music
 
         play_music(Config.start_music_path, Config.start_music_volume)
@@ -190,9 +188,7 @@ def finish_task():
         unmute_all_sessions()
 
     # 结束任务时播放提示音
-    import shutil
-
-    if shutil.which("ffplay") and Config.play_stop_music:
+    if Config.play_stop_music:
         from util.client_play_music import play_music
 
         play_music(Config.stop_music_path, Config.stop_music_volume)

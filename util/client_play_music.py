@@ -51,9 +51,79 @@
 #     except sd.PortAudioError as e:
 #         console.print(f"音频播放失败: {e}")
 
+import shutil
+import sys
 from pathlib import Path
 
 from util.client_cosmic import console
+
+
+def _candidate_project_roots() -> list[Path]:
+    roots = []
+    cwd = Path.cwd()
+    roots.append(cwd)
+    roots.append(Path(__file__).resolve().parents[1])
+    if getattr(sys, "frozen", False):
+        roots.append(Path(sys.executable).resolve().parent)
+    return list(dict.fromkeys(roots))
+
+
+def _resolve_audio_file(file_path: Path) -> Path | None:
+    path = Path(file_path)
+
+    if path.is_absolute() and path.exists():
+        return path
+
+    name = path.name.lower()
+    legacy_map = {
+        "speechon.mp3": "start.mp3",
+        "speechoff.mp3": "stop.mp3",
+    }
+
+    relative_candidates: list[Path] = [path]
+
+    if path.parent == Path("."):
+        relative_candidates.append(Path("assets") / path.name)
+
+    if name in legacy_map:
+        relative_candidates.append(Path("assets") / legacy_map[name])
+
+    for root in _candidate_project_roots():
+        for relative in relative_candidates:
+            candidate = root / relative
+            if candidate.exists():
+                return candidate
+        dist_assets = root / "dist" / "start_client_gui" / "_internal" / "assets"
+        if name in legacy_map:
+            candidate = dist_assets / legacy_map[name]
+            if candidate.exists():
+                return candidate
+        candidate = dist_assets / path.name
+        if candidate.exists():
+            return candidate
+
+    return None
+
+
+def _resolve_ffplay_exe() -> str | None:
+    if ffplay := shutil.which("ffplay"):
+        return ffplay
+
+    for root in _candidate_project_roots():
+        for candidate in (root / "ffplay.exe", root / "bin" / "ffplay.exe"):
+            if candidate.exists():
+                return str(candidate)
+
+    return None
+
+
+def _fallback_beep():
+    try:
+        import winsound
+
+        winsound.MessageBeep(winsound.MB_ICONASTERISK)
+    except Exception:
+        pass
 
 
 def play_music(file_path: Path, volume_level: str = "50"):
@@ -63,7 +133,29 @@ def play_music(file_path: Path, volume_level: str = "50"):
     import subprocess
     import threading
 
-    command = ["ffplay", "-volume", volume_level, "-autoexit", str(file_path)]
+    resolved_file = _resolve_audio_file(file_path)
+    ffplay_exe = _resolve_ffplay_exe()
+
+    if not resolved_file:
+        console.print(f"提示音文件不存在: {file_path}，改为系统提示音。")
+        _fallback_beep()
+        return
+
+    if not ffplay_exe:
+        console.print("未找到 ffplay.exe，改为系统提示音。")
+        _fallback_beep()
+        return
+
+    command = [
+        ffplay_exe,
+        "-nodisp",
+        "-v",
+        "quiet",
+        "-volume",
+        str(volume_level),
+        "-autoexit",
+        str(resolved_file),
+    ]
     startupinfo = subprocess.STARTUPINFO()
     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     startupinfo.wShowWindow = subprocess.SW_HIDE
@@ -78,9 +170,11 @@ def play_music(file_path: Path, volume_level: str = "50"):
             )
         ).start()
     except FileNotFoundError:
-        console.print("ffplay.exe未找到，请确保它在PATH中或提供完整路径。")
+        console.print("ffplay.exe 未找到，改为系统提示音。")
+        _fallback_beep()
     except Exception as e:
         console.print(f"发生错误: {e}")
+        _fallback_beep()
 
 
 if __name__ == "__main__":
