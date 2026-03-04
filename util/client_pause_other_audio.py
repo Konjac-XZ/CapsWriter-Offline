@@ -4,9 +4,12 @@ def audio_playering_app_name():
     sessions = AudioUtilities.GetAllSessions()
     for session in sessions:
         if session.Process:
-            process_name = session.Process.name()
-            meter = session._ctl.QueryInterface(IAudioMeterInformation)
-            peak_value = meter.GetPeakValue()
+            try:
+                process_name = session.Process.name()
+                meter = session._ctl.QueryInterface(IAudioMeterInformation)
+                peak_value = meter.GetPeakValue()
+            except Exception:
+                continue
             if peak_value > 0:  # 如果峰值电平大于 0，表示正在播放音频
                 # print(f"Process Name: {process_name}, Peak Value: {peak_value}")
                 return process_name
