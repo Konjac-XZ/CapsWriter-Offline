@@ -115,6 +115,9 @@ def _log_polish_keys(loaded: dict[str, str]) -> None:
             "LLM_POLISH_TIMEOUT",
             "LLM_POLISH_TEMPERATURE",
             "LLM_POLISH_MAX_OUTPUT_TOKENS",
+            "LLM_POLISH_TEXTBOX_CONTEXT_ENABLED",
+            "LLM_POLISH_TEXTBOX_CONTEXT_MAX_CHARS",
+            "LLM_POLISH_TEXTBOX_CONTEXT_CLIPBOARD_FALLBACK",
         )
         if k in loaded
     ]
