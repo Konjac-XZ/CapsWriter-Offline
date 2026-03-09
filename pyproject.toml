@@ -27,6 +27,7 @@ dependencies = [
     "replicate==0.31.0",
     "PyYAML==6.0.2",
     "dashscope>=1.25.3",
+    "cn2an>=0.5.23",
 ]
 
 [dependency-groups]

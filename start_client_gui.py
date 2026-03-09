@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Queue
-from dotenv import load_dotenv, find_dotenv, dotenv_values
+from util.env_loader import load_dotenv_files
 
 # Project root is the directory containing this script; normalize CWD for reliability
 # When running from PyInstaller, ROOT points to the exe's directory (repo root)
@@ -31,12 +31,7 @@ except Exception:
 
 # Always reload latest .env on startup; prefer files next to this script
 try:
-    env_file = ROOT / ".env"
-    if env_file.exists():
-        load_dotenv(str(env_file), override=True)
-    env_local_file = ROOT / ".env.local"
-    if env_local_file.exists():
-        load_dotenv(str(env_local_file), override=True)
+    load_dotenv_files()
 except Exception:
     # Don't block startup on dotenv issues
     pass

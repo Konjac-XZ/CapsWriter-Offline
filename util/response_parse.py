@@ -35,6 +35,35 @@ def _extract_text_from_obj(obj: Any) -> Optional[str]:
         if isinstance(obj.get("text"), str):
             return obj["text"]
 
+        # OpenAI Responses API convenience field
+        if isinstance(obj.get("output_text"), str):
+            return obj["output_text"]
+
+        # OpenAI Responses API nested output items
+        try:
+            output = obj.get("output")
+            if isinstance(output, list):
+                text_parts: list[str] = []
+                for item in output:
+                    if not isinstance(item, dict):
+                        continue
+                    content = item.get("content")
+                    if not isinstance(content, list):
+                        continue
+                    for part in content:
+                        if not isinstance(part, dict):
+                            continue
+                        part_type = part.get("type")
+                        if part_type not in (None, "output_text", "text"):
+                            continue
+                        part_text = part.get("text")
+                        if isinstance(part_text, str) and part_text:
+                            text_parts.append(part_text)
+                if text_parts:
+                    return "".join(text_parts)
+        except Exception:
+            pass
+
         # Fallbacks seen across providers
         # choices[0].delta.content (SSE-like)
         try:
@@ -57,6 +86,26 @@ def _extract_text_from_obj(obj: Any) -> Optional[str]:
             content = obj["message"].get("content")
             if isinstance(content, str):
                 return content
+        except Exception:
+            pass
+
+        # choices[0].message.content as string or parts
+        try:
+            content = obj["choices"][0]["message"].get("content")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                text_parts = []
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    part_type = part.get("type")
+                    if part_type not in (None, "output_text", "text"):
+                        continue
+                    if isinstance(part.get("text"), str):
+                        text_parts.append(part["text"])
+                if text_parts:
+                    return "".join(text_parts)
         except Exception:
             pass
 

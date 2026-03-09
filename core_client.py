@@ -15,8 +15,14 @@ from typing import List
 import colorama
 import typer
 
+from util.env_loader import load_dotenv_files
 from util.client_cosmic import Cosmic, console
 from util.config import ClientConfig as Config
+
+try:
+    load_dotenv_files()
+except Exception:
+    pass
 
 if sys.argv[1:]:
     Cosmic.transcribe_subtitles = True

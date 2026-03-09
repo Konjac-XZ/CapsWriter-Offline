@@ -1,6 +1,8 @@
 import opencc
 import pangu
+from util.chinese_itn import chinese_to_num
 from util.client_cosmic import Cosmic, console
+from util.client_llm_polish import polish_text
 from util.client_regex_replace import regex_replace
 from util.client_rename_audio import rename_audio
 from util.client_strip_punc import strip_punc
@@ -54,8 +56,15 @@ async def recv_result():
             if not (is_stream and not is_final):
                 text = strip_punc(text)
 
+            # 最终结果可选走一次 LLM 润色；保持在正则替换与空白格式化之前
+            if is_final:
+                text = await polish_text(text)
+
             # 正则替换（在 strip_punc 之后、pangu / opencc 之前执行）
             text = regex_replace(text)
+
+            # # 中文数字 ITN（在正则替换之后、空白格式化之前执行）
+            # text = chinese_to_num(text)
 
             # 简繁转换
             convert_to_traditional_chinese_done = False

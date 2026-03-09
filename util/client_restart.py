@@ -1,65 +1,10 @@
 import os
-import re
 import subprocess
 from pathlib import Path
 from time import sleep
 
 from util.check_process import check_process
-
-
-def load_dotenv_files():
-    """Load .env and .env.local from the repository root into os.environ.
-
-    This is a simple loader that supports lines like KEY=VALUE, with optional
-    single or double quotes around the value. Lines beginning with # and empty
-    lines are ignored. .env.local overrides .env when both exist.
-    """
-    root = Path(__file__).resolve().parent.parent
-    candidates = [root / ".env", root / ".env.local"]
-    loaded = {}
-
-    for path in candidates:
-        if not path.exists():
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except Exception:
-            # fallback to default encoding
-            text = path.read_text()
-
-        for raw_line in text.splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if "=" not in line:
-                continue
-            key, val = line.split("=", 1)
-            key = key.strip()
-            val = val.strip()
-
-            # If quoted, remove surrounding quotes and keep interior characters as-is
-            if (val.startswith('"') and val.endswith('"')) or (
-                val.startswith("'") and val.endswith("'")
-            ):
-                val = val[1:-1]
-            else:
-                # remove inline comments after unquoted value
-                if "#" in val:
-                    val = val.split("#", 1)[0].strip()
-
-            # Expand simple variable references like $VAR or ${VAR}
-            def _replace_var(m):
-                name = m.group(1) or m.group(2)
-                return os.environ.get(name, "")
-
-            val = re.sub(r"\$(?:{([^}]+)}|([A-Za-z_][A-Za-z0-9_]*))", _replace_var, val)
-
-            os.environ[key] = val
-            loaded[key] = val
-
-    if loaded:
-        print(f"Loaded env vars: {', '.join(loaded.keys())}")
-    return loaded
+from util.env_loader import load_dotenv_files
 
 
 def stop_exe(exe_name: str):

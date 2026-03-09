@@ -104,6 +104,18 @@ Launcher behavior: before starting, it terminates any existing running `start_cl
 - Providers: Edit YAML files in `config/providers/`
 - Gemini: Fill `config/providers/gemini.yaml` (or set `GEMINI_API_KEY`/`GOOGLE_API_KEY`) and enable the provider before use
 - Client settings: Edit `config.toml`
+- Optional LLM polishing: create a `.env` or `.env.local` file in the repo root with:
+   ```env
+   LLM_POLISH_ENABLED=1
+   LLM_POLISH_BASE_URL=https://api.openai.com
+   LLM_POLISH_API_KEY=your_key_here
+   LLM_POLISH_MODEL=gpt-4.1-mini
+   # Optional
+   # LLM_POLISH_TIMEOUT=8
+   # LLM_POLISH_TEMPERATURE=0.1
+   # LLM_POLISH_MAX_OUTPUT_TOKENS=512
+   ```
+   This feature uses the OpenAI-compatible Responses API in non-streaming mode and runs before regex replacement and whitespace reformatting in the live microphone pipeline.
 - Use `python provider_switch.py --list` to see available providers
 
 ## Documentation
