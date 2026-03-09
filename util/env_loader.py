@@ -106,29 +106,16 @@ def load_dotenv_files() -> dict[str, str]:
 
 
 def _log_polish_keys(loaded: dict[str, str]) -> None:
-    polish_keys = [
-        k for k in (
-            "LLM_POLISH_ENABLED",
-            "LLM_POLISH_BASE_URL",
-            "LLM_POLISH_API_KEY",
-            "LLM_POLISH_MODEL",
-            "LLM_POLISH_TIMEOUT",
-            "LLM_POLISH_TEMPERATURE",
-            "LLM_POLISH_MAX_OUTPUT_TOKENS",
-            "LLM_POLISH_TEXTBOX_CONTEXT_ENABLED",
-            "LLM_POLISH_TEXTBOX_CONTEXT_MAX_CHARS",
-            "LLM_POLISH_TEXTBOX_CONTEXT_CLIPBOARD_FALLBACK",
-        )
-        if k in loaded
-    ]
-    if polish_keys:
+    # Only the credentials remain in .env; all other settings live in config/polish/polish.yaml
+    cred_keys = [k for k in ("LLM_POLISH_BASE_URL", "LLM_POLISH_API_KEY") if k in loaded]
+    if cred_keys:
         # Mask the API key value
         def _mask(k: str) -> str:
             v = loaded[k]
             if k == "LLM_POLISH_API_KEY" and len(v) > 6:
                 return v[:4] + "****" + v[-2:]
             return v
-        pairs = ", ".join(f"{k}={_mask(k)}" for k in polish_keys)
-        print(f"[env_loader] LLM 润色相关变量：{pairs}")
+        pairs = ", ".join(f"{k}={_mask(k)}" for k in cred_keys)
+        print(f"[env_loader] LLM 润色凭据：{pairs}（其他配置见 config/polish/polish.yaml）")
     else:
-        print("[env_loader] 未检测到 LLM_POLISH_* 变量（润色功能默认关闭）。")
+        print("[env_loader] 未检测到 LLM_POLISH_BASE_URL / LLM_POLISH_API_KEY（润色功能不可用）。")
