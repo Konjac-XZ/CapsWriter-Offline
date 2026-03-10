@@ -1,3 +1,5 @@
+import os
+import time
 import opencc
 import pangu
 from util.chinese_itn import chinese_to_num
@@ -43,6 +45,7 @@ async def recv_result():
             message = await Cosmic.queue_out.get()
             Cosmic.queue_out.task_done()
             text = message.get("text", "")
+            raw_asr = text  # ← 保存 ASR 接口返回的原始文本（润色前）
             delay = message.get("time_complete", 0) - message.get("time_submit", 0)
             if delay < 0 or delay > 600:
                 # 防御性：若时间源混乱，避免显示荒谬时延
@@ -58,7 +61,11 @@ async def recv_result():
 
             # 最终结果可选走一次 LLM 润色；保持在正则替换与空白格式化之前
             if is_final:
+                console.print(f"ASR 原文：{raw_asr}", soft_wrap=True)
+                _t_polish = time.monotonic()
                 text = await polish_text(text)
+                _polish_elapsed = time.monotonic() - _t_polish
+                console.print(f"润色耗时：{_polish_elapsed:.2f}s", style="dim")
 
             # 正则替换（在 strip_punc 之后、pangu / opencc 之前执行）
             text = regex_replace(text)
@@ -98,7 +105,7 @@ async def recv_result():
                 text = _ensure_end_punctuation(text)
                 console.print(f"转录时延：{delay:.2f}s")
                 dbg = message.get("debug_timing")
-                if False:
+                if os.getenv("CAPSWRITER_DEBUG_TIMING"):
                     console.print(
                         (
                             f" 阶段: 队列等待 {dbg.get('queue_delay_ms', 0):.0f}ms | "

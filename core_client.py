@@ -1,4 +1,5 @@
 # coding: utf-8
+import contextlib
 import sys, importlib.util, platform
 print(sys.executable, sys.version, platform.architecture())
 print(importlib.util.find_spec('_cffi_backend'))
@@ -32,6 +33,7 @@ from util.client_recv_result import recv_result
 from util.client_shortcut_handler import bond_shortcut
 from util.client_stream import stream_close, stream_open
 from util.client_transcribe import transcribe_check, transcribe_recv, transcribe_send
+from util.client_vision_context import start_vision_context_service, stop_vision_context_service
 from util.empty_working_set import empty_current_working_set
 
 # 确保根目录位置正确，用相对路径加载模型
@@ -56,6 +58,7 @@ async def main_mic():
     Cosmic.loop = asyncio.get_event_loop()
     Cosmic.queue_in = asyncio.Queue()
     Cosmic.queue_out = asyncio.Queue()
+    vision_task = None
 
     # 打开音频流
     Cosmic.stream = stream_open()
@@ -70,8 +73,15 @@ async def main_mic():
     if system() == "Windows":
         empty_current_working_set()
 
-    while True:
-        await recv_result()
+    vision_task = start_vision_context_service()
+
+    try:
+        while True:
+            await recv_result()
+    finally:
+        if vision_task is not None:
+            with contextlib.suppress(Exception):
+                await stop_vision_context_service(vision_task)
 
 
 def init_mic():

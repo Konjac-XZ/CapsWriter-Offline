@@ -93,7 +93,7 @@ def load_dotenv_files() -> dict[str, str]:
             f"[env_loader] 已通过 python-dotenv 加载 {len(loaded)} 个变量"
             f"（文件：{', '.join(found_files)}）"
         )
-        _log_polish_keys(loaded)
+        _log_llm_keys(loaded)
         return loaded
 
     loaded = _load_manually(root)
@@ -101,21 +101,42 @@ def load_dotenv_files() -> dict[str, str]:
         f"[env_loader] 已手动解析 {len(loaded)} 个变量"
         f"（文件：{', '.join(found_files)}）"
     )
-    _log_polish_keys(loaded)
+    _log_llm_keys(loaded)
     return loaded
 
 
-def _log_polish_keys(loaded: dict[str, str]) -> None:
+def _log_llm_keys(loaded: dict[str, str]) -> None:
+    _log_provider_keys(
+        loaded,
+        prefix="LLM_POLISH",
+        label="LLM 润色",
+        config_path="config/polish/polish.yaml",
+    )
+    _log_provider_keys(
+        loaded,
+        prefix="LLM_VISION",
+        label="视觉上下文",
+        config_path="config/polish/vision.yaml",
+    )
+
+
+def _log_provider_keys(
+    loaded: dict[str, str],
+    *,
+    prefix: str,
+    label: str,
+    config_path: str,
+) -> None:
     # Only the credentials remain in .env; all other settings live in config/polish/polish.yaml
-    cred_keys = [k for k in ("LLM_POLISH_BASE_URL", "LLM_POLISH_API_KEY") if k in loaded]
+    cred_keys = [k for k in (f"{prefix}_BASE_URL", f"{prefix}_API_KEY") if k in loaded]
     if cred_keys:
         # Mask the API key value
         def _mask(k: str) -> str:
             v = loaded[k]
-            if k == "LLM_POLISH_API_KEY" and len(v) > 6:
+            if k.endswith("_API_KEY") and len(v) > 6:
                 return v[:4] + "****" + v[-2:]
             return v
         pairs = ", ".join(f"{k}={_mask(k)}" for k in cred_keys)
-        print(f"[env_loader] LLM 润色凭据：{pairs}（其他配置见 config/polish/polish.yaml）")
+        print(f"[env_loader] {label}凭据：{pairs}（其他配置见 {config_path}）")
     else:
-        print("[env_loader] 未检测到 LLM_POLISH_BASE_URL / LLM_POLISH_API_KEY（润色功能不可用）。")
+        print(f"[env_loader] 未检测到 {prefix}_BASE_URL / {prefix}_API_KEY（{label}功能不可用）。")

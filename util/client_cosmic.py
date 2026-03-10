@@ -97,3 +97,6 @@ class Cosmic:
     opposite_state = False
     # Whether we've already shown the non-USB-device warning during this run
     usb_warning_shown = False
+    vision_context = {}
+    vision_context_task = None
+    vision_context_last_error = None

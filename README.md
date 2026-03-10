@@ -118,7 +118,7 @@ Launcher behavior: before starting, it terminates any existing running `start_cl
    # LLM_POLISH_TEXTBOX_CONTEXT_MAX_CHARS=4096
    # LLM_POLISH_TEXTBOX_CONTEXT_CLIPBOARD_FALLBACK=0
    ```
-   This feature uses the OpenAI-compatible Responses API in non-streaming mode and runs before regex replacement and whitespace reformatting in the live microphone pipeline.
+   This feature uses the OpenAI-compatible Chat Completions API in non-streaming mode and runs before regex replacement and whitespace reformatting in the live microphone pipeline.
    When `LLM_POLISH_TEXTBOX_CONTEXT_ENABLED=1`, it also tries to read the currently focused Windows text box and sends a truncated snapshot as an extra reference message. `LLM_POLISH_TEXTBOX_CONTEXT_CLIPBOARD_FALLBACK=1` enables a more intrusive copy-based fallback for apps that do not expose text through standard window messages.
 - Use `python provider_switch.py --list` to see available providers
 
