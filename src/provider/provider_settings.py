@@ -93,11 +93,16 @@ def get_int(key: str, env: str | Iterable[str] | None = None, default: int | Non
 
 
 def get_prompt() -> str:
+    from src.infra.user_lexicon import get_hot_word_block  # local import to avoid circular deps
+
     if provider_manager is not None:
         try:
             p = provider_manager.get_provider_prompt()
             if isinstance(p, str) and p.strip():
-                return p
+                return p + get_hot_word_block()
         except Exception:
             pass
-    return os.getenv("TRANSCRIBE_PROMPT", "")
+    base = os.getenv("TRANSCRIBE_PROMPT", "")
+    if base:
+        return base + get_hot_word_block()
+    return base

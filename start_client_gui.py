@@ -256,6 +256,41 @@ class PromptEditDialog(QDialog):
         return self.text_edit.toPlainText()
 
 
+class LexiconEditDialog(QDialog):
+    """Dialog for editing the user lexicon (config/user_lexicon.yaml)."""
+
+    def __init__(self, parent: QWidget | None = None, *, initial_text: str = ""):
+        super().__init__(parent)
+        self.setWindowTitle("编辑用户词库")
+        self.resize(420, 360)
+
+        layout = QVBoxLayout(self)
+
+        hint = QLabel(
+            "每行一个词条（YAML 格式）。保存后无需重启，下次录音自动生效。",
+            self,
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self.text_edit = QPlainTextEdit(self)
+        self.text_edit.setPlainText(initial_text)
+        layout.addWidget(self.text_edit)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel, parent=self)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        try:
+            buttons.button(QDialogButtonBox.Save).setText("保存")
+            buttons.button(QDialogButtonBox.Cancel).setText("取消")
+        except Exception:
+            pass
+        layout.addWidget(buttons)
+
+    def lexicon_text(self) -> str:
+        return self.text_edit.toPlainText()
+
+
 class GUI(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -507,7 +542,13 @@ class GUI(QMainWindow):
         self.modify_prompt_button.setToolTip("编辑当前服务商的自定义提示词")
         self.modify_prompt_button.clicked.connect(self.show_modify_prompt_dialog)
         self.modify_prompt_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.edit_lexicon_button = QPushButton("编辑词库")
+        self.edit_lexicon_button.setMinimumWidth(80)
+        self.edit_lexicon_button.setToolTip("编辑用户自定义词库（config/user_lexicon.yaml）")
+        self.edit_lexicon_button.clicked.connect(self.show_edit_lexicon_dialog)
+        self.edit_lexicon_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.model_row.addWidget(self.modify_prompt_button)
+        self.model_row.addWidget(self.edit_lexicon_button)
         self.model_row.addWidget(self.test_all_button)
         self.model_row.addStretch()
 
@@ -709,6 +750,45 @@ class GUI(QMainWindow):
             self.append_colored_line("已保存自定义提示词。")
         else:
             self.append_colored_line("已清除自定义提示词，恢复为预设/默认值。")
+
+    def show_edit_lexicon_dialog(self) -> None:
+        """Open the user lexicon editor and persist any changes."""
+        import sys
+        from pathlib import Path
+
+        if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+            root = Path(sys.executable).resolve().parent
+        else:
+            root = Path(__file__).resolve().parent
+
+        lexicon_path = root / "config" / "user_lexicon.yaml"
+
+        try:
+            initial_text = lexicon_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            initial_text = "words: []\n"
+        except Exception as exc:
+            self.append_colored_line(f"读取用户词库失败：{exc}", "#ff5555")
+            return
+
+        dialog = LexiconEditDialog(self, initial_text=initial_text)
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        new_text = dialog.lexicon_text()
+        try:
+            import yaml  # validate YAML before saving
+            yaml.safe_load(new_text)
+        except Exception as exc:
+            self.append_colored_line(f"用户词库 YAML 格式错误，未保存：{exc}", "#ff5555")
+            return
+
+        try:
+            lexicon_path.parent.mkdir(parents=True, exist_ok=True)
+            lexicon_path.write_text(new_text, encoding="utf-8")
+            self.append_colored_line("用户词库已保存，下次录音自动生效。")
+        except Exception as exc:
+            self.append_colored_line(f"保存用户词库失败：{exc}", "#ff5555")
 
     def on_prompt_changed(self, index: int):
         """Handle prompt preset selection change and persist."""
