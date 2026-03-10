@@ -15,13 +15,13 @@ Guidance for Claude Code (claude.ai/code) when working inside this fork of CapsW
 ### Active Components
 - `start_client_gui.py` / `start_client_gui.exe` – main Qt GUI.
 - `core_client.py` – CLI client that shares the same pipeline; preferred for debugging.
-- `util/client_*`, `util/openai_transcribe_*`, `util/transcribe/api.py` – audio capture, payload building, provider dispatch, output typing.
-- Provider system (`config/providers/*.yaml`, `util/provider_config.py`, `provider_switch.py`).
+- `src/client_*`, `src/openai_transcribe_*`, `src/transcribe/api.py` – audio capture, payload building, provider dispatch, output typing.
+- Provider system (`config/providers/*.yaml`, `src/provider_config.py`, `provider_switch.py`).
 - `config.toml` (client section) – hotkeys, audio saving, clipboard behaviour, etc. The server section is vestigial and slated for removal.
 - `edit_config_gui.py` – GUI wrapper around provider/model settings. The old client configuration page was deleted; tweak client defaults directly in `config.toml` for now.
 
 ### Removed / Legacy Items
-- `core_server.py`, `start_server_gui.py`, and all `util/server_*` helpers – deleted.
+- `core_server.py`, `start_server_gui.py`, and all `src/server_*` helpers – deleted.
 - Translation and hotword modules, shortcuts, configuration toggles, and text assets – deleted.
 - Extra requirement files (`requirements-editconfiggui.txt`, `requirements-server.txt`) – deleted.
 - Historical docs, screenshots, and README – deleted.
@@ -29,15 +29,15 @@ Guidance for Claude Code (claude.ai/code) when working inside this fork of CapsW
 
 ## Core Functionality
 
-- **Audio capture:** Global hotkeys (CapsLock by default) trigger recordings via `util/client_shortcut_handler.py`. Drag-and-drop in the GUI or passing a file to `core_client.py` uploads audio files instead of live mic input.
-- **Cloud transcription:** Audio is converted with `util/openai_transcribe_audio.py` and submitted through `util/transcribe/api.py`, which routes to OpenAI-compatible, Replicate, ElevenLabs, Soniox, or Alibaba Cloud endpoints depending on the active provider.
-- **Text output:** Streaming updates appear in-console/GUI; final results are spaced with `pangu`, optional simplified↔traditional conversion happens in `util/client_recv_result.py`, and clipboard/cloud clipboard helpers live under `util/cloud_clipboard*.py`.
-- **Logging:** Optional audio file persistence and markdown journaling (`util/client_write_md.py`) remain available, though keyword diary logic was removed with hotwords.
+- **Audio capture:** Global hotkeys (CapsLock by default) trigger recordings via `src/client_shortcut_handler.py`. Drag-and-drop in the GUI or passing a file to `core_client.py` uploads audio files instead of live mic input.
+- **Cloud transcription:** Audio is converted with `src/openai_transcribe_audio.py` and submitted through `src/transcribe/api.py`, which routes to OpenAI-compatible, Replicate, ElevenLabs, Soniox, or Alibaba Cloud endpoints depending on the active provider.
+- **Text output:** Streaming updates appear in-console/GUI; final results are spaced with `pangu`, optional simplified↔traditional conversion happens in `src/client_recv_result.py`, and clipboard/cloud clipboard helpers live under `src/cloud_clipboard*.py`.
+- **Logging:** Optional audio file persistence and markdown journaling (`src/client_write_md.py`) remain available, though keyword diary logic was removed with hotwords.
 
 ## Configuration System
 
 - **Provider configs:** YAML files under `config/providers/` define API metadata, prompts, base URLs, and defaults per provider.
-- **Provider manager:** `util/provider_config.py` rewrites a `.provider_state.json` cache and sets environment variables so the client picks up the selected backend.
+- **Provider manager:** `src/provider_config.py` rewrites a `.provider_state.json` cache and sets environment variables so the client picks up the selected backend.
 - **`config.toml`:** Still supplies client UX defaults. Server keys are legacy; avoid touching them unless you are finishing their removal.
 - **Config editor:** `edit_config_gui.py` now presents provider/model pages only. Client settings must be edited manually until the editor is rebuilt.
 

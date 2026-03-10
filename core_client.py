@@ -16,9 +16,9 @@ from typing import List
 import colorama
 import typer
 
-from util.env_loader import load_dotenv_files
-from util.client_cosmic import Cosmic, console
-from util.config import ClientConfig as Config
+from src.infra.env_loader import load_dotenv_files
+from src.infra.cosmic import Cosmic, console
+from src.infra.config import ClientConfig as Config
 
 try:
     load_dotenv_files()
@@ -29,12 +29,12 @@ if sys.argv[1:]:
     Cosmic.transcribe_subtitles = True
 else:
     Cosmic.transcribe_subtitles = False
-from util.client_recv_result import recv_result
-from util.client_shortcut_handler import bond_shortcut
-from util.client_stream import stream_close, stream_open
-from util.client_transcribe import transcribe_check, transcribe_recv, transcribe_send
-from util.client_vision_context import start_vision_context_service, stop_vision_context_service
-from util.empty_working_set import empty_current_working_set
+from src.pipeline.recv_result import recv_result
+from src.keyboard.shortcut_handler import bond_shortcut
+from src.audio.stream import stream_close, stream_open
+from src.transcribe.transcribe import transcribe_check, transcribe_recv, transcribe_send
+from src.polish.vision_context import start_vision_context_service, stop_vision_context_service
+from src.system.empty_working_set import empty_current_working_set
 
 # 确保根目录位置正确，用相对路径加载模型
 BASE_DIR = os.getcwd()

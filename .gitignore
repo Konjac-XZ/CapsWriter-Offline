@@ -35,7 +35,7 @@ config_backup.toml
 
 # Keep these tracked
 !assets/
-!util/
+!src/
 !config/
 !*.py
 !*.toml

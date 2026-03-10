@@ -19,7 +19,7 @@ a = Analysis(
         ('assets', 'assets'),
         ('config', 'config'),
         ('config.toml', '.'),
-        ('util/client_gui_theme_custom.css', 'util'),
+        ('src/client_gui_theme_custom.css', 'src'),
     ],
     hiddenimports=[
         'PySide6.QtCore',

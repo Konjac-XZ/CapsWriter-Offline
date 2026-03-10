@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Queue
-from util.env_loader import load_dotenv_files
+from src.infra.env_loader import load_dotenv_files
 
 # Project root is the directory containing this script; normalize CWD for reliability
 # When running from PyInstaller, ROOT points to the exe's directory (repo root)
@@ -72,7 +72,7 @@ from PySide6.QtWidgets import (
 )
 # Intentionally defer theme import/application until after first paint for faster startup
 
-from util.config import ClientConfig as Config, ServerConfig
+from src.infra.config import ClientConfig as Config, ServerConfig
 
 def _resolve_pythonw_client() -> str | None:
     """Return a usable Python interpreter for client child processes.
@@ -287,7 +287,7 @@ class GUI(QMainWindow):
         """Initialize transcription provider configurations."""
         try:
             self.log_message("正在加载转录服务商配置...")
-            from util.provider_config import provider_manager
+            from src.provider.provider_config import provider_manager
             self.provider_manager = provider_manager
             self.provider_manager.load_providers()
 
@@ -531,7 +531,7 @@ class GUI(QMainWindow):
             # Load preset names from provider manager
             presets = {}
             try:
-                from util.provider_config import provider_manager as _pm
+                from src.provider.provider_config import provider_manager as _pm
                 if hasattr(_pm, "list_prompt_presets"):
                     presets = _pm.list_prompt_presets() or {}
             except Exception:
@@ -617,7 +617,7 @@ class GUI(QMainWindow):
             pass
 
         try:
-            from util.provider_config import prompt_manager as _prompt_manager
+            from src.provider.provider_config import prompt_manager as _prompt_manager
 
             default_text = _prompt_manager.get_default_prompt_text()
             if isinstance(default_text, str):
@@ -943,7 +943,7 @@ class GUI(QMainWindow):
         """Run availability test in a separate thread."""
         try:
             # Import and run the test
-            from util.provider_availability_test import run_availability_test
+            from src.provider.availability_test import run_availability_test
 
             # Create a new event loop for this thread
             loop = asyncio.new_event_loop()
@@ -953,7 +953,7 @@ class GUI(QMainWindow):
                 results = loop.run_until_complete(run_availability_test(test_audio_path))
 
                 # Format and display results
-                from util.provider_availability_test import ProviderAvailabilityTester
+                from src.provider.availability_test import ProviderAvailabilityTester
                 tester = ProviderAvailabilityTester(test_audio_path)
                 formatted_results = tester.format_results(results)
 
@@ -1051,7 +1051,7 @@ class GUI(QMainWindow):
 
                     # Show resolved prompt (inline, preset, or global default)
                     try:
-                        from util.provider_config import provider_manager as _pm
+                        from src.provider.provider_config import provider_manager as _pm
                         resolved_prompt = _pm.get_provider_prompt()
                     except Exception:
                         resolved_prompt = active.settings.get("prompt")
@@ -1128,7 +1128,7 @@ class GUI(QMainWindow):
             if exe is None:
                 self.text_box_client.append("无法启动测试：未找到可用的 Python 运行时。")
                 return
-            script = ROOT / "util" / "run_provider_availability_test.py"
+            script = ROOT / "src" / "run_provider_availability_test.py"
             if not script.exists():
                 self.text_box_client.append("找不到测试脚本：util/run_provider_availability_test.py")
                 return
@@ -1195,7 +1195,7 @@ class GUI(QMainWindow):
             DETACHED_PROCESS = 0x00000008
             CREATE_NEW_PROCESS_GROUP = 0x00000200
             subprocess.Popen(
-                [exe, str(ROOT / "util" / "client_restart.py")],
+                [exe, str(ROOT / "src" / "client_restart.py")],
                 creationflags=(subprocess.CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -1350,7 +1350,7 @@ class GUI(QMainWindow):
         while not self.output_queue_client.empty():
             try:
                 line = self.output_queue_client.get()
-                # Support structured GUI messages emitted by util.gui_output.gui_print
+                # Support structured GUI messages emitted by src.gui_output.gui_print
                 try:
                     if isinstance(line, str) and line.startswith("CW_GUI:"):
                         import json
@@ -1518,7 +1518,7 @@ def _apply_theme_later(app: QApplication) -> None:
     def do_apply():
         try:
             apply_stylesheet(
-                app, theme="dark_teal.xml", css_file=str(BUNDLE_ROOT / "util" / "client_gui_theme_custom.css")
+                app, theme="dark_teal.xml", css_file=str(BUNDLE_ROOT / "src" / "client_gui_theme_custom.css")
             )
         except Exception:
             pass

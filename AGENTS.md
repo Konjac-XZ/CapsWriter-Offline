@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 - `core_server.py` runs the speech-to-text back-end, while `core_client.py` and `start_client_gui*.py` expose CLI and GUI clients for keyboard-driven capture.
-- Reusable logic lives in `util/` (websocket streams, GUI/helpers, clipboard integrations); extend these modules first when adding shared behavior.
+- Reusable logic lives in `src/` (websocket streams, GUI/helpers, clipboard integrations); extend these modules first when adding shared behavior.
 - Configuration defaults sit in `config.toml` and supporting schemas under `config/`; UI art and documentation assets live in `assets/`.
 - Models and cached downloads live under `models/` and `downloads/`; keep large binaries out of commits unless intentionally updated.
 
@@ -19,7 +19,7 @@
 
 ## Testing Guidelines
 - Use `python test_replicate.py <audio>` to exercise external provider uploads; mock network calls when promoting these flows to automated tests.
-- Place new automated checks in `tests/` and target async flows with `pytest` plus `pytest-asyncio`; mirror filenames from `util/` for traceability.
+- Place new automated checks in `tests/` and target async flows with `pytest` plus `pytest-asyncio`; mirror filenames from `src/` for traceability.
 - Verify GUI edits by running `start_client_gui.py`, then capture before/after screenshots of modified dialogs.
 
 ## Commit & Pull Request Guidelines
