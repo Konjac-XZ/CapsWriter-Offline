@@ -94,7 +94,7 @@ def load_dotenv_files() -> dict[str, str]:
             f"[env_loader] 已通过 python-dotenv 加载 {len(loaded)} 个变量"
             f"（文件：{', '.join(found_files)}）"
         )
-        _log_llm_keys(loaded)
+        # _log_llm_keys(loaded)
         return loaded
 
     loaded = _load_manually(root)
@@ -102,7 +102,7 @@ def load_dotenv_files() -> dict[str, str]:
         f"[env_loader] 已手动解析 {len(loaded)} 个变量"
         f"（文件：{', '.join(found_files)}）"
     )
-    _log_llm_keys(loaded)
+    # _log_llm_keys(loaded)
     return loaded
 
 

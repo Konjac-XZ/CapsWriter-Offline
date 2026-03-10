@@ -65,7 +65,7 @@ async def recv_result():
                 _t_polish = time.monotonic()
                 text = await polish_text(text)
                 _polish_elapsed = time.monotonic() - _t_polish
-                console.print(f"润色耗时：{_polish_elapsed:.2f}s", style="dim")
+                console.print(f"润色时延：{_polish_elapsed:.2f}s", style="dim")
 
             # 正则替换（在 strip_punc 之后、pangu / opencc 之前执行）
             text = regex_replace(text)

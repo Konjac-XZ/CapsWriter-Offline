@@ -34,13 +34,13 @@ def _load_polish_config() -> dict:
         return yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     except FileNotFoundError:
         console.print(
-            f"[llm_polish] 配置文件未找到：{config_path}，使用内置默认值。",
+            f"[LLM 润色] 配置文件未找到：{config_path}，使用内置默认值。",
             style="yellow",
         )
         return {}
     except Exception as exc:
         console.print(
-            f"[llm_polish] 配置文件加载失败：{exc}，使用内置默认值。",
+            f"[LLM 润色] 配置文件加载失败：{exc}，使用内置默认值。",
             style="yellow",
         )
         return {}
@@ -185,10 +185,10 @@ async def polish_text(text: str) -> str:
     if not _feature_state_logged:
         enabled = is_llm_polish_enabled()
         if enabled:
-            console.print("[llm_polish] 功能已启用（config: enabled=true）。", style="dim")
+            console.print("[LLM 润色] 功能已启用（config: enabled=true）。", style="dim")
         else:
             console.print(
-                "[llm_polish] 配置中 enabled=false，润色功能已跳过。",
+                "[LLM 润色] 配置中 enabled=false，润色功能已跳过。",
                 style="dim",
             )
         _feature_state_logged = True
@@ -225,7 +225,7 @@ async def polish_text(text: str) -> str:
                 if not v
             ]
             console.print(
-                f"[llm_polish] 配置不完整，跳过润色。缺少：{', '.join(missing)}",
+                f"[LLM 润色] 配置不完整，跳过润色。缺少：{', '.join(missing)}",
                 style="yellow",
             )
             _missing_config_warned = True
@@ -247,23 +247,20 @@ async def polish_text(text: str) -> str:
             )
             console.print(
                 (
-                    "[llm_polish] 已附加文本框上下文"
-                    f" source={captured.source} len={len(textbox_context)}"
-                    f" truncated={'yes' if was_truncated else 'no'}"
-                    f" class={captured.class_name or 'unknown'}"
+                    "[LLM 润色] 已附加文本框上下文"
                 ),
                 style="dim",
             )
         else:
             console.print(
-                "[llm_polish] 未能读取当前文本框上下文，继续仅使用 ASR 原文。",
+                "[LLM 润色] 未能读取当前文本框上下文，继续仅使用 ASR 原文。",
                 style="dim",
             )
 
     vision_context = get_recent_vision_context_summary()
     if vision_context:
         console.print(
-            f"[llm_polish] 已附加视觉上下文 len={len(vision_context)}",
+            f"[LLM 润色] 已附加视觉上下文 len={len(vision_context)}",
             style="dim",
         )
 
@@ -287,8 +284,8 @@ async def polish_text(text: str) -> str:
     url = _build_url(base_url)
     console.print(
         (
-            f"[llm_polish] 发送润色请求 -> {url}  model={model}"
-            f"  输入长度={len(text)}  extra_context={'yes' if has_extra_context else 'no'}"
+            f"[LLM 润色] 发送润色请求"
+            f"  输入长度={len(text)}  {'额外上下文已启用' if has_extra_context else '无额外上下文'}"
         ),
         style="dim",
     )
@@ -299,7 +296,7 @@ async def polish_text(text: str) -> str:
             response = await client.post(url, headers=headers, json=body)
         _http_elapsed = time.monotonic() - _t_http
         console.print(
-            f"[llm_polish] 响应状态：{response.status_code}  耗时={_http_elapsed:.2f}s",
+            f"[LLM 润色] 响应状态：{response.status_code}  耗时={_http_elapsed:.2f}s",
             style="dim",
         )
         if response.status_code >= 400:
@@ -309,7 +306,7 @@ async def polish_text(text: str) -> str:
             except Exception:
                 detail = response.text.strip() or None
             console.print(
-                f"[llm_polish] 润色请求失败：{response.status_code} {detail or ''}".rstrip(),
+                f"[LLM 润色] 润色请求失败：{response.status_code} {detail or ''}".rstrip(),
                 style="yellow",
             )
             return text
@@ -323,22 +320,22 @@ async def polish_text(text: str) -> str:
         polished = extract_text_from_body(body_text)
         if isinstance(polished, str) and polished.strip():
             # console.print(
-            #     f"[llm_polish] 润色完成，HTTP 耗时={_http_elapsed:.2f}s  输入长度={len(text)}  输出长度={len(polished.strip())}",
+            #     f"[LLM 润色] 润色完成，HTTP 耗时={_http_elapsed:.2f}s  输入长度={len(text)}  输出长度={len(polished.strip())}",
             #     style="dim",
             # )
             return polished.strip()
 
         console.print(
-            f"[llm_polish] 润色响应未提取到文本，原始正文（前 400 字符）：{body_text[:400]}",
+            f"[LLM 润色] 润色响应未提取到文本，原始正文（前 400 字符）：{body_text[:400]}",
             style="yellow",
         )
         return text
     except httpx.TimeoutException as exc:
         console.print(
-            f"[llm_polish] 润色请求超时（timeout={timeout_s}s）：{exc}",
+            f"[LLM 润色] 润色请求超时（timeout={timeout_s}s）：{exc}",
             style="yellow",
         )
         return text
     except Exception as exc:
-        console.print(f"[llm_polish] 润色异常：{type(exc).__name__}: {exc}", style="yellow")
+        console.print(f"[LLM 润色] 润色异常：{type(exc).__name__}: {exc}", style="yellow")
         return text
