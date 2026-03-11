@@ -104,22 +104,14 @@ Launcher behavior: before starting, it terminates any existing running `start_cl
 - Providers: Edit YAML files in `config/providers/`
 - Gemini: Fill `config/providers/gemini.yaml` (or set `GEMINI_API_KEY`/`GOOGLE_API_KEY`) and enable the provider before use
 - Client settings: Edit `config.toml`
-- Optional LLM polishing: create a `.env` or `.env.local` file in the repo root with:
+- Optional LLM polishing: set `LLM_POLISH_BASE_URL` and `LLM_POLISH_API_KEY` in a `.env` or `.env.local` file in the repo root, then edit `config/polish/polish.yaml` for feature settings such as `enabled`, `model`, `timeout`, and `textbox_context`:
    ```env
-   LLM_POLISH_ENABLED=1
    LLM_POLISH_BASE_URL=https://api.openai.com
    LLM_POLISH_API_KEY=your_key_here
-   LLM_POLISH_MODEL=gpt-4.1-mini
-   # Optional
-   # LLM_POLISH_TIMEOUT=8
-   # LLM_POLISH_TEMPERATURE=0.1
-   # LLM_POLISH_MAX_OUTPUT_TOKENS=512
-   # LLM_POLISH_TEXTBOX_CONTEXT_ENABLED=1
-   # LLM_POLISH_TEXTBOX_CONTEXT_MAX_CHARS=4096
-   # LLM_POLISH_TEXTBOX_CONTEXT_CLIPBOARD_FALLBACK=0
    ```
    This feature uses the OpenAI-compatible Chat Completions API in non-streaming mode and runs before regex replacement and whitespace reformatting in the live microphone pipeline.
-   When `LLM_POLISH_TEXTBOX_CONTEXT_ENABLED=1`, it also tries to read the currently focused Windows text box and sends a truncated snapshot as an extra reference message. `LLM_POLISH_TEXTBOX_CONTEXT_CLIPBOARD_FALLBACK=1` enables a more intrusive copy-based fallback for apps that do not expose text through standard window messages.
+   When `textbox_context.enabled=true`, it tries Windows UI Automation in this order: focused element → `TextPattern` → `ValuePattern` → `LegacyIAccessible`; if those all fail, it finally falls back to a more intrusive `Ctrl+A` / `Ctrl+C` clipboard probe before attaching a truncated snapshot as extra reference context.
+   Set `textbox_context.debug=true` in `config/polish/polish.yaml` to log why each UIA stage succeeded, returned empty text, or fell through to clipboard fallback.
 - Use `python provider_switch.py --list` to see available providers
 
 ## Documentation

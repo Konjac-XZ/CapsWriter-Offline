@@ -4,7 +4,7 @@ import opencc
 import pangu
 from src.pipeline.chinese_itn import chinese_to_num
 from src.infra.cosmic import Cosmic, console
-from src.polish.llm_polish import polish_text
+from src.polish.llm_polish import polish_text, record_finalized_text
 from src.pipeline.regex_replace import regex_replace
 from src.audio.rename_audio import rename_audio
 from src.pipeline.strip_punc import strip_punc
@@ -103,6 +103,8 @@ async def recv_result():
                 text = pangu.spacing_text(text)
                 # 若末尾不是有效标点，则补中文句号
                 text = _ensure_end_punctuation(text)
+                # 将已完成的文本存入历史，供下一次 LLM 润色使用
+                record_finalized_text(text)
                 console.print(f"转录时延：{delay:.2f}s")
                 dbg = message.get("debug_timing")
                 if os.getenv("CAPSWRITER_DEBUG_TIMING"):
