@@ -52,7 +52,7 @@ class TextBoxContext:
 
 def get_active_textbox_context(*, debug: bool = False) -> TextBoxContext | None:
     if platform.system() != "Windows":
-        _debug_log(debug, "[textbox_context] 非 Windows 平台，跳过文本框读取。")
+        _debug_log(debug, "[文本框解析] 非 Windows 平台，跳过文本框读取。")
         return None
 
     hwnd = _get_focused_hwnd()
@@ -60,7 +60,7 @@ def get_active_textbox_context(*, debug: bool = False) -> TextBoxContext | None:
     _debug_log(
         debug,
         (
-            "[textbox_context] 开始读取活动文本框"
+            "[文本框解析] 开始读取活动文本框"
             f" hwnd={_format_hwnd(hwnd)} class={class_name or '-'}"
         ),
     )
@@ -74,7 +74,7 @@ def get_active_textbox_context(*, debug: bool = False) -> TextBoxContext | None:
         _debug_log(
             debug,
             (
-                "[textbox_context] UIA 读取成功"
+                "[文本框解析] UIA 读取成功"
                 f" source={source} hwnd={_format_hwnd(hwnd)} class={class_name or '-'}"
                 f" len={len(text)}"
             ),
@@ -87,10 +87,10 @@ def get_active_textbox_context(*, debug: bool = False) -> TextBoxContext | None:
         )
 
     if not is_password:
-        _debug_log(debug, "[textbox_context] UIA 未获得文本，尝试剪贴板回退。")
+        _debug_log(debug, "[文本框解析] UIA 未获得文本，尝试剪贴板回退。")
         text = _read_text_via_clipboard_copy(debug=debug)
         if text and text.strip():
-            _debug_log(debug, f"[textbox_context] 剪贴板回退成功 len={len(text)}")
+            _debug_log(debug, f"[文本框解析] 剪贴板回退成功 len={len(text)}")
             return TextBoxContext(
                 text=text,
                 source="clipboard",
@@ -98,11 +98,11 @@ def get_active_textbox_context(*, debug: bool = False) -> TextBoxContext | None:
                 class_name=class_name,
             )
 
-        _debug_log(debug, "[textbox_context] 剪贴板回退未获得文本。")
+        _debug_log(debug, "[文本框解析] 剪贴板回退未获得文本。")
     else:
-        _debug_log(debug, "[textbox_context] 检测到密码控件，跳过剪贴板回退。")
+        _debug_log(debug, "[文本框解析] 检测到密码控件，跳过剪贴板回退。")
 
-    _debug_log(debug, "[textbox_context] 未能读取当前文本框内容。")
+    _debug_log(debug, "[文本框解析] 未能读取当前文本框内容。")
 
     return None
 
@@ -164,7 +164,7 @@ def _read_text_via_uia(
     try:
         import comtypes
 
-        _debug_log(debug, "[textbox_context] 初始化 UI Automation。")
+        _debug_log(debug, "[文本框解析] 初始化 UI Automation。")
         comtypes.CoInitialize()
         try:
             comtypes_client, uiac = _get_uia_client()
@@ -174,7 +174,7 @@ def _read_text_via_uia(
             )
             element = automation.GetFocusedElement()
             if not element:
-                _debug_log(debug, "[textbox_context] GetFocusedElement 返回空。")
+                _debug_log(debug, "[文本框解析] GetFocusedElement 返回空。")
                 return None, None, hwnd, class_name, is_password
 
             hwnd = _safe_int_property(element, "CurrentNativeWindowHandle") or hwnd
@@ -185,14 +185,14 @@ def _read_text_via_uia(
             _debug_log(
                 debug,
                 (
-                    "[textbox_context] 已解析焦点元素"
+                    "[文本框解析] 已解析焦点元素"
                     f" hwnd={_format_hwnd(hwnd)} class={class_name or '-'}"
                 ),
             )
 
             is_password = _is_password_element(element) or _is_password_control(hwnd)
             if is_password:
-                _debug_log(debug, "[textbox_context] 焦点元素被识别为密码控件。")
+                _debug_log(debug, "[文本框解析] 焦点元素被识别为密码控件。")
                 return None, None, hwnd, class_name, True
 
             for source, reader in (
@@ -200,18 +200,18 @@ def _read_text_via_uia(
                 ("uia_value", _read_text_via_value_pattern),
                 ("uia_legacy", _read_text_via_legacy_pattern),
             ):
-                _debug_log(debug, f"[textbox_context] 尝试 {source}。")
+                _debug_log(debug, f"[文本框解析] 尝试 {source}。")
                 text = reader(element, uiac, debug=debug)
                 if text and text.strip():
                     return text, source, hwnd, class_name, False
 
-            _debug_log(debug, "[textbox_context] 所有 UIA 模式均未返回可用文本。")
+            _debug_log(debug, "[文本框解析] 所有 UIA 模式均未返回可用文本。")
         finally:
             comtypes.CoUninitialize()
     except Exception as exc:
         _debug_log(
             debug,
-            f"[textbox_context] UIA 读取异常：{type(exc).__name__}: {exc}",
+            f"[文本框解析] UIA 读取异常：{type(exc).__name__}: {exc}",
             style="yellow",
         )
         return None, None, hwnd, class_name, is_password
@@ -233,18 +233,18 @@ def _read_text_via_text_pattern(element: Any, uiac: Any, *, debug: bool = False)
     try:
         text_range = pattern.DocumentRange
         if not text_range:
-            _debug_log(debug, "[textbox_context] TextPattern 存在，但 DocumentRange 为空。")
+            _debug_log(debug, "[文本框解析] TextPattern 存在，但 DocumentRange 为空。")
             return None
         text = _normalize_text(text_range.GetText(_MAX_DIRECT_TEXT_CHARS))
         if not text or not text.strip():
-            _debug_log(debug, "[textbox_context] TextPattern 返回空文本。")
+            _debug_log(debug, "[文本框解析] TextPattern 返回空文本。")
             return None
-        _debug_log(debug, f"[textbox_context] TextPattern 成功 len={len(text)}")
+        _debug_log(debug, f"[文本框解析] TextPattern 成功 len={len(text)}")
         return text
     except Exception as exc:
         _debug_log(
             debug,
-            f"[textbox_context] TextPattern 读取失败：{type(exc).__name__}: {exc}",
+            f"[文本框解析] TextPattern 读取失败：{type(exc).__name__}: {exc}",
             style="yellow",
         )
         return None
@@ -264,14 +264,14 @@ def _read_text_via_value_pattern(element: Any, uiac: Any, *, debug: bool = False
     try:
         text = _normalize_text(pattern.CurrentValue)
         if not text or not text.strip():
-            _debug_log(debug, "[textbox_context] ValuePattern 返回空文本。")
+            _debug_log(debug, "[文本框解析] ValuePattern 返回空文本。")
             return None
-        _debug_log(debug, f"[textbox_context] ValuePattern 成功 len={len(text)}")
+        _debug_log(debug, f"[文本框解析] ValuePattern 成功 len={len(text)}")
         return text
     except Exception as exc:
         _debug_log(
             debug,
-            f"[textbox_context] ValuePattern 读取失败：{type(exc).__name__}: {exc}",
+            f"[文本框解析] ValuePattern 读取失败：{type(exc).__name__}: {exc}",
             style="yellow",
         )
         return None
@@ -291,14 +291,14 @@ def _read_text_via_legacy_pattern(element: Any, uiac: Any, *, debug: bool = Fals
     try:
         text = _normalize_text(pattern.CurrentValue)
         if not text or not text.strip():
-            _debug_log(debug, "[textbox_context] LegacyIAccessible 返回空文本。")
+            _debug_log(debug, "[文本框解析] LegacyIAccessible 返回空文本。")
             return None
-        _debug_log(debug, f"[textbox_context] LegacyIAccessible 成功 len={len(text)}")
+        _debug_log(debug, f"[文本框解析] LegacyIAccessible 成功 len={len(text)}")
         return text
     except Exception as exc:
         _debug_log(
             debug,
-            f"[textbox_context] LegacyIAccessible 读取失败：{type(exc).__name__}: {exc}",
+            f"[文本框解析] LegacyIAccessible 读取失败：{type(exc).__name__}: {exc}",
             style="yellow",
         )
         return None
@@ -317,13 +317,13 @@ def _query_pattern(
     except Exception as exc:
         _debug_log(
             debug,
-            f"[textbox_context] {pattern_name} GetCurrentPattern 失败：{type(exc).__name__}: {exc}",
+            f"[文本框解析] {pattern_name} GetCurrentPattern 失败：{type(exc).__name__}: {exc}",
             style="yellow",
         )
         return None
 
     if not pattern:
-        _debug_log(debug, f"[textbox_context] {pattern_name} 不受支持或返回空 COM 指针。")
+        _debug_log(debug, f"[文本框解析] {pattern_name} 不受支持或返回空 COM 指针。")
         return None
 
     try:
@@ -331,7 +331,7 @@ def _query_pattern(
     except Exception as exc:
         _debug_log(
             debug,
-            f"[textbox_context] {pattern_name} QueryInterface 失败：{type(exc).__name__}: {exc}",
+            f"[文本框解析] {pattern_name} QueryInterface 失败：{type(exc).__name__}: {exc}",
             style="yellow",
         )
         return None
@@ -387,7 +387,7 @@ def _read_text_via_clipboard_copy(*, debug: bool = False) -> str | None:
     except Exception as exc:
         _debug_log(
             debug,
-            f"[textbox_context] 剪贴板初始化失败：{type(exc).__name__}: {exc}",
+            f"[文本框解析] 剪贴板初始化失败：{type(exc).__name__}: {exc}",
             style="yellow",
         )
         return None
@@ -405,15 +405,15 @@ def _read_text_via_clipboard_copy(*, debug: bool = False) -> str | None:
         if isinstance(current, str) and current != sentinel:
             copied = current
         elif current == sentinel:
-            _debug_log(debug, "[textbox_context] 剪贴板探测未覆盖哨兵值。")
+            _debug_log(debug, "[文本框解析] 剪贴板探测未覆盖哨兵值。")
         else:
-            _debug_log(debug, "[textbox_context] 剪贴板探测返回非字符串或空结果。")
+            _debug_log(debug, "[文本框解析] 剪贴板探测返回非字符串或空结果。")
         keyboard.send("right")
         time.sleep(0.02)
     except Exception as exc:
         _debug_log(
             debug,
-            f"[textbox_context] 剪贴板回退异常：{type(exc).__name__}: {exc}",
+            f"[文本框解析] 剪贴板回退异常：{type(exc).__name__}: {exc}",
             style="yellow",
         )
         copied = None
@@ -423,13 +423,13 @@ def _read_text_via_clipboard_copy(*, debug: bool = False) -> str | None:
         except Exception as exc:
             _debug_log(
                 debug,
-                f"[textbox_context] 恢复剪贴板失败：{type(exc).__name__}: {exc}",
+                f"[文本框解析] 恢复剪贴板失败：{type(exc).__name__}: {exc}",
                 style="yellow",
             )
             pass
 
     if isinstance(copied, str) and not copied.strip():
-        _debug_log(debug, "[textbox_context] 剪贴板回退仅获得空白文本。")
+        _debug_log(debug, "[文本框解析] 剪贴板回退仅获得空白文本。")
 
     return copied
 
