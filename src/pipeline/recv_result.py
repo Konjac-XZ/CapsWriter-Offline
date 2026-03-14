@@ -16,28 +16,6 @@ import warnings
 warnings.filterwarnings("ignore")
 
 
-# 若末尾不是有效标点（中英文的句号、问号、感叹号、引号、括号、书名号等），则补一个中文句号。
-def _ensure_end_punctuation(s: str) -> str:
-    if not s:
-        return s
-    # 允许的末尾标点（含中英文常见结尾字符与成对右侧符号）
-    allowed = set(
-        "。！？….,!?;:，；：、)】》）］｝】〉」』\u201d\u2019>]}\"'\u2014-"
-        "」』》】〕〉」』\u201d\u2019）】》]}"  # 冗余收尾右符号，确保覆盖
-    )
-    # 去掉末尾空白后判断
-    stripped = s.rstrip()
-    if not stripped:
-        return s
-    last = stripped[-1]
-    if last in allowed:
-        return s
-    # 默认补一个中文句号
-    # 保留原有末尾空白
-    trailing_ws = s[len(stripped):]
-    return stripped + "。" + trailing_ws
-
-
 async def recv_result():
     # 直接从本地结果队列读取（由 send_audio 推送），不再依赖远程 websocket
     try:
@@ -102,7 +80,6 @@ async def recv_result():
                 # 使用 pangu 对完整文本进行中英文混排空格优化，仅用于显示/输出
                 text = pangu.spacing_text(text)
                 # 若末尾不是有效标点，则补中文句号
-                text = _ensure_end_punctuation(text)
                 # 将已完成的文本存入历史，供下一次 LLM 润色使用
                 record_finalized_text(text)
                 console.print(f"转录时延：{delay:.2f}s")
@@ -178,12 +155,10 @@ async def recv_result():
                                 await type_final(text)
                             else:
                                 traditional_text = pangu.spacing_text(traditional_text)
-                                traditional_text = _ensure_end_punctuation(traditional_text)
                                 await type_final(traditional_text)
                         case _:
                             if Cosmic.opposite_state:
                                 traditional_text = pangu.spacing_text(traditional_text)
-                                traditional_text = _ensure_end_punctuation(traditional_text)
                                 await type_final(traditional_text)
                             else:
                                 # text 已在上方做过 pangu 与标点补全
