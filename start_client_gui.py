@@ -355,16 +355,6 @@ class GUI(QMainWindow):
             pass
         self.setWindowOpacity(1.0)
 
-        # Keep the main window always on top and hide it from the taskbar.
-        # Use Qt.WindowStaysOnTopHint to keep above other windows and
-        # Qt.Tool to prevent a taskbar entry on Windows while still allowing
-        # the window to behave as a normal top-level window.
-        try:
-            flags = self.windowFlags() | Qt.WindowStaysOnTopHint
-            self.setWindowFlags(flags)
-        except Exception:
-            pass
-
         # Use native system title bar; no custom frame
         self.create_text_box()
         self.create_provider_selector()
