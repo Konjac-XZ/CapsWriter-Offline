@@ -532,8 +532,14 @@ class GUI(QMainWindow):
         self.edit_lexicon_button.setToolTip("编辑用户自定义词库（config/user_lexicon.yaml）")
         self.edit_lexicon_button.clicked.connect(self.show_edit_lexicon_dialog)
         self.edit_lexicon_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.clear_history_button = QPushButton("清除最近上屏")
+        self.clear_history_button.setMinimumWidth(110)
+        self.clear_history_button.setToolTip("暂时清除 LLM 润色使用的最近上屏消息记录")
+        self.clear_history_button.clicked.connect(self.clear_recent_output_history)
+        self.clear_history_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.model_row.addWidget(self.modify_prompt_button)
         self.model_row.addWidget(self.edit_lexicon_button)
+        self.model_row.addWidget(self.clear_history_button)
         self.model_row.addWidget(self.test_all_button)
         self.model_row.addStretch()
 
@@ -774,6 +780,21 @@ class GUI(QMainWindow):
             self.append_colored_line("用户词库已保存，下次录音自动生效。")
         except Exception as exc:
             self.append_colored_line(f"保存用户词库失败：{exc}", "#ff5555")
+
+    def clear_recent_output_history(self) -> None:
+        """Clear the recent finalized-text history used as LLM polish context."""
+        try:
+            from src.polish.llm_polish import clear_finalized_history
+
+            cleared = clear_finalized_history()
+        except Exception as exc:
+            self.append_colored_line(f"清除最近上屏记录失败：{exc}", "#ff5555")
+            return
+
+        if cleared > 0:
+            self.append_colored_line(f"已清除最近上屏消息记录：{cleared} 条。")
+        else:
+            self.append_colored_line("最近上屏消息记录本来就是空的。", "#888888")
 
     def on_prompt_changed(self, index: int):
         """Handle prompt preset selection change and persist."""
@@ -1543,6 +1564,8 @@ class GUI(QMainWindow):
             widgets.append(self.test_all_button)
         if hasattr(self, 'modify_prompt_button'):
             widgets.append(self.modify_prompt_button)
+        if hasattr(self, 'clear_history_button'):
+            widgets.append(self.clear_history_button)
         if hasattr(self, 'model_combo'):
             widgets.append(self.model_combo)
         if hasattr(self, 'model_label'):

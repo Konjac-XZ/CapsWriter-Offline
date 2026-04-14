@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -68,6 +69,7 @@ def _get_env(name: str, default: str | None = None) -> str | None:
 _missing_config_warned = False
 _feature_state_logged = False
 _finalized_history: list[str] = []
+_history_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -87,9 +89,10 @@ def record_finalized_text(text: str) -> None:
     if not h_cfg.get("enabled", False):
         return
     max_size: int = max(1, int(h_cfg.get("max_size", 5)))
-    _finalized_history.append(text.strip())
-    if len(_finalized_history) > max_size:
-        _finalized_history = _finalized_history[-max_size:]
+    with _history_lock:
+        _finalized_history.append(text.strip())
+        if len(_finalized_history) > max_size:
+            _finalized_history = _finalized_history[-max_size:]
 
 
 def get_finalized_history() -> list[str]:
@@ -101,7 +104,18 @@ def get_finalized_history() -> list[str]:
     if not h_cfg.get("enabled", False):
         return []
     max_size: int = max(1, int(h_cfg.get("max_size", 5)))
-    return list(_finalized_history[-max_size:])
+    with _history_lock:
+        return list(_finalized_history[-max_size:])
+
+
+def clear_finalized_history() -> int:
+    """Clear the rolling history buffer and return the number of cleared items."""
+    global _finalized_history
+
+    with _history_lock:
+        cleared = len(_finalized_history)
+        _finalized_history = []
+    return cleared
 
 
 # ---------------------------------------------------------------------------

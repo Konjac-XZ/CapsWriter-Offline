@@ -12,8 +12,6 @@ from typing import Any
 import clipman
 import keyboard
 
-from src.infra.cosmic import console
-
 
 EM_GETPASSWORDCHAR = 0x00D2
 _MAX_DIRECT_TEXT_CHARS = 50000
@@ -437,9 +435,9 @@ def _read_text_via_clipboard_copy(*, debug: bool = False) -> str | None:
 
 
 def _debug_log(debug: bool, message: str, *, style: str = "dim") -> None:
-    if not debug:
-        return
-    console.print(message, style=style)
+    # Textbox context diagnostics are intentionally silenced to avoid noisy
+    # terminal and GUI output during normal typing flows.
+    return
 
 
 def _format_hwnd(hwnd: int | None) -> str:
