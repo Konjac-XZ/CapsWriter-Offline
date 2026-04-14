@@ -1,7 +1,7 @@
 import io
 import sys
 from asyncio import AbstractEventLoop, Queue
-from typing import Union
+from typing import Union, cast, Any
 
 import sounddevice as sd
 import websockets
@@ -28,7 +28,6 @@ def _console_print_wrapper(*args, **kwargs):
     """
     try:
         # Build a textual representation of the args similar to print()
-        end = kwargs.get("end", "\n")
         # Handle rich.console.NewLine specially (avoid sending its repr)
         try:
             from rich.console import NewLine
@@ -77,7 +76,7 @@ def _console_print_wrapper(*args, **kwargs):
 
 
 # Monkeypatch the Console.print method for convenience across the codebase
-console.print = _console_print_wrapper
+setattr(console, "print", cast(Any, _console_print_wrapper))
 
 
 
@@ -90,7 +89,7 @@ class Cosmic:
     queue_in: Queue
     queue_out: Queue
     loop: Union[None, AbstractEventLoop] = None
-    websocket: websockets.WebSocketClientProtocol = None
+    websocket: websockets.WebSocketClientProtocol | None = None
     audio_files = {}
     stream: Union[None, sd.InputStream] = None
     transcribe_subtitles = False
@@ -100,3 +99,6 @@ class Cosmic:
     vision_context = {}
     vision_context_task = None
     vision_context_last_error = None
+    _last_stream_len = 0
+    _stream_had_increments = False
+    _last_stream_task: str | None = None

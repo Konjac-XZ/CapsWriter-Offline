@@ -2,7 +2,6 @@ import os
 import time
 import opencc
 import pangu
-from src.pipeline.chinese_itn import chinese_to_num
 from src.infra.cosmic import Cosmic, console
 from src.polish.llm_polish import polish_text, record_finalized_text
 from src.pipeline.regex_replace import regex_replace

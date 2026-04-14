@@ -29,6 +29,8 @@ dependencies = [
     "PyYAML==6.0.2",
     "dashscope>=1.25.3",
     "cn2an>=0.5.23",
+    "ruff>=0.15.10",
+    "ty>=0.0.29",
 ]
 
 [dependency-groups]
@@ -39,4 +41,21 @@ profiling = [
     "yappi>=1.7.3",
     "snakeviz>=2.2.2",
 ]
+
+[[tool.ty.overrides]]
+include = ["start_client_gui.py"]
+
+[tool.ty.overrides.rules]
+unresolved-attribute = "ignore"
+unresolved-import = "ignore"
+unresolved-global = "ignore"
+
+[[tool.ty.overrides]]
+include = ["src/polish/vision_context.py"]
+
+[tool.ty.overrides.rules]
+unresolved-attribute = "ignore"
+unresolved-import = "ignore"
+invalid-assignment = "ignore"
+invalid-argument-type = "ignore"
 

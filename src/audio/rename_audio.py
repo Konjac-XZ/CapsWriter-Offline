@@ -17,8 +17,6 @@ def rename_audio(task_id, text, time_start) -> Union[Path, None]:
         return
 
     # 构建新文件名
-    time_year = time.strftime("%Y", time.localtime(time_start))
-    time_month = time.strftime("%m", time.localtime(time_start))
     time_ymdhms = time.strftime("%Y%m%d-%H%M%S", time.localtime(time_start))
     file_stem = f"({time_ymdhms}){text[:Config.audio_name_len]}"
     file_stem = re.sub(r'[\\/:"*?<>|]', " ", file_stem)

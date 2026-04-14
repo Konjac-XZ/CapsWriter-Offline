@@ -2,6 +2,7 @@ import shutil
 import tempfile
 import time
 import wave
+import os
 from os import makedirs
 from pathlib import Path
 from subprocess import CREATE_NO_WINDOW, DEVNULL, PIPE, Popen
@@ -20,8 +21,9 @@ def create_file(
 
     folder_path = Path() / time_year / time_month / "assets"
     makedirs(folder_path, exist_ok=True)
-    file_path = tempfile.mktemp(prefix=f"({time_ymdhms})", dir=folder_path)
-    file_path = Path(file_path)
+    fd, tmp_path = tempfile.mkstemp(prefix=f"({time_ymdhms})", dir=folder_path)
+    os.close(fd)
+    file_path = Path(tmp_path)
 
     if shutil.which("ffmpeg") and Config.reduce_audio_files:
         # 用户已安装 ffmpeg，且设置使用减小音频文件，则输出到 mp3 文件

@@ -345,6 +345,8 @@ def _is_password_element(element: Any) -> bool:
 
 
 def _coerce_int(value: object) -> int | None:
+    if not isinstance(value, (str, bytes, bytearray, int, float)):
+        return None
     try:
         coerced = int(value)
     except Exception:

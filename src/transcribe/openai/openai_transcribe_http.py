@@ -75,9 +75,8 @@ def build_headers() -> dict:
 
 
 def _log_persistent_established():
-    api_base = get_api_base()
     console.print(
-        f"持久连接已建立"
+        "持久连接已建立"
     )
 
 def _log_streaming_status():
@@ -86,7 +85,7 @@ def _log_streaming_status():
 
 def _log_persistent_closed(reason: str):
     console.print(
-        f"持久连接已关闭"
+        "持久连接已关闭"
     )
 
 
@@ -201,11 +200,6 @@ async def sse_transcribe(
     async with client.stream("POST", url, data=data_form, files=files) as resp:
         status_code = resp.status_code
         if status_code >= 400:
-            body = await resp.aread()
-            try:
-                err_text = body.decode("utf-8", errors="ignore")
-            except Exception:
-                err_text = str(body)
             raise httpx.HTTPStatusError("非成功状态码", request=resp.request, response=resp)
         async for line in resp.aiter_lines():
             if not line:

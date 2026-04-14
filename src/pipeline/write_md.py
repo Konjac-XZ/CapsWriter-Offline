@@ -23,7 +23,7 @@ def create_md(file_md):
         f.write(header_md)
 
 
-def write_md(text: str, time_start: float, file_audio: Path):
+def write_md(text: str, time_start: float, file_audio: Path | None):
     time_year = time.strftime("%Y", time.localtime(time_start))
     time_month = time.strftime("%m", time.localtime(time_start))
     time_day = time.strftime("%d", time.localtime(time_start))

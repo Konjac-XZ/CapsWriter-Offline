@@ -256,8 +256,6 @@ class ProviderManager:
         if provider_id not in self.providers:
             return False
         
-        provider = self.providers[provider_id]
-        
         # We no longer export settings to env; only track active id internally
         
         # Handlers will read settings from ProviderManager instead.

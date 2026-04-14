@@ -1,7 +1,8 @@
 import sys
 from pathlib import Path
+from typing import Any, Mapping
 
-from tomlkit import parse
+import tomllib
 
 # 加载TOML配置文件
 # When running from PyInstaller, look for config.toml next to the executable
@@ -13,115 +14,128 @@ else:
     config_toml_path = Path(__file__).parent.parent.parent / "config.toml"
 
 with config_toml_path.open("r", encoding="utf-8") as f:
-    config_str = f.read()
-    config = parse(config_str)
+    config = tomllib.loads(f.read())
+
+
+def _section(name: str) -> Mapping[str, Any]:
+    section = config.get(name)
+    if isinstance(section, dict):
+        return section
+    return {}
+
+
+server_cfg = _section("server")
+client_cfg = _section("client")
+model_paths_cfg = _section("model_paths")
+sensevoice_cfg = _section("sensevoice_args")
+paraformer_cfg = _section("paraformer_args")
 
 
 # 服务端配置
 class ServerConfig:
-    model: str = config["server"]["model"]
-    addr: str = config["server"]["addr"]
-    speech_recognition_port: str = config["server"]["speech_recognition_port"]
-    format_num: bool = config["server"]["format_num"]
-    format_punc: bool = config["server"]["format_punc"]
-    format_spell: bool = config["server"]["format_spell"]
-    shrink_automatically_to_tray: bool = config["server"][
-        "shrink_automatically_to_tray"
-    ]
-    only_run_once: bool = config["server"]["only_run_once"]
-    in_the_meantime_start_the_client: bool = config["server"][
-        "in_the_meantime_start_the_client"
-    ]
-    in_the_meantime_start_the_client_and_run_as_admin: bool = config["server"][
-        "in_the_meantime_start_the_client_and_run_as_admin"
-    ]
+    model: str = str(server_cfg.get("model", ""))
+    addr: str = str(server_cfg.get("addr", ""))
+    speech_recognition_port: str = str(server_cfg.get("speech_recognition_port", ""))
+    format_num: bool = bool(server_cfg.get("format_num", False))
+    format_punc: bool = bool(server_cfg.get("format_punc", False))
+    format_spell: bool = bool(server_cfg.get("format_spell", False))
+    shrink_automatically_to_tray: bool = bool(
+        server_cfg.get("shrink_automatically_to_tray", False)
+    )
+    only_run_once: bool = bool(server_cfg.get("only_run_once", False))
+    in_the_meantime_start_the_client: bool = bool(
+        server_cfg.get("in_the_meantime_start_the_client", False)
+    )
+    in_the_meantime_start_the_client_and_run_as_admin: bool = bool(
+        server_cfg.get("in_the_meantime_start_the_client_and_run_as_admin", False)
+    )
 
 
 # 客户端配置
 class ClientConfig:
-    addr: str = config["client"]["addr"]
-    speech_recognition_port: str = config["client"]["speech_recognition_port"]
-    speech_recognition_shortcut: str = config["client"]["speech_recognition_shortcut"]
-    hold_mode: bool = config["client"]["hold_mode"]
-    suppress: bool = config["client"]["suppress"]
-    restore_key: bool = config["client"]["restore_key"]
-    threshold: float = config["client"]["threshold"]
-    paste: bool = config["client"]["paste"]
-    restore_clipboard_after_paste: bool = config["client"][
-        "restore_clipboard_after_paste"
-    ]
-    save_audio: bool = config["client"]["save_audio"]
-    save_markdown: bool = config["client"]["save_markdown"]
-    audio_name_len: int = config["client"]["audio_name_len"]
-    reduce_audio_files: bool = config["client"]["reduce_audio_files"]
-    trash_punc: str = config["client"]["trash_punc"]
-    mic_seg_duration: int = config["client"]["mic_seg_duration"]
-    mic_seg_overlap: int = config["client"]["mic_seg_overlap"]
-    file_seg_duration: int = config["client"]["file_seg_duration"]
-    file_seg_overlap: int = config["client"]["file_seg_overlap"]
-    mute_other_audio: bool = config["client"]["mute_other_audio"]
-    pause_other_audio: bool = config["client"]["pause_other_audio"]
-    shrink_automatically_to_tray: bool = config["client"][
-        "shrink_automatically_to_tray"
-    ]
-    only_run_once: bool = config["client"]["only_run_once"]
-    only_enable_microphones_when_pressed_record_shortcut: bool = config["client"][
-        "only_enable_microphones_when_pressed_record_shortcut"
-    ]
-    vscode_exe_path: str = config["client"]["vscode_exe_path"]
-    play_start_music: bool = config["client"]["play_start_music"]
-    start_music_path: Path = Path(config["client"]["start_music_path"])
-    start_music_volume: str = config["client"]["start_music_volume"]
-    play_stop_music: bool = config["client"]["play_stop_music"]
-    stop_music_path: Path = Path(config["client"]["stop_music_path"])
-    stop_music_volume: str = config["client"]["stop_music_volume"]
-    hint_while_recording_at_edit_position_powered_by_ahk: bool = config["client"][
-        "hint_while_recording_at_edit_position_powered_by_ahk"
-    ]
+    addr: str = str(client_cfg.get("addr", ""))
+    speech_recognition_port: str = str(client_cfg.get("speech_recognition_port", ""))
+    speech_recognition_shortcut: str = str(client_cfg.get("speech_recognition_shortcut", ""))
+    hold_mode: bool = bool(client_cfg.get("hold_mode", False))
+    suppress: bool = bool(client_cfg.get("suppress", False))
+    restore_key: bool = bool(client_cfg.get("restore_key", False))
+    threshold: float = float(client_cfg.get("threshold", 0.0))
+    paste: bool = bool(client_cfg.get("paste", False))
+    restore_clipboard_after_paste: bool = bool(
+        client_cfg.get("restore_clipboard_after_paste", False)
+    )
+    save_audio: bool = bool(client_cfg.get("save_audio", False))
+    save_markdown: bool = bool(client_cfg.get("save_markdown", False))
+    audio_name_len: int = int(client_cfg.get("audio_name_len", 0))
+    reduce_audio_files: bool = bool(client_cfg.get("reduce_audio_files", False))
+    trash_punc: str = str(client_cfg.get("trash_punc", ""))
+    mic_seg_duration: int = int(client_cfg.get("mic_seg_duration", 0))
+    mic_seg_overlap: int = int(client_cfg.get("mic_seg_overlap", 0))
+    file_seg_duration: int = int(client_cfg.get("file_seg_duration", 0))
+    file_seg_overlap: int = int(client_cfg.get("file_seg_overlap", 0))
+    mute_other_audio: bool = bool(client_cfg.get("mute_other_audio", False))
+    pause_other_audio: bool = bool(client_cfg.get("pause_other_audio", False))
+    shrink_automatically_to_tray: bool = bool(
+        client_cfg.get("shrink_automatically_to_tray", False)
+    )
+    only_run_once: bool = bool(client_cfg.get("only_run_once", False))
+    only_enable_microphones_when_pressed_record_shortcut: bool = bool(
+        client_cfg.get("only_enable_microphones_when_pressed_record_shortcut", False)
+    )
+    vscode_exe_path: str = str(client_cfg.get("vscode_exe_path", ""))
+    play_start_music: bool = bool(client_cfg.get("play_start_music", False))
+    start_music_path: Path = Path(str(client_cfg.get("start_music_path", "")))
+    start_music_volume: str = str(client_cfg.get("start_music_volume", ""))
+    play_stop_music: bool = bool(client_cfg.get("play_stop_music", False))
+    stop_music_path: Path = Path(str(client_cfg.get("stop_music_path", "")))
+    stop_music_volume: str = str(client_cfg.get("stop_music_volume", ""))
+    hint_while_recording_at_edit_position_powered_by_ahk: bool = bool(
+        client_cfg.get("hint_while_recording_at_edit_position_powered_by_ahk", False)
+    )
 
-    check_microphone_usage_by: str = config["client"]["check_microphone_usage_by"]
-    enable_double_click_opposite_state: bool = config["client"][
-        "enable_double_click_opposite_state"
-    ]
-    convert_to_traditional_chinese_main: str = config["client"][
-        "convert_to_traditional_chinese_main"
-    ]
-    opencc_converter: str = config["client"]["opencc_converter"]
+    check_microphone_usage_by: str = str(client_cfg.get("check_microphone_usage_by", ""))
+    enable_double_click_opposite_state: bool = bool(
+        client_cfg.get("enable_double_click_opposite_state", False)
+    )
+    convert_to_traditional_chinese_main: str = str(
+        client_cfg.get("convert_to_traditional_chinese_main", "")
+    )
+    opencc_converter: str = str(client_cfg.get("opencc_converter", ""))
 # 模型路径配置
 class ModelPaths:
-    model_dir: Path = Path(config["model_paths"]["model_dir"])
-    sensevoice_path: Path = Path(config["model_paths"]["sensevoice_path"])
-    sensevoice_tokens_path: Path = Path(config["model_paths"]["sensevoice_tokens_path"])
-    paraformer_path: Path = Path(config["model_paths"]["paraformer_path"])
-    paraformer_tokens_path: Path = Path(config["model_paths"]["paraformer_tokens_path"])
-    punc_model_dir: Path = Path(config["model_paths"]["punc_model_dir"])
+    model_dir: Path = Path(str(model_paths_cfg.get("model_dir", "")))
+    sensevoice_path: Path = Path(str(model_paths_cfg.get("sensevoice_path", "")))
+    sensevoice_tokens_path: Path = Path(str(model_paths_cfg.get("sensevoice_tokens_path", "")))
+    paraformer_path: Path = Path(str(model_paths_cfg.get("paraformer_path", "")))
+    paraformer_tokens_path: Path = Path(str(model_paths_cfg.get("paraformer_tokens_path", "")))
+    punc_model_dir: Path = Path(str(model_paths_cfg.get("punc_model_dir", "")))
 
 
 # SenseVoice 参数配置
 class SenseVoiceArgs:
-    model: str = config["model_paths"]["sensevoice_path"]
-    tokens: str = config["model_paths"]["sensevoice_tokens_path"]
-    num_threads: int = config["sensevoice_args"]["num_threads"]
-    sample_rate: int = config["sensevoice_args"]["sample_rate"]
-    feature_dim: int = config["sensevoice_args"]["feature_dim"]
-    decoding_method: str = config["sensevoice_args"]["decoding_method"]
-    debug: bool = config["sensevoice_args"]["debug"]
-    provider: str = config["sensevoice_args"]["provider"]
-    language: str = config["sensevoice_args"]["language"]
-    use_itn: bool = config["sensevoice_args"]["use_itn"]
-    rule_fsts: str = config["sensevoice_args"]["rule_fsts"]
-    rule_fars: str = config["sensevoice_args"]["rule_fars"]
+    model: str = str(model_paths_cfg.get("sensevoice_path", ""))
+    tokens: str = str(model_paths_cfg.get("sensevoice_tokens_path", ""))
+    num_threads: int = int(sensevoice_cfg.get("num_threads", 0))
+    sample_rate: int = int(sensevoice_cfg.get("sample_rate", 0))
+    feature_dim: int = int(sensevoice_cfg.get("feature_dim", 0))
+    decoding_method: str = str(sensevoice_cfg.get("decoding_method", ""))
+    debug: bool = bool(sensevoice_cfg.get("debug", False))
+    provider: str = str(sensevoice_cfg.get("provider", ""))
+    language: str = str(sensevoice_cfg.get("language", ""))
+    use_itn: bool = bool(sensevoice_cfg.get("use_itn", False))
+    rule_fsts: str = str(sensevoice_cfg.get("rule_fsts", ""))
+    rule_fars: str = str(sensevoice_cfg.get("rule_fars", ""))
 
 
 # Paraformer 参数配置
 class ParaformerArgs:
-    paraformer: str = config["model_paths"]["paraformer_path"]
-    tokens: str = config["model_paths"]["paraformer_tokens_path"]
-    num_threads: int = config["paraformer_args"]["num_threads"]
-    sample_rate: int = config["paraformer_args"]["sample_rate"]
-    feature_dim: int = config["paraformer_args"]["feature_dim"]
-    decoding_method: str = config["paraformer_args"]["decoding_method"]
-    debug: bool = config["paraformer_args"]["debug"]
+    paraformer: str = str(model_paths_cfg.get("paraformer_path", ""))
+    tokens: str = str(model_paths_cfg.get("paraformer_tokens_path", ""))
+    num_threads: int = int(paraformer_cfg.get("num_threads", 0))
+    sample_rate: int = int(paraformer_cfg.get("sample_rate", 0))
+    feature_dim: int = int(paraformer_cfg.get("feature_dim", 0))
+    decoding_method: str = str(paraformer_cfg.get("decoding_method", ""))
+    debug: bool = bool(paraformer_cfg.get("debug", False))
 
 
 def print_config():

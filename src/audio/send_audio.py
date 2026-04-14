@@ -1,15 +1,8 @@
-import asyncio
-import io
-import json
 import os
 import time
 import uuid
-import shutil
 
-import httpx
 import numpy as np
-import random
-import atexit
 
 from src.infra.cosmic import Cosmic, console
 from src.audio.create_file import create_file
@@ -55,12 +48,12 @@ async def _gather_audio_once(task_id: str) -> tuple[np.ndarray, float, float, fl
                 data = task["data"]
             all_data.append(data.copy())
             duration += len(data) / 48000
-            if Config.save_audio:
+            if Config.save_audio and file is not None:
                 write_file(file, data)
         elif ttype == "finish":
             record_stop = task.get("time", time.time())
             t_finish_entry = time.time()
-            if Config.save_audio:
+            if Config.save_audio and file is not None:
                 finish_file(file)
             if all_data:
                 audio_concat = np.concatenate(all_data)
@@ -110,7 +103,6 @@ async def send_audio():
         # Upload with retries via provider abstraction
         max_retries = int(os.getenv("OPENAI_TRANSCRIBE_RETRIES", "3"))
         base_delay = float(os.getenv("OPENAI_TRANSCRIBE_BACKOFF_BASE", "0.05"))
-        enable_stream_pref = get_stream_flag()
 
         t_presubmit = time.time()
         text_result, status_code, t_submit, t_complete, transport_info = await transcribe_audio(

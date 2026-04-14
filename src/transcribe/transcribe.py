@@ -1,8 +1,6 @@
 import asyncio
-import json
 import os
 import re
-import sys
 import time
 from pathlib import Path
 
@@ -13,7 +11,7 @@ from src.provider.provider_config import provider_manager
 
 
 def _get_api_base() -> str:
-    return os.getenv("OPENAI_BASE_URL").rstrip("/")
+    return (os.getenv("OPENAI_BASE_URL") or "").rstrip("/")
 
 
 def _get_api_key() -> str:

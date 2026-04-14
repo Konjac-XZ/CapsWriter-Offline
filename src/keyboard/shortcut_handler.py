@@ -48,7 +48,8 @@ def shortcut_correct(e: keyboard.KeyboardEvent):
     key_expect = keyboard.normalize_name(Config.speech_recognition_shortcut).replace(
         "left ", ""
     )
-    key_actual = e.name.replace("left ", "")
+    key_name = e.name or ""
+    key_actual = key_name.replace("left ", "")
     if key_expect != key_actual:
         return False
     return True
@@ -95,7 +96,8 @@ def launch_task():
     ):
         # 重启音频流; 在双击情况下, 只在第一次的时候启动(单击模式)
         stream_reopen()
-        Cosmic.stream.start()
+        if Cosmic.stream is not None:
+            Cosmic.stream.start()
 
     # 长按模式(hold_mode)双击功能 第二次重启不适用于上面的判断, 因此，需要下面来判断是否重启音频流
     # 长按模式(hold_mode)双击功能 確實需要第二次啓動音频流, 设计的时候就是如此, 因为会进行一次 start  cancel 的流程, 然后第二次啓動才是双击功能的录音
@@ -105,12 +107,15 @@ def launch_task():
         and Config.only_enable_microphones_when_pressed_record_shortcut
     ):
         stream_reopen()
-        Cosmic.stream.start()
+        if Cosmic.stream is not None:
+            Cosmic.stream.start()
         hold_mode_first_time_cancel_task = False
     # 记录开始时间
     t1 = time.time()
 
     # 将开始标志放入队列
+    if Cosmic.loop is None:
+        return
     asyncio.run_coroutine_threadsafe(
         Cosmic.queue_in.put({"type": "begin", "time": t1, "data": None}), Cosmic.loop
     )
@@ -157,6 +162,8 @@ def cancel_task():
         unpause_needed = False
 
     # 发送取消任务的消息到队列
+    if Cosmic.loop is None:
+        return
     asyncio.run_coroutine_threadsafe(
         Cosmic.queue_in.put({"type": "cancel", "time": time.time(), "data": None}),
         Cosmic.loop,
@@ -164,8 +171,9 @@ def cancel_task():
 
     if Config.only_enable_microphones_when_pressed_record_shortcut:
         # 结束音频流
-        Cosmic.stream.stop()
-        Cosmic.stream.close()
+        if Cosmic.stream is not None:
+            Cosmic.stream.stop()
+            Cosmic.stream.close()
 
 
 def finish_task():
@@ -176,6 +184,8 @@ def finish_task():
     status.stop()
 
     # 通知结束任务
+    if Cosmic.loop is None:
+        return
     asyncio.run_coroutine_threadsafe(
         Cosmic.queue_in.put(
             {"type": "finish", "time": time.time(), "data": None},
@@ -200,8 +210,9 @@ def finish_task():
         unpause_needed = False
     if Config.only_enable_microphones_when_pressed_record_shortcut:
         # 结束音频流
-        Cosmic.stream.stop()
-        Cosmic.stream.close()
+        if Cosmic.stream is not None:
+            Cosmic.stream.stop()
+            Cosmic.stream.close()
 
 
 # =================单击模式======================

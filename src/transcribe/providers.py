@@ -58,7 +58,7 @@ class OpenAIProvider(TranscriptionProvider):
         api_base = get_api_base()
         url = f"{api_base}/v1/audio/transcriptions"
         # Build base form fields; allow providers to omit response_format if upstream adds it automatically
-        data_form_base = {
+        data_form_base: dict[str, Any] = {
             "model": _get_model(),
             "prompt": _get_prompt(),
             "language": _get_language(),
@@ -104,7 +104,6 @@ class ReplicateProvider(TranscriptionProvider):
     ) -> Tuple[str, int, float, float, Dict[str, Any]]:
         from src.transcribe.replicate.replicate_transcribe_http import transcribe_with_retries as rep_transcribe
         from src.transcribe.openai.openai_transcribe_http import is_streaming_enabled as _get_stream_flag
-        import os
 
         enable_stream_pref = _get_stream_flag()
         language = ps_get_str("language", env="OPENAI_TRANSCRIBE_LANGUAGE", default="zh") or "zh"

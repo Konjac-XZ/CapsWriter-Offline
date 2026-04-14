@@ -154,7 +154,6 @@ async def _do_transcribe(
     form: dict,
     files: dict,
 ) -> tuple[str, int, float]:
-    t_submit = time.time()
     resp = await client.post(url, data=form, files=files)
     t_complete = time.time()
     status = resp.status_code

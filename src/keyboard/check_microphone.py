@@ -6,6 +6,11 @@ from pathlib import Path
 from src.infra.config import ClientConfig as Config
 
 
+_check_lock = threading.RLock()
+_last_check_time = 0.0
+_cached_result = False
+
+
 def read_qword_value(root_key, sub_path, value_name):
     try:
         reg_key = winreg.OpenKey(root_key, sub_path)
@@ -37,17 +42,11 @@ def is_microphone_in_use():
 
 
 def check_by_registry():
-    # Static variables
-    if not hasattr(is_microphone_in_use, "last_check_time"):
-        is_microphone_in_use.last_check_time = 0
-    if not hasattr(is_microphone_in_use, "cached_result"):
-        is_microphone_in_use.cached_result = False
-    if not hasattr(is_microphone_in_use, "lock"):
-        is_microphone_in_use.lock = threading.RLock()
+    global _last_check_time, _cached_result
 
     now = time.time()
-    with is_microphone_in_use.lock:
-        if now - is_microphone_in_use.last_check_time >= 1:
+    with _check_lock:
+        if now - _last_check_time >= 1:
             try:
                 current_path = Path().cwd()
                 sub_path = (
@@ -69,11 +68,11 @@ def check_by_registry():
                     actual_result = False
             except Exception:
                 # print(f"Error checking microphone status: {e}")
-                actual_result = is_microphone_in_use.cached_result
-            is_microphone_in_use.cached_result = actual_result
+                actual_result = _cached_result
+            _cached_result = actual_result
             # print(send_signal_result)
-            is_microphone_in_use.last_check_time = now
-        return is_microphone_in_use.cached_result
+            _last_check_time = now
+        return _cached_result
 
 
 def assume_by_keypress():

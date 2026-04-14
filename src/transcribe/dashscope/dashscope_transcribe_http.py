@@ -19,7 +19,7 @@ from src.provider.provider_settings import (
 )
 
 try:
-    from src.provider.provider_config import provider_manager  # type: ignore
+    from src.provider.provider_config import provider_manager
 except Exception:  # pragma: no cover
     provider_manager = None  # type: ignore
 
@@ -68,7 +68,7 @@ def get_api_key() -> str:
 def get_timeout_seconds() -> float:
     raw = ps_get_str("timeout_seconds", env=["DASHSCOPE_TIMEOUT_SECONDS", "OPENAI_HTTP_TIMEOUT"], default="120")
     try:
-        val = max(1.0, float(raw))
+        val = max(1.0, float(raw or "120"))
         return val
     except Exception:
         return 120.0
@@ -167,7 +167,7 @@ def get_context_text() -> str | None:
 
 def get_stream_enabled() -> bool:
     # YAML -> env(DASHSCOPE_STREAM) -> env(OPENAI_TRANSCRIBE_STREAM) fallback
-    if ps_get_bool("stream", env="DASHSCOPE_STREAM", default=None) is not None:
+    if ps_get_str("stream", env="DASHSCOPE_STREAM", default=None) is not None:
         return ps_get_bool("stream", env="DASHSCOPE_STREAM", default=False)
     return ps_get_bool("stream", env="OPENAI_TRANSCRIBE_STREAM", default=False)
 
@@ -504,7 +504,7 @@ async def _send_with_sdk(
     t_complete = time.time()
     meta: Dict[str, Any] = {"via": "dashscope-sdk"}
     try:
-        import dashscope  # type: ignore
+        import dashscope
     except Exception as exc:  # SDK not available
         return "", 0, t_complete, meta, str(exc)
 

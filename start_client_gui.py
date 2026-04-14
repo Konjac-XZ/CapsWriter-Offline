@@ -36,17 +36,12 @@ except Exception:
     # Don't block startup on dotenv issues
     pass
 
-import win32api
-import win32con
-import win32gui
-import win32print
 from PySide6.QtCore import QPoint, Qt, QTimer, QLocale
 from PySide6.QtGui import (
     QAction,
     QFont,
     QIcon,
     QWheelEvent,
-    QFontDatabase,
     QTextOption,
     QShortcut,
     QKeySequence,
@@ -54,7 +49,6 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -72,7 +66,7 @@ from PySide6.QtWidgets import (
 )
 # Intentionally defer theme import/application until after first paint for faster startup
 
-from src.infra.config import ClientConfig as Config, ServerConfig
+from src.infra.config import ClientConfig as Config
 
 def _resolve_pythonw_client() -> str | None:
     """Return a usable Python interpreter for client child processes.
@@ -85,10 +79,11 @@ def _resolve_pythonw_client() -> str | None:
     candidates: list[Path] = [
         ROOT / ".venv" / "Scripts" / "pythonw.exe",
         ROOT / ".venv" / "Scripts" / "python.exe",
-        Path(sys.executable) if sys.executable else None,  # type: ignore[arg-type]
     ]
+    if sys.executable:
+        candidates.append(Path(sys.executable))
     for p in candidates:
-        if p and p.exists():
+        if p.exists():
             return str(p)
     return None
 
@@ -361,15 +356,15 @@ class GUI(QMainWindow):
         self.create_systray_icon()
 
         # Layout
-        self.layout = QVBoxLayout()
-        self.layout.setSpacing(0)
-        self.layout.setContentsMargins(3, 3, 3, 3)
-        self.layout.addWidget(self.text_box_client)
-        self.layout.addLayout(self.provider_layout)
+        self.main_layout = QVBoxLayout()
+        self.main_layout.setSpacing(0)
+        self.main_layout.setContentsMargins(3, 3, 3, 3)
+        self.main_layout.addWidget(self.text_box_client)
+        self.main_layout.addLayout(self.provider_layout)
 
         # Central widget
         central_widget = QWidget()
-        central_widget.setLayout(self.layout)
+        central_widget.setLayout(self.main_layout)
         self.setCentralWidget(central_widget)
 
         # Shortcut: Ctrl+L clears the text box

@@ -230,15 +230,6 @@ async def transcribe_with_retries(
     t_submit = time.time()
     t_complete = t_submit
 
-    # Import exceptions locally to avoid hard dependency if provider isn't used
-    try:
-        import websockets
-        from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
-    except Exception:
-        websockets = None  # type: ignore
-        ConnectionClosedError = Exception  # type: ignore
-        ConnectionClosedOK = Exception  # type: ignore
-
     for attempt in range(max_retries):
         # Reset buffer position each attempt
         try:

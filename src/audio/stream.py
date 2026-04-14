@@ -15,6 +15,8 @@ def record_callback(
 ) -> None:
     if not Cosmic.on:
         return
+    if Cosmic.loop is None:
+        return
     asyncio.run_coroutine_threadsafe(
         Cosmic.queue_in.put(
             {
@@ -28,7 +30,8 @@ def record_callback(
 
 
 def stream_close(signum, frame):
-    Cosmic.stream.close()
+    if Cosmic.stream is not None:
+        Cosmic.stream.close()
 
 
 def stream_reopen():
@@ -37,7 +40,8 @@ def stream_reopen():
     console.print("\n正在聆听……", style="green")
 
     # 关闭旧流
-    Cosmic.stream.close()
+    if Cosmic.stream is not None:
+        Cosmic.stream.close()
 
     # 重载 PortAudio，更新设备列表
     sd._terminate()

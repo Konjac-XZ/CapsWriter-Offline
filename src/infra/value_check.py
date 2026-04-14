@@ -55,7 +55,7 @@ class ValueCheck:
             return False, "不是有效的端口号"
 
     @staticmethod
-    def is_file_exist(file_path: str, suffix: str = None):
+    def is_file_exist(file_path: str, suffix: str | None = None):
         file = Path(file_path)
         if not file.exists():
             return False, "文件不存在"

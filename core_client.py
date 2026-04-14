@@ -1,40 +1,28 @@
 # coding: utf-8
-import contextlib
-import sys, importlib.util, platform
-print(sys.executable, sys.version, platform.architecture())
-print(importlib.util.find_spec('_cffi_backend'))
-print([p for p in sys.path if p.endswith('site-packages')])
-
 import asyncio
+import contextlib
 import os
 import signal
 import sys
-from pathlib import Path
 from platform import system
-from typing import List
 
 import colorama
-import typer
 
 from src.infra.env_loader import load_dotenv_files
 from src.infra.cosmic import Cosmic, console
-from src.infra.config import ClientConfig as Config
 
 try:
     load_dotenv_files()
 except Exception:
     pass
 
-if sys.argv[1:]:
-    Cosmic.transcribe_subtitles = True
-else:
-    Cosmic.transcribe_subtitles = False
 from src.pipeline.recv_result import recv_result
 from src.keyboard.shortcut_handler import bond_shortcut
 from src.audio.stream import stream_close, stream_open
-from src.transcribe.transcribe import transcribe_check, transcribe_recv, transcribe_send
 from src.polish.vision_context import start_vision_context_service, stop_vision_context_service
 from src.system.empty_working_set import empty_current_working_set
+
+Cosmic.transcribe_subtitles = bool(sys.argv[1:])
 
 # 确保根目录位置正确，用相对路径加载模型
 BASE_DIR = os.getcwd()
@@ -46,7 +34,8 @@ colorama.init()
 
 # MacOS 的权限设置
 if system() == "Darwin" and not sys.argv[1:]:
-    if os.getuid() != 0:
+    getuid = getattr(os, "getuid", None)
+    if callable(getuid) and getuid() != 0:
         print("在 MacOS 上需要以管理员启动客户端才能监听键盘活动，请 sudo 启动")
         input("按回车退出")
         sys.exit()
