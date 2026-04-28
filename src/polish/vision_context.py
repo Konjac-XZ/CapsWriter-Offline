@@ -9,7 +9,6 @@ import platform
 import sys
 import time
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +47,8 @@ class ActiveWindowCapture:
 
 _missing_config_warned = False
 _feature_state_logged = False
+_vision_config_cache: dict[str, Any] = {}
+_vision_config_mtime: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -60,23 +61,46 @@ def _get_root_dir() -> Path:
     return Path(__file__).resolve().parent.parent.parent
 
 
-@lru_cache(maxsize=1)
 def _load_vision_config() -> dict:
     config_path = _get_root_dir() / "config" / "polish" / "vision.yaml"
+    global _vision_config_cache, _vision_config_mtime
+
     try:
-        return yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        mtime = config_path.stat().st_mtime
     except FileNotFoundError:
+        _vision_config_cache = {}
+        _vision_config_mtime = None
         console.print(
             f"[vision_context] 配置文件未找到：{config_path}，功能默认关闭。",
             style="yellow",
         )
         return {}
+    except Exception:
+        _vision_config_cache = {}
+        _vision_config_mtime = None
+        console.print(
+            f"[vision_context] 配置文件状态读取失败：{config_path}，功能默认关闭。",
+            style="yellow",
+        )
+        return {}
+
+    if _vision_config_mtime == mtime:
+        return _vision_config_cache
+
+    try:
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     except Exception as exc:
+        _vision_config_cache = {}
+        _vision_config_mtime = mtime
         console.print(
             f"[vision_context] 配置文件加载失败：{exc}，功能默认关闭。",
             style="yellow",
         )
         return {}
+
+    _vision_config_cache = data if isinstance(data, dict) else {}
+    _vision_config_mtime = mtime
+    return _vision_config_cache
 
 
 def _cfg() -> dict:
@@ -127,6 +151,9 @@ async def stop_vision_context_service(task: asyncio.Task | None) -> None:
 
 
 def get_recent_vision_context_summary() -> str | None:
+    if not is_vision_context_enabled():
+        return None
+
     payload = getattr(Cosmic, "vision_context", None)
     if not isinstance(payload, dict):
         return None

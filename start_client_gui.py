@@ -2,6 +2,7 @@ import argparse
 import cProfile
 import os
 import pstats
+import re
 import subprocess
 import sys
 import threading
@@ -10,6 +11,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Queue
+
+import yaml
 from src.infra.env_loader import load_dotenv_files
 
 # Project root is the directory containing this script; normalize CWD for reliability
@@ -49,6 +52,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -67,7 +71,7 @@ from PySide6.QtWidgets import (
 # Intentionally defer theme import/application until after first paint for faster startup
 
 from src.infra.config import ClientConfig as Config
-from src.polish.llm_polish import get_polish_prompt_text, update_polish_prompt_text
+from src.polish.llm_polish import get_polish_prompt_text, reload_polish_config, update_polish_prompt_text
 
 def _resolve_pythonw_client() -> str | None:
     """Return a usable Python interpreter for client child processes.
@@ -266,6 +270,7 @@ class GUI(QMainWindow):
         self.early_messages = []
         # Ensure provider_manager attribute exists before UI uses it
         self.provider_manager = None
+        self._syncing_context_toggle_states = False
 
         self.init_ui()
         self.output_queue_client = Queue()
@@ -448,6 +453,169 @@ class GUI(QMainWindow):
         container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         return container, label
 
+    @staticmethod
+    def _polish_config_path() -> Path:
+        return ROOT / "config" / "polish" / "polish.yaml"
+
+    @staticmethod
+    def _vision_config_path() -> Path:
+        return ROOT / "config" / "polish" / "vision.yaml"
+
+    def _create_context_toggle(self, text: str, tooltip: str) -> QCheckBox:
+        checkbox = QCheckBox(text)
+        checkbox.setToolTip(tooltip)
+        checkbox.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        return checkbox
+
+    def _update_yaml_bool(self, path: Path, key_path: tuple[str, ...], value: bool) -> bool:
+        try:
+            original = path.read_text(encoding="utf-8")
+        except Exception:
+            return False
+
+        replacement = "true" if value else "false"
+        lines = original.splitlines(keepends=True)
+
+        if len(key_path) == 1:
+            key = key_path[0]
+            pattern = re.compile(
+                rf"^(?P<prefix>{re.escape(key)}\s*:\s*)(?P<value>true|false)(?P<suffix>\s*(#.*)?)$",
+                re.IGNORECASE,
+            )
+            for idx, line in enumerate(lines):
+                stripped = line.rstrip("\r\n")
+                match = pattern.match(stripped)
+                if not match:
+                    continue
+                newline = line[len(stripped):]
+                lines[idx] = f"{match.group('prefix')}{replacement}{match.group('suffix')}{newline}"
+                try:
+                    path.write_text("".join(lines), encoding="utf-8")
+                except Exception:
+                    return False
+                return True
+            return False
+
+        if len(key_path) == 2:
+            section, key = key_path
+            section_pattern = re.compile(rf"^{re.escape(section)}\s*:\s*$")
+            value_pattern = re.compile(
+                rf"^(?P<indent>\s+)(?P<prefix>{re.escape(key)}\s*:\s*)(?P<value>true|false)(?P<suffix>\s*(#.*)?)$",
+                re.IGNORECASE,
+            )
+            in_section = False
+            for idx, line in enumerate(lines):
+                stripped = line.rstrip("\r\n")
+                if not in_section:
+                    if section_pattern.match(stripped):
+                        in_section = True
+                    continue
+
+                if stripped and not stripped.startswith((" ", "\t", "#")):
+                    break
+
+                match = value_pattern.match(stripped)
+                if not match:
+                    continue
+
+                newline = line[len(stripped):]
+                lines[idx] = (
+                    f"{match.group('indent')}{match.group('prefix')}{replacement}"
+                    f"{match.group('suffix')}{newline}"
+                )
+                try:
+                    path.write_text("".join(lines), encoding="utf-8")
+                except Exception:
+                    return False
+                return True
+            return False
+
+        return False
+
+    def _load_bool_from_yaml(self, path: Path, key_path: tuple[str, ...], default: bool) -> bool:
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            return default
+
+        current = data
+        try:
+            for key in key_path:
+                current = current[key]
+        except Exception:
+            return default
+        return bool(current)
+
+    def _sync_context_toggle_states(self) -> None:
+        self._syncing_context_toggle_states = True
+        try:
+            self.append_history_checkbox.setChecked(
+                self._load_bool_from_yaml(self._polish_config_path(), ("history", "enabled"), True)
+            )
+            self.append_textbox_checkbox.setChecked(
+                self._load_bool_from_yaml(self._polish_config_path(), ("textbox_context", "enabled"), True)
+            )
+            self.append_vision_checkbox.setChecked(
+                self._load_bool_from_yaml(self._vision_config_path(), ("enabled",), False)
+            )
+        finally:
+            self._syncing_context_toggle_states = False
+
+    def _apply_context_toggle_change(
+        self,
+        *,
+        checked: bool,
+        path: Path,
+        key_path: tuple[str, ...],
+        label: str,
+        restart_workers: bool = False,
+    ) -> None:
+        if self._syncing_context_toggle_states:
+            return
+
+        if not self._update_yaml_bool(path, key_path, checked):
+            self.append_colored_line(f"保存{label}开关失败（请检查配置文件权限或格式）", "#ff5555")
+            self._sync_context_toggle_states()
+            return
+
+        if path == self._polish_config_path():
+            try:
+                reload_polish_config()
+            except Exception:
+                pass
+
+        state_text = "启用" if checked else "禁用"
+        self.append_colored_line(f"已{state_text}{label}。")
+
+        if restart_workers:
+            self.append_colored_line("正在重启录音进程以应用视觉上下文设置。", "#888888")
+            self.restart_children_with_env()
+
+    def on_append_history_toggled(self, checked: bool) -> None:
+        self._apply_context_toggle_change(
+            checked=checked,
+            path=self._polish_config_path(),
+            key_path=("history", "enabled"),
+            label="附加最近上屏内容",
+        )
+
+    def on_append_textbox_toggled(self, checked: bool) -> None:
+        self._apply_context_toggle_change(
+            checked=checked,
+            path=self._polish_config_path(),
+            key_path=("textbox_context", "enabled"),
+            label="附加文本框上下文",
+        )
+
+    def on_append_vision_toggled(self, checked: bool) -> None:
+        self._apply_context_toggle_change(
+            checked=checked,
+            path=self._vision_config_path(),
+            key_path=("enabled",),
+            label="附加视觉上下文",
+            restart_workers=True,
+        )
+
     def create_provider_selector(self):
         """Create provider selection UI below the main text box."""
         self.provider_layout = QVBoxLayout()
@@ -497,7 +665,38 @@ class GUI(QMainWindow):
         self.clear_history_button.clicked.connect(self.clear_recent_output_history)
         self.clear_history_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         action_row.addWidget(self.clear_history_button)
-        action_row.addStretch()
+
+        context_toggle_row = QHBoxLayout()
+        context_toggle_row.setSpacing(10)
+        context_toggle_row.setContentsMargins(0, 0, 0, 0)
+
+        self.append_history_checkbox = self._create_context_toggle(
+            "附加最近上屏内容",
+            "控制 LLM 润色时是否附加最近几条已上屏文本作为上下文",
+        )
+        self.append_history_checkbox.toggled.connect(self.on_append_history_toggled)
+        context_toggle_row.addWidget(self.append_history_checkbox)
+
+        self.append_textbox_checkbox = self._create_context_toggle(
+            "附加文本框上下文",
+            "控制 LLM 润色时是否附加当前活动文本框全文作为上下文",
+        )
+        self.append_textbox_checkbox.toggled.connect(self.on_append_textbox_toggled)
+        context_toggle_row.addWidget(self.append_textbox_checkbox)
+
+        self.append_vision_checkbox = self._create_context_toggle(
+            "附加视觉上下文",
+            "控制 LLM 润色时是否附加当前活动窗口的视觉摘要作为上下文",
+        )
+        self.append_vision_checkbox.toggled.connect(self.on_append_vision_toggled)
+        context_toggle_row.addWidget(self.append_vision_checkbox)
+
+        context_toggle_container = QWidget()
+        context_toggle_container.setLayout(context_toggle_row)
+        context_toggle_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        action_row.addSpacing(8)
+        action_row.addWidget(context_toggle_container, 1)
+        action_row.addSpacing(8)
 
         self.edit_lexicon_button = QPushButton("编辑词库")
         self.edit_lexicon_button.setToolTip("编辑用户自定义词库（config/user_lexicon.yaml）")
@@ -513,6 +712,8 @@ class GUI(QMainWindow):
             self.edit_lexicon_button,
         ):
             button.setMinimumWidth(uniform_button_width)
+
+        self._sync_context_toggle_states()
 
         # Model row (only for OpenAI-type providers)
         self.model_row = QHBoxLayout()

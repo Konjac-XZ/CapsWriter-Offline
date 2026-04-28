@@ -5,7 +5,6 @@ import os
 import sys
 import threading
 import time
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -31,23 +30,46 @@ def _get_polish_config_path() -> Path:
     return _get_root_dir() / "config" / "polish" / "polish.yaml"
 
 
-@lru_cache(maxsize=1)
+_polish_config_cache: dict[str, Any] = {}
+_polish_config_mtime: float | None = None
+
+
 def _load_polish_config() -> dict:
     config_path = _get_polish_config_path()
+    global _polish_config_cache, _polish_config_mtime
+
     try:
-        return yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        mtime = config_path.stat().st_mtime
     except FileNotFoundError:
+        _polish_config_cache = {}
+        _polish_config_mtime = None
         # console.print(
         #     f"[LLM 润色] 配置文件未找到：{config_path}，使用内置默认值。",
         #     style="yellow",
         # )
         return {}
     except Exception:
+        _polish_config_cache = {}
+        _polish_config_mtime = None
+        return {}
+
+    if _polish_config_mtime == mtime:
+        return _polish_config_cache
+
+    try:
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        _polish_config_cache = {}
+        _polish_config_mtime = mtime
         # console.print(
         #     f"[LLM 润色] 配置文件加载失败：{exc}，使用内置默认值。",
         #     style="yellow",
         # )
         return {}
+
+    _polish_config_cache = data if isinstance(data, dict) else {}
+    _polish_config_mtime = mtime
+    return _polish_config_cache
 
 
 def _cfg() -> dict:
@@ -55,7 +77,8 @@ def _cfg() -> dict:
 
 
 def reload_polish_config() -> dict:
-    _load_polish_config.cache_clear()
+    global _polish_config_mtime
+    _polish_config_mtime = None
     return _cfg()
 
 
