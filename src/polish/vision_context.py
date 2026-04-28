@@ -543,7 +543,7 @@ def _bitmap_to_png(bitmap_bytes: bytes, width: int, height: int, bytes_per_line:
     buffer = QBuffer()
     if not buffer.open(QIODevice.OpenModeFlag.WriteOnly):
         return None
-    if not image.save(buffer, "PNG"):
+    if not image.save(buffer, b"PNG"):
         return None
     return bytes(buffer.data())
 

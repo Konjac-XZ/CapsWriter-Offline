@@ -67,6 +67,7 @@ from PySide6.QtWidgets import (
 # Intentionally defer theme import/application until after first paint for faster startup
 
 from src.infra.config import ClientConfig as Config
+from src.polish.llm_polish import get_polish_prompt_text, update_polish_prompt_text
 
 def _resolve_pythonw_client() -> str | None:
     """Return a usable Python interpreter for client child processes.
@@ -225,11 +226,17 @@ class StartupProfiler:
 
 
 class PromptEditDialog(QDialog):
-    """Simple dialog for editing provider-specific prompts."""
+    """Simple dialog for editing prompt text."""
 
-    def __init__(self, parent: QWidget | None = None, *, initial_text: str = ""):
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        initial_text: str = "",
+        window_title: str = "编辑提示词",
+    ):
         super().__init__(parent)
-        self.setWindowTitle("修改提示词")
+        self.setWindowTitle(window_title)
         self.resize(420, 320)
 
         layout = QVBoxLayout(self)
@@ -248,41 +255,6 @@ class PromptEditDialog(QDialog):
         layout.addWidget(buttons)
 
     def prompt_text(self) -> str:
-        return self.text_edit.toPlainText()
-
-
-class LexiconEditDialog(QDialog):
-    """Dialog for editing the user lexicon (config/user_lexicon.yaml)."""
-
-    def __init__(self, parent: QWidget | None = None, *, initial_text: str = ""):
-        super().__init__(parent)
-        self.setWindowTitle("编辑用户词库")
-        self.resize(420, 360)
-
-        layout = QVBoxLayout(self)
-
-        hint = QLabel(
-            "每行一个词条（YAML 格式）。保存后无需重启，下次录音自动生效。",
-            self,
-        )
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
-
-        self.text_edit = QPlainTextEdit(self)
-        self.text_edit.setPlainText(initial_text)
-        layout.addWidget(self.text_edit)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel, parent=self)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        try:
-            buttons.button(QDialogButtonBox.Save).setText("保存")
-            buttons.button(QDialogButtonBox.Cancel).setText("取消")
-        except Exception:
-            pass
-        layout.addWidget(buttons)
-
-    def lexicon_text(self) -> str:
         return self.text_edit.toPlainText()
 
 
@@ -479,71 +451,85 @@ class GUI(QMainWindow):
     def create_provider_selector(self):
         """Create provider selection UI below the main text box."""
         self.provider_layout = QVBoxLayout()
-        self.provider_layout.setSpacing(8)
+        self.provider_layout.setSpacing(6)
         self.provider_layout.setContentsMargins(3, 3, 3, 3)
 
-        # Provider + prompt row
-        selector_row = QHBoxLayout()
-        selector_row.setSpacing(6)
-        selector_row.setContentsMargins(0, 0, 0, 0)
+        provider_row = QHBoxLayout()
+        provider_row.setSpacing(6)
+        provider_row.setContentsMargins(0, 0, 0, 0)
 
         self.provider_combo = QComboBox()
         self._configure_collapsible_combo(self.provider_combo)
         provider_field, self.provider_label = self._build_combo_field("转录服务商:", self.provider_combo)
         self.populate_provider_combo()
         self.provider_combo.currentTextChanged.connect(self.on_provider_changed)
-        selector_row.addWidget(provider_field, 1)
+        provider_row.addWidget(provider_field, 1)
+
+        self.modify_prompt_button = QPushButton("编辑 ASR 提示词")
+        self.modify_prompt_button.setToolTip("编辑当前转录服务商的自定义提示词")
+        self.modify_prompt_button.clicked.connect(self.show_modify_prompt_dialog)
+        self.modify_prompt_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        provider_row.addWidget(self.modify_prompt_button)
+
+        prompt_row = QHBoxLayout()
+        prompt_row.setSpacing(6)
+        prompt_row.setContentsMargins(0, 0, 0, 0)
 
         self.prompt_combo = QComboBox()
         self._configure_collapsible_combo(self.prompt_combo)
         self.prompt_combo.setEditable(False)
         self.prompt_combo.currentIndexChanged.connect(self.on_prompt_changed)
-        prompt_field, self.prompt_label = self._build_combo_field("提示词:", self.prompt_combo)
-        selector_row.addWidget(prompt_field, 1)
+        prompt_field, self.prompt_label = self._build_combo_field("ASR 提示词:", self.prompt_combo)
+        prompt_row.addWidget(prompt_field, 1)
 
-        selector_row.addStretch()
+        self.edit_polish_prompt_button = QPushButton("编辑 LLM 提示词")
+        self.edit_polish_prompt_button.setToolTip("编辑 config/polish/polish.yaml 中的 LLM 润色提示词")
+        self.edit_polish_prompt_button.clicked.connect(self.show_edit_polish_prompt_dialog)
+        self.edit_polish_prompt_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        prompt_row.addWidget(self.edit_polish_prompt_button)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(6)
+        action_row.setContentsMargins(0, 0, 0, 0)
+
+        self.clear_history_button = QPushButton("清除最近上屏")
+        self.clear_history_button.setToolTip("暂时清除 LLM 润色使用的最近上屏消息记录")
+        self.clear_history_button.clicked.connect(self.clear_recent_output_history)
+        self.clear_history_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        action_row.addWidget(self.clear_history_button)
+        action_row.addStretch()
+
+        self.edit_lexicon_button = QPushButton("编辑词库")
+        self.edit_lexicon_button.setToolTip("编辑用户自定义词库（config/user_lexicon.yaml）")
+        self.edit_lexicon_button.clicked.connect(self.show_edit_lexicon_dialog)
+        self.edit_lexicon_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        action_row.addWidget(self.edit_lexicon_button)
+
+        uniform_button_width = 144
+        for button in (
+            self.modify_prompt_button,
+            self.edit_polish_prompt_button,
+            self.clear_history_button,
+            self.edit_lexicon_button,
+        ):
+            button.setMinimumWidth(uniform_button_width)
 
         # Model row (only for OpenAI-type providers)
         self.model_row = QHBoxLayout()
         self.model_row.setSpacing(6)
         self.model_row.setContentsMargins(0, 0, 0, 0)
-
         self.model_combo = QComboBox()
         self._configure_collapsible_combo(self.model_combo, editable=True)
         model_field, self.model_label = self._build_combo_field("模型:", self.model_combo)
         self.model_combo.currentTextChanged.connect(self.on_model_changed)
         self.model_row.addWidget(model_field, 1)
+        self.model_row.addStretch()
         model_field.setVisible(False)
         self.model_container = model_field
 
-        # Test All button
-        self.test_all_button = QPushButton("测试全部")
-        self.test_all_button.setMinimumWidth(80)
-        self.test_all_button.setToolTip("测试所有转录服务商的可用性")
-        self.test_all_button.clicked.connect(self.test_all_providers)
-        self.test_all_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.modify_prompt_button = QPushButton("修改提示词")
-        self.modify_prompt_button.setMinimumWidth(90)
-        self.modify_prompt_button.setToolTip("编辑当前服务商的自定义提示词")
-        self.modify_prompt_button.clicked.connect(self.show_modify_prompt_dialog)
-        self.modify_prompt_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.edit_lexicon_button = QPushButton("编辑词库")
-        self.edit_lexicon_button.setMinimumWidth(80)
-        self.edit_lexicon_button.setToolTip("编辑用户自定义词库（config/user_lexicon.yaml）")
-        self.edit_lexicon_button.clicked.connect(self.show_edit_lexicon_dialog)
-        self.edit_lexicon_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.clear_history_button = QPushButton("清除最近上屏")
-        self.clear_history_button.setMinimumWidth(110)
-        self.clear_history_button.setToolTip("暂时清除 LLM 润色使用的最近上屏消息记录")
-        self.clear_history_button.clicked.connect(self.clear_recent_output_history)
-        self.clear_history_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.model_row.addWidget(self.modify_prompt_button)
-        self.model_row.addWidget(self.edit_lexicon_button)
-        self.model_row.addWidget(self.clear_history_button)
-        self.model_row.addWidget(self.test_all_button)
-        self.model_row.addStretch()
-
-        self.provider_layout.addLayout(selector_row)
+        self.provider_layout.addLayout(provider_row)
+        self.provider_layout.addLayout(prompt_row)
+        self.provider_layout.addLayout(action_row)
         self.provider_layout.addLayout(self.model_row)
 
         # Populate initial lists according to active provider
@@ -660,7 +646,7 @@ class GUI(QMainWindow):
         return ""
 
     def show_modify_prompt_dialog(self) -> None:
-        """Open the prompt editor dialog and persist any changes."""
+        """Open the ASR prompt editor dialog and persist any changes."""
         if not self.provider_manager:
             self.append_colored_line("转录服务商配置系统未初始化", "#ff5555")
             return
@@ -684,7 +670,7 @@ class GUI(QMainWindow):
         else:
             initial_text = self._resolve_prompt_text_for_provider(provider_id)
 
-        dialog = PromptEditDialog(self, initial_text=initial_text)
+        dialog = PromptEditDialog(self, initial_text=initial_text, window_title="编辑 ASR 提示词")
         if dialog.exec() != QDialog.Accepted:
             return
 
@@ -715,7 +701,7 @@ class GUI(QMainWindow):
             self.populate_prompt_combo()
             self.restart_children_with_env()
 
-            msg = f"已更新提示词预设: {preset_name}"
+            msg = f"已更新 ASR 提示词预设: {preset_name}"
             if not provider_updated:
                 msg += "（但未能刷新当前服务商设置，请手动检查配置）"
             self.append_colored_line(msg)
@@ -731,55 +717,55 @@ class GUI(QMainWindow):
             updated = False
 
         if not updated:
-            self.append_colored_line("保存提示词失败（请检查配置文件权限或格式）", "#ff5555")
+            self.append_colored_line("保存 ASR 提示词失败（请检查配置文件权限或格式）", "#ff5555")
             return
 
         self.populate_prompt_combo()
         self.restart_children_with_env()
 
         if new_prompt_trimmed:
-            self.append_colored_line("已保存自定义提示词。")
+            self.append_colored_line("已保存自定义 ASR 提示词。")
         else:
-            self.append_colored_line("已清除自定义提示词，恢复为预设/默认值。")
+            self.append_colored_line("已清除自定义 ASR 提示词，恢复为预设/默认值。")
+
+    def show_edit_polish_prompt_dialog(self) -> None:
+        """Open the LLM polish prompt editor dialog and persist any changes."""
+        try:
+            initial_text = get_polish_prompt_text()
+        except Exception as exc:
+            self.append_colored_line(f"读取 LLM 提示词失败：{exc}", "#ff5555")
+            return
+
+        dialog = PromptEditDialog(self, initial_text=initial_text, window_title="编辑 LLM 提示词")
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        try:
+            updated = update_polish_prompt_text(dialog.prompt_text())
+        except Exception:
+            updated = False
+
+        if not updated:
+            self.append_colored_line("保存 LLM 提示词失败（请检查 config/polish/polish.yaml 权限或格式）", "#ff5555")
+            return
+
+        self.restart_children_with_env()
+        self.append_colored_line("已保存 LLM 提示词。")
 
     def show_edit_lexicon_dialog(self) -> None:
         """Open the user lexicon editor and persist any changes."""
-        import sys
-        from pathlib import Path
-
-        if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-            root = Path(sys.executable).resolve().parent
-        else:
-            root = Path(__file__).resolve().parent
-
-        lexicon_path = root / "config" / "user_lexicon.yaml"
-
         try:
-            initial_text = lexicon_path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            initial_text = "words: []\n"
+            from src.gui.lexicon_editor import open_lexicon_editor
+
+            accepted, _saved_text = open_lexicon_editor(self)
         except Exception as exc:
             self.append_colored_line(f"读取用户词库失败：{exc}", "#ff5555")
             return
 
-        dialog = LexiconEditDialog(self, initial_text=initial_text)
-        if dialog.exec() != QDialog.Accepted:
+        if not accepted:
             return
 
-        new_text = dialog.lexicon_text()
-        try:
-            import yaml  # validate YAML before saving
-            yaml.safe_load(new_text)
-        except Exception as exc:
-            self.append_colored_line(f"用户词库 YAML 格式错误，未保存：{exc}", "#ff5555")
-            return
-
-        try:
-            lexicon_path.parent.mkdir(parents=True, exist_ok=True)
-            lexicon_path.write_text(new_text, encoding="utf-8")
-            self.append_colored_line("用户词库已保存，下次录音自动生效。")
-        except Exception as exc:
-            self.append_colored_line(f"保存用户词库失败：{exc}", "#ff5555")
+        self.append_colored_line("用户词库已保存，下次录音自动生效。")
 
     def clear_recent_output_history(self) -> None:
         """Clear the recent finalized-text history used as LLM polish context."""
@@ -1071,9 +1057,9 @@ class GUI(QMainWindow):
                     else:
                         self.log_message(line, "#000000")
 
-            # Re-enable the test button
-            self.test_all_button.setEnabled(True)
-            self.test_all_button.setText("Test All")
+            if hasattr(self, "test_all_button"):
+                self.test_all_button.setEnabled(True)
+                self.test_all_button.setText("Test All")
 
         QTimer.singleShot(0, update_gui)
 
@@ -1166,7 +1152,6 @@ class GUI(QMainWindow):
             pass
 
         reload_providers_action = QAction("⚡ Reload Providers", self)
-        test_all_action = QAction("🧪 Test All Providers", self)
         explore_home_folder_action = QAction("📁 Open Home Folder With Explorer", self)
         vscode_home_folder_action = QAction("🤓 Open Home Folder With VSCode", self)
 
@@ -1175,7 +1160,6 @@ class GUI(QMainWindow):
         quit_action = QAction("❌ Quit", self)
 
         reload_providers_action.triggered.connect(self.reload_providers)
-        test_all_action.triggered.connect(self.run_test_all_providers)
         explore_home_folder_action.triggered.connect(self.explore_home_folder)
         vscode_home_folder_action.triggered.connect(self.vscode_home_folder)
         show_action.triggered.connect(self.showNormal)
@@ -1188,7 +1172,6 @@ class GUI(QMainWindow):
         self.tray_menu = QMenu()
         # Provider management shortcuts
         self.tray_menu.addAction(reload_providers_action)
-        self.tray_menu.addAction(test_all_action)
 
         self.tray_menu.addSeparator()
         self.tray_menu.addAction(show_action)
@@ -1560,10 +1543,12 @@ class GUI(QMainWindow):
         widgets = [self.text_box_client]
         if hasattr(self, 'provider_combo'):
             widgets.append(self.provider_combo)
-        if hasattr(self, 'test_all_button'):
-            widgets.append(self.test_all_button)
         if hasattr(self, 'modify_prompt_button'):
             widgets.append(self.modify_prompt_button)
+        if hasattr(self, 'edit_polish_prompt_button'):
+            widgets.append(self.edit_polish_prompt_button)
+        if hasattr(self, 'edit_lexicon_button'):
+            widgets.append(self.edit_lexicon_button)
         if hasattr(self, 'clear_history_button'):
             widgets.append(self.clear_history_button)
         if hasattr(self, 'model_combo'):

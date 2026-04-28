@@ -27,9 +27,13 @@ def _get_root_dir() -> Path:
     return Path(__file__).resolve().parent.parent.parent
 
 
+def _get_polish_config_path() -> Path:
+    return _get_root_dir() / "config" / "polish" / "polish.yaml"
+
+
 @lru_cache(maxsize=1)
 def _load_polish_config() -> dict:
-    config_path = _get_root_dir() / "config" / "polish" / "polish.yaml"
+    config_path = _get_polish_config_path()
     try:
         return yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     except FileNotFoundError:
@@ -48,6 +52,11 @@ def _load_polish_config() -> dict:
 
 def _cfg() -> dict:
     return _load_polish_config()
+
+
+def reload_polish_config() -> dict:
+    _load_polish_config.cache_clear()
+    return _cfg()
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +133,37 @@ def clear_finalized_history() -> int:
 
 def is_llm_polish_enabled() -> bool:
     return bool(_cfg().get("enabled", False))
+
+
+def get_polish_prompt_text() -> str:
+    prompt = _cfg().get("prompt", "")
+    return prompt if isinstance(prompt, str) else ""
+
+
+def update_polish_prompt_text(prompt_text: str) -> bool:
+    config_path = _get_polish_config_path()
+    try:
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except FileNotFoundError:
+        return False
+    except Exception:
+        return False
+
+    if not isinstance(data, dict):
+        return False
+
+    data["prompt"] = prompt_text
+
+    try:
+        config_path.write_text(
+            yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+    except Exception:
+        return False
+
+    reload_polish_config()
+    return True
 
 
 def should_polish_text(text: str) -> bool:
