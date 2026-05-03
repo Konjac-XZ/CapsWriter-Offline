@@ -195,8 +195,6 @@ async def _vision_context_loop() -> None:
     if not _feature_state_logged:
         if is_vision_context_enabled():
             console.print("[vision_context] 功能已启用。", style="dim")
-        else:
-            console.print("[vision_context] 配置中 enabled=false，功能已跳过。", style="dim")
         _feature_state_logged = True
 
     if not is_vision_context_enabled():

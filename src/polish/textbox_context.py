@@ -13,6 +13,8 @@ from typing import Any
 import clipman
 import keyboard
 
+from src.infra.cosmic import console
+
 
 EM_GETPASSWORDCHAR = 0x00D2
 _MAX_DIRECT_TEXT_CHARS = 50000
@@ -74,9 +76,9 @@ def get_active_textbox_context(
     )
 
     if _is_excluded_process(process_name, excluded_process_names):
-        _debug_log(
-            debug,
+        console.print(
             f"[文本框解析] 进程 {process_name} 命中上下文黑名单，跳过文本框读取。",
+            style="dim",
         )
         return None
 

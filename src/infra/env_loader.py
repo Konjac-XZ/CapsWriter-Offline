@@ -90,18 +90,10 @@ def load_dotenv_files() -> dict[str, str]:
                         loaded[key] = os.environ.get(key, "")
             except Exception:
                 continue
-        print(
-            f"[env_loader] 已通过 python-dotenv 加载 {len(loaded)} 个变量"
-            f"（文件：{', '.join(found_files)}）"
-        )
         # _log_llm_keys(loaded)
         return loaded
 
     loaded = _load_manually(root)
-    print(
-        f"[env_loader] 已手动解析 {len(loaded)} 个变量"
-        f"（文件：{', '.join(found_files)}）"
-    )
     # _log_llm_keys(loaded)
     return loaded
 
