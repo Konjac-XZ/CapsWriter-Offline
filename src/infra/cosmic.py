@@ -99,6 +99,7 @@ class Cosmic:
     vision_context = {}
     vision_context_task = None
     vision_context_last_error = None
+    transcribe_busy = False
     _last_stream_len = 0
     _stream_had_increments = False
     _last_stream_task: str | None = None

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+from collections.abc import Iterable
 from functools import lru_cache
 import platform
 import time
@@ -46,28 +47,47 @@ class TextBoxContext:
     source: str
     hwnd: int | None = None
     class_name: str | None = None
+    process_id: int | None = None
+    process_name: str | None = None
 
 
-def get_active_textbox_context(*, debug: bool = False) -> TextBoxContext | None:
+def get_active_textbox_context(
+    *,
+    debug: bool = False,
+    excluded_process_names: Iterable[str] | None = None,
+) -> TextBoxContext | None:
     if platform.system() != "Windows":
         _debug_log(debug, "[文本框解析] 非 Windows 平台，跳过文本框读取。")
         return None
 
     hwnd = _get_focused_hwnd()
     class_name = _get_class_name(hwnd)
+    process_id = _get_window_process_id(hwnd)
+    process_name = _safe_process_name(process_id)
     _debug_log(
         debug,
         (
             "[文本框解析] 开始读取活动文本框"
             f" hwnd={_format_hwnd(hwnd)} class={class_name or '-'}"
+            f" process={process_name or '-'} pid={process_id or '-'}"
         ),
     )
+
+    if _is_excluded_process(process_name, excluded_process_names):
+        _debug_log(
+            debug,
+            f"[文本框解析] 进程 {process_name} 命中上下文黑名单，跳过文本框读取。",
+        )
+        return None
 
     text, source, hwnd, class_name, is_password = _read_text_via_uia(
         hwnd,
         class_name,
         debug=debug,
     )
+    if hwnd and (process_id is None or process_name is None):
+        process_id = process_id or _get_window_process_id(hwnd)
+        process_name = process_name or _safe_process_name(process_id)
     if text and text.strip() and source:
         _debug_log(
             debug,
@@ -82,6 +102,8 @@ def get_active_textbox_context(*, debug: bool = False) -> TextBoxContext | None:
             source=source,
             hwnd=hwnd,
             class_name=class_name,
+            process_id=process_id,
+            process_name=process_name,
         )
 
     if not is_password:
@@ -94,6 +116,8 @@ def get_active_textbox_context(*, debug: bool = False) -> TextBoxContext | None:
                 source="clipboard",
                 hwnd=hwnd,
                 class_name=class_name,
+                process_id=process_id,
+                process_name=process_name,
             )
 
         _debug_log(debug, "[文本框解析] 剪贴板回退未获得文本。")
@@ -127,6 +151,56 @@ def _get_class_name(hwnd: int | None) -> str | None:
     except Exception:
         return None
     return None
+
+
+def _get_window_process_id(hwnd: int | None) -> int | None:
+    if not hwnd:
+        return None
+
+    try:
+        process_id = wintypes.DWORD()
+        ctypes.windll.user32.GetWindowThreadProcessId(
+            wintypes.HWND(hwnd),
+            ctypes.byref(process_id),
+        )
+    except Exception:
+        return None
+
+    return int(process_id.value) or None
+
+
+def _safe_process_name(process_id: int | None) -> str | None:
+    if not process_id:
+        return None
+
+    try:
+        import psutil
+
+        name = psutil.Process(process_id).name()
+    except Exception:
+        return None
+
+    return name.strip() or None
+
+
+def _is_excluded_process(
+    process_name: str | None,
+    excluded_process_names: Iterable[str] | None,
+) -> bool:
+    if not process_name or not excluded_process_names:
+        return False
+
+    process_name_norm = process_name.strip().casefold()
+    if not process_name_norm:
+        return False
+
+    for excluded in excluded_process_names:
+        if not isinstance(excluded, str):
+            continue
+        if process_name_norm == excluded.strip().casefold():
+            return True
+
+    return False
 
 
 def _is_password_control(hwnd: int | None) -> bool:

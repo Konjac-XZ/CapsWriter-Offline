@@ -234,6 +234,13 @@ def _truncate_textbox_context(text: str, max_chars: int) -> tuple[str, bool]:
     return text[:head] + marker + text[-tail:], True
 
 
+def _get_excluded_process_names(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+
+    return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
+
 def _build_messages(
     prompt: str,
     asr_text: str,
@@ -333,6 +340,9 @@ async def polish_text(text: str) -> str:
     textbox_context_enabled: bool = bool(tc_cfg.get("enabled", False))
     textbox_context_max_chars: int = max(1025, int(tc_cfg.get("max_chars", 4096)))
     textbox_context_debug: bool = bool(tc_cfg.get("debug", False))
+    textbox_context_excluded_process_names = _get_excluded_process_names(
+        tc_cfg.get("excluded_process_names")
+    )
 
     prompt: str = cfg.get("prompt", "")
 
@@ -350,7 +360,10 @@ async def polish_text(text: str) -> str:
     textbox_context: str | None = None
     vision_context: str | None = None
     if textbox_context_enabled:
-        captured = get_active_textbox_context(debug=textbox_context_debug)
+        captured = get_active_textbox_context(
+            debug=textbox_context_debug,
+            excluded_process_names=textbox_context_excluded_process_names,
+        )
 
         if captured and captured.text.strip():
             textbox_context, was_truncated = _truncate_textbox_context(

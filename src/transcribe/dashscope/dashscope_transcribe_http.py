@@ -27,6 +27,7 @@ except Exception:  # pragma: no cover
 _HTTP_CLIENT: httpx.AsyncClient | None = None
 _HTTP2_ENABLED: bool = False
 _STREAM_WARNED: bool = False
+_REQUEST_SEQ: int = 0
 
  
 
@@ -49,6 +50,61 @@ def _bool_from_env(name: str, default: bool = False) -> bool:
 def _use_sdk() -> bool:
     # Prefer SDK by default if available
     return _bool_from_env("DASHSCOPE_USE_SDK", True)
+
+
+def should_reuse_http_client() -> bool:
+    if ps_get_str("reuse_http_client", env="DASHSCOPE_REUSE_HTTP_CLIENT", default=None) is not None:
+        return ps_get_bool("reuse_http_client", env="DASHSCOPE_REUSE_HTTP_CLIENT", default=False)
+    return True
+
+
+def should_use_http2() -> bool:
+    if ps_get_str("http2", env="DASHSCOPE_HTTP2", default=None) is not None:
+        return ps_get_bool("http2", env="DASHSCOPE_HTTP2", default=False)
+    return True
+
+
+def _next_request_id() -> str:
+    global _REQUEST_SEQ
+    _REQUEST_SEQ += 1
+    return f"dash-{_REQUEST_SEQ:05d}"
+
+
+def _client_label(client: httpx.AsyncClient | None) -> str:
+    if client is None:
+        return "none"
+    if _HTTP_CLIENT is client:
+        return f"shared#{id(client)}"
+    return f"oneshot#{id(client)}"
+
+
+def _log_request_event(
+    request_id: str,
+    event: str,
+    *,
+    client: httpx.AsyncClient | None = None,
+    endpoint: str | None = None,
+    attempt: int | None = None,
+    status: int | None = None,
+    elapsed_ms: float | None = None,
+    detail: str | None = None,
+) -> None:
+    parts = [f"[dashscope:{request_id}]", event]
+    if attempt is not None:
+        parts.append(f"attempt={attempt}")
+    if client is not None:
+        parts.append(f"client={_client_label(client)}")
+    parts.append(f"reuse={should_reuse_http_client()}")
+    parts.append(f"http2={_HTTP2_ENABLED}")
+    if status is not None:
+        parts.append(f"status={status}")
+    if elapsed_ms is not None:
+        parts.append(f"elapsed_ms={elapsed_ms:.1f}")
+    if endpoint:
+        parts.append(f"endpoint={endpoint}")
+    if detail:
+        parts.append(f"detail={detail}")
+    console.print(" ".join(parts), style="bright_black")
 
 
 def get_api_base() -> str:
@@ -351,6 +407,8 @@ def build_headers() -> dict:
         "Authorization": f"Bearer {get_api_key()}",
         "Content-Type": "application/json",
     }
+    if not should_reuse_http_client():
+        headers["Connection"] = "close"
     return headers
 
 
@@ -377,21 +435,29 @@ async def close_http_client(reason: str = "manual") -> None:
 
 async def get_http_client() -> httpx.AsyncClient:
     global _HTTP_CLIENT, _HTTP2_ENABLED
-    if _HTTP_CLIENT is not None:
+    reuse_client = should_reuse_http_client()
+    if reuse_client and _HTTP_CLIENT is not None:
         return _HTTP_CLIENT
-    http2 = _bool_from_env("DASHSCOPE_HTTP2", True)
+    http2 = should_use_http2()
     _HTTP2_ENABLED = http2
-    _HTTP_CLIENT = httpx.AsyncClient(
+    client = httpx.AsyncClient(
         timeout=httpx.Timeout(get_timeout_seconds()),
         headers=build_headers(),
         http2=http2,
         limits=build_limits(),
     )
-    try:
-        console.print(f"DashScope persistent session ready; HTTP/2={'ON' if http2 else 'OFF'}")
-    except Exception:
-        pass
-    return _HTTP_CLIENT
+    if reuse_client:
+        _HTTP_CLIENT = client
+        try:
+            console.print(f"DashScope persistent session ready; HTTP/2={'ON' if http2 else 'OFF'}")
+        except Exception:
+            pass
+    else:
+        try:
+            console.print(f"DashScope one-shot session mode; HTTP/2={'ON' if http2 else 'OFF'}", style="bright_yellow")
+        except Exception:
+            pass
+    return client
 
 
 def _atexit_close_client() -> None:
@@ -454,6 +520,8 @@ async def _send_once(
     client: httpx.AsyncClient,
     payload_buf: io.BytesIO,
     payload_mime: str,
+    request_id: str,
+    attempt: int,
 ) -> Tuple[str, int, float, Dict[str, Any], str | None]:
     encoded_audio, _ = _decode_audio_payload(payload_buf)
     audio_format = _guess_audio_format(payload_mime)
@@ -464,13 +532,33 @@ async def _send_once(
     t_complete = time.time()
 
     for endpoint in endpoints:
+        t0 = time.time()
+        _log_request_event(request_id, "post_begin", client=client, endpoint=endpoint, attempt=attempt)
         try:
             response = await client.post(endpoint, json=request_body)
         except Exception as exc:
+            _log_request_event(
+                request_id,
+                "post_exception",
+                client=client,
+                endpoint=endpoint,
+                attempt=attempt,
+                elapsed_ms=(time.time() - t0) * 1000,
+                detail=f"{exc.__class__.__name__}: {exc}",
+            )
             last_error = str(exc)
             continue
         t_complete = time.time()
         last_status = response.status_code
+        _log_request_event(
+            request_id,
+            "post_done",
+            client=client,
+            endpoint=endpoint,
+            attempt=attempt,
+            status=response.status_code,
+            elapsed_ms=(t_complete - t0) * 1000,
+        )
         if response.status_code >= 400:
             try:
                 err_text = response.text
@@ -605,23 +693,59 @@ async def transcribe_with_retries(
                 await close_http_client(reason=f"retry:{attempt}")
             except Exception:
                 pass
+        client = None
+        close_after_request = False
+        request_id = _next_request_id()
         try:
             t_submit = time.time()
             if use_sdk:
+                _log_request_event(
+                    request_id,
+                    "sdk_begin",
+                    attempt=attempt + 1,
+                    detail=f"task_id={task_id} mime={payload_mime}",
+                )
                 text_result, status_code, t_complete, meta, err_text = await _send_with_sdk(
                     payload_buf, payload_mime
                 )
             else:
                 client = await get_http_client()
+                close_after_request = not should_reuse_http_client()
+                _log_request_event(
+                    request_id,
+                    "dispatch",
+                    client=client,
+                    attempt=attempt + 1,
+                    detail=f"task_id={task_id} mime={payload_mime}",
+                )
                 text_result, status_code, t_complete, meta, err_text = await _send_once(
-                    client, payload_buf, payload_mime
+                    client, payload_buf, payload_mime, request_id, attempt + 1
                 )
             transport_meta = {"http2": _HTTP2_ENABLED, **meta}
             if err_text and _should_retry(status_code):
                 raise HTTPError(err_text)
+            _log_request_event(
+                request_id,
+                "success",
+                client=client,
+                endpoint=meta.get("dashscope_endpoint") if isinstance(meta, dict) else None,
+                attempt=attempt + 1,
+                status=status_code,
+                elapsed_ms=(t_complete - t_submit) * 1000,
+                detail=f"text_len={len(text_result)}",
+            )
             break
         except (ReadTimeout, ConnectTimeout, ConnectError, RemoteProtocolError, HTTPError, OSError) as exc:
             t_complete = time.time()
+            _log_request_event(
+                request_id,
+                "exception",
+                client=client,
+                attempt=attempt + 1,
+                status=status_code or None,
+                elapsed_ms=(t_complete - t_submit) * 1000,
+                detail=f"{exc.__class__.__name__}: {exc}",
+            )
             try:
                 console.print(
                     f"DashScope network issue (attempt {attempt + 1}/{max_retries}): {exc}",
@@ -629,6 +753,13 @@ async def transcribe_with_retries(
                 )
             except Exception:
                 pass
+        finally:
+            if not use_sdk and close_after_request and client is not None:
+                _log_request_event(request_id, "client_close", client=client, attempt=attempt + 1)
+                try:
+                    await client.aclose()
+                except Exception:
+                    pass
         if attempt + 1 >= max_retries:
             try:
                 console.print("DashScope reached max retry count", style="bright_red")

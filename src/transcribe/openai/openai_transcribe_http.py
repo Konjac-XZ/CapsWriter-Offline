@@ -22,11 +22,17 @@ from src.provider.provider_settings import (
 _HTTP_CLIENT: httpx.AsyncClient | None = None
 _HTTP2_ENABLED: bool = False
 _CLIENT_GEN: int = 0
+_REQUEST_SEQ: int = 0
 
 
 def get_api_base() -> str:
     base_url = ps_get_str("base_url", env="OPENAI_BASE_URL", default="") or ""
     return base_url.rstrip("/")
+
+
+def _is_dashscope_compatible_base() -> bool:
+    base = get_api_base().lower()
+    return "dashscope.aliyuncs.com" in base or "aliyuncs.com/compatible-mode" in base
 
 
 def get_api_key() -> str:
@@ -58,6 +64,18 @@ def is_streaming_enabled() -> bool:
     return ps_get_bool("stream", env="OPENAI_TRANSCRIBE_STREAM", default=True)
 
 
+def should_reuse_http_client() -> bool:
+    if ps_get_str("reuse_http_client", env="OPENAI_REUSE_HTTP_CLIENT", default=None) is not None:
+        return ps_get_bool("reuse_http_client", env="OPENAI_REUSE_HTTP_CLIENT", default=True)
+    return True
+
+
+def should_use_http2() -> bool:
+    if ps_get_str("http2", env="OPENAI_HTTP2", default=None) is not None:
+        return ps_get_bool("http2", env="OPENAI_HTTP2", default=True)
+    return True
+
+
 def build_limits() -> httpx.Limits:
     keepalive_expiry = float(os.getenv("OPENAI_KEEPALIVE_EXPIRY", "90"))
     return httpx.Limits(
@@ -68,10 +86,13 @@ def build_limits() -> httpx.Limits:
 
 
 def build_headers() -> dict:
-    return {
+    headers = {
         "Accept": "application/json",
         "Authorization": f"Bearer {get_api_key()}",
     }
+    if not should_reuse_http_client():
+        headers["Connection"] = "close"
+    return headers
 
 
 def _log_persistent_established():
@@ -87,6 +108,52 @@ def _log_persistent_closed(reason: str):
     console.print(
         "持久连接已关闭"
     )
+
+
+def _next_request_id() -> str:
+    global _REQUEST_SEQ
+    _REQUEST_SEQ += 1
+    return f"oai-{_REQUEST_SEQ:05d}"
+
+
+def _client_label(client: httpx.AsyncClient | None) -> str:
+    if client is None:
+        return "none"
+    if _HTTP_CLIENT is client:
+        return f"shared#{id(client)}"
+    return f"oneshot#{id(client)}"
+
+
+def _log_request_event(
+    request_id: str,
+    event: str,
+    *,
+    client: httpx.AsyncClient | None = None,
+    url: str | None = None,
+    attempt: int | None = None,
+    stream: bool | None = None,
+    status: int | None = None,
+    elapsed_ms: float | None = None,
+    detail: str | None = None,
+) -> None:
+    parts = [f"[openai:{request_id}]", event]
+    if attempt is not None:
+        parts.append(f"attempt={attempt}")
+    if client is not None:
+        parts.append(f"client={_client_label(client)}")
+    parts.append(f"reuse={should_reuse_http_client()}")
+    parts.append(f"http2={_HTTP2_ENABLED}")
+    if stream is not None:
+        parts.append(f"stream={stream}")
+    if status is not None:
+        parts.append(f"status={status}")
+    if elapsed_ms is not None:
+        parts.append(f"elapsed_ms={elapsed_ms:.1f}")
+    if url:
+        parts.append(f"url={url}")
+    if detail:
+        parts.append(f"detail={detail}")
+    console.print(" ".join(parts), style="bright_black")
 
 
 async def close_http_client(reason: str = "manual"):
@@ -106,10 +173,11 @@ async def close_http_client(reason: str = "manual"):
 
 async def get_http_client() -> httpx.AsyncClient:
     global _HTTP_CLIENT, _HTTP2_ENABLED, _CLIENT_GEN
-    if _HTTP_CLIENT is not None:
+    reuse_client = should_reuse_http_client()
+    if reuse_client and _HTTP_CLIENT is not None:
         return _HTTP_CLIENT
     headers = build_headers()
-    http2 = os.getenv("OPENAI_HTTP2", "1").strip() not in ("0", "false", "False")
+    http2 = should_use_http2()
     _HTTP2_ENABLED = http2
     limits = build_limits()
     # Allow overriding request timeout via env for special operations (e.g., availability tests)
@@ -117,13 +185,17 @@ async def get_http_client() -> httpx.AsyncClient:
         timeout_s = float(os.getenv("OPENAI_HTTP_TIMEOUT", "120"))
     except Exception:
         timeout_s = 120.0
-    _HTTP_CLIENT = httpx.AsyncClient(
+    client = httpx.AsyncClient(
         timeout=httpx.Timeout(timeout_s), headers=headers, http2=http2, limits=limits
     )
     _CLIENT_GEN += 1
-    _log_persistent_established()
+    if reuse_client:
+        _HTTP_CLIENT = client
+        _log_persistent_established()
+    else:
+        console.print("当前端点已禁用持久连接复用", style="bright_yellow")
     _log_streaming_status()
-    return _HTTP_CLIENT
+    return client
 
 
 def _atexit_close_client():
@@ -188,6 +260,8 @@ async def sse_transcribe(
     task_id: str,
     time_start: float,
     record_stop: float,
+    request_id: str,
+    attempt: int,
 ) -> Tuple[str, int, float]:
     """Perform streaming transcription and emit partial updates.
 
@@ -197,8 +271,10 @@ async def sse_transcribe(
     current_text = ""
     last_emit = 0.0
     status_code = 0
+    _log_request_event(request_id, "sse_open", client=client, url=url, attempt=attempt, stream=True)
     async with client.stream("POST", url, data=data_form, files=files) as resp:
         status_code = resp.status_code
+        _log_request_event(request_id, "sse_headers", client=client, url=url, attempt=attempt, stream=True, status=status_code)
         if status_code >= 400:
             raise httpx.HTTPStatusError("非成功状态码", request=resp.request, response=resp)
         async for line in resp.aiter_lines():
@@ -271,6 +347,17 @@ async def sse_transcribe(
                 await emit_partial_update(task_id, new_text, time_start, record_stop, t_submit)
 
     t_complete = time.time()
+    _log_request_event(
+        request_id,
+        "sse_done",
+        client=client,
+        url=url,
+        attempt=attempt,
+        stream=True,
+        status=status_code,
+        elapsed_ms=(t_complete - t_submit) * 1000,
+        detail=f"text_len={len(current_text)}",
+    )
     return current_text, status_code, t_complete
 
 
@@ -279,11 +366,25 @@ async def nonstream_transcribe(
     url: str,
     data_form: dict,
     files: dict,
+    request_id: str,
+    attempt: int,
 ) -> tuple[str, int, float, str | None]:
     """Perform non-streaming transcription. Returns (text, status_code, t_complete, err_text)."""
+    t0 = time.time()
+    _log_request_event(request_id, "post_begin", client=client, url=url, attempt=attempt, stream=False)
     resp = await client.post(url, data=data_form, files=files)
     t_complete = time.time()
     status_code = resp.status_code
+    _log_request_event(
+        request_id,
+        "post_done",
+        client=client,
+        url=url,
+        attempt=attempt,
+        stream=False,
+        status=status_code,
+        elapsed_ms=(t_complete - t0) * 1000,
+    )
     if resp.status_code >= 500 or resp.status_code in (408, 429):
         return "", status_code, t_complete, resp.text
     if resp.status_code >= 400:
@@ -340,6 +441,8 @@ async def transcribe_with_retries(
                 pass
 
         client = await get_http_client()
+        close_after_request = not should_reuse_http_client()
+        request_id = _next_request_id()
 
         # Use streaming on the first attempt if enabled; also allow the first retry to try streaming once more
         attempt_stream = enable_stream_pref if attempt == 0 else (enable_stream_pref and (attempt == 1))
@@ -351,20 +454,51 @@ async def transcribe_with_retries(
         err_text = None
         try:
             t_submit = time.time()
+            _log_request_event(
+                request_id,
+                "dispatch",
+                client=client,
+                url=url,
+                attempt=attempt + 1,
+                stream=attempt_stream,
+                detail=f"task_id={task_id} mime={payload_mime}",
+            )
             if attempt_stream:
                 text_result, status_code, t_complete = await sse_transcribe(
-                    client, url, data_form, files, task_id, time_start, record_stop
+                    client, url, data_form, files, task_id, time_start, record_stop, request_id, attempt + 1
                 )
             else:
                 text_result, status_code, t_complete, err_text = await nonstream_transcribe(
-                    client, url, data_form, files
+                    client, url, data_form, files, request_id, attempt + 1
                 )
                 if status_code >= 500 or status_code in (408, 429):
                     raise HTTPError("服务暂时不可用")
+            _log_request_event(
+                request_id,
+                "success",
+                client=client,
+                url=url,
+                attempt=attempt + 1,
+                stream=attempt_stream,
+                status=status_code,
+                elapsed_ms=(t_complete - t_submit) * 1000,
+                detail=f"text_len={len(text_result)}",
+            )
             break
         except (ReadTimeout, ConnectTimeout, ConnectError, RemoteProtocolError, HTTPError, OSError) as e:
             t_complete = time.time()
             msg = err_text or str(e)
+            _log_request_event(
+                request_id,
+                "exception",
+                client=client,
+                url=url,
+                attempt=attempt + 1,
+                stream=attempt_stream,
+                status=status_code or None,
+                elapsed_ms=(t_complete - t_submit) * 1000,
+                detail=f"{e.__class__.__name__}: {msg}",
+            )
             console.print(
                 f"网络异常（第 {attempt + 1}/{max_retries} 次）：{msg} | http2={_HTTP2_ENABLED} | stream={attempt_stream}",
                 style="bright_yellow",
@@ -380,6 +514,13 @@ async def transcribe_with_retries(
             import asyncio
 
             await asyncio.sleep(delay)
+        finally:
+            if close_after_request:
+                _log_request_event(request_id, "client_close", client=client, url=url, attempt=attempt + 1, stream=attempt_stream)
+                try:
+                    await client.aclose()
+                except Exception:
+                    pass
 
     return text_result, status_code, t_submit, t_complete, _HTTP2_ENABLED
 

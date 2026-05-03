@@ -18,6 +18,8 @@ except Exception:
 
 from src.pipeline.recv_result import recv_result
 from src.keyboard.shortcut_handler import bond_shortcut
+from src.audio.retry_cache import read_retry_request
+from src.audio.send_audio import retry_latest_audio
 from src.audio.stream import stream_close, stream_open
 from src.polish.vision_context import start_vision_context_service, stop_vision_context_service
 from src.system.empty_working_set import empty_current_working_set
@@ -43,11 +45,42 @@ if system() == "Darwin" and not sys.argv[1:]:
         os.umask(0o000)
 
 
+async def watch_retry_requests():
+    initial_payload = read_retry_request()
+    last_request_id = (
+        initial_payload.get("request_id") if isinstance(initial_payload, dict) else None
+    )
+    retry_task = None
+
+    while True:
+        try:
+            payload = read_retry_request()
+            request_id = payload.get("request_id") if isinstance(payload, dict) else None
+
+            if request_id is not None and request_id != last_request_id:
+                last_request_id = request_id
+
+                if Cosmic.on or getattr(Cosmic, "transcribe_busy", False):
+                    console.print("当前正在识别，稍后再重试。", style="bright_yellow")
+                elif retry_task is not None and not retry_task.done():
+                    console.print("当前已有重试请求正在进行。", style="bright_yellow")
+                else:
+                    retry_task = asyncio.create_task(retry_latest_audio())
+
+            await asyncio.sleep(0.4)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            console.print(f"监听重试请求失败：{exc}", style="bright_red")
+            await asyncio.sleep(1.0)
+
+
 async def main_mic():
     Cosmic.loop = asyncio.get_event_loop()
     Cosmic.queue_in = asyncio.Queue()
     Cosmic.queue_out = asyncio.Queue()
     vision_task = None
+    retry_watcher_task = None
 
     # 打开音频流
     Cosmic.stream = stream_open()
@@ -63,11 +96,16 @@ async def main_mic():
         empty_current_working_set()
 
     vision_task = start_vision_context_service()
+    retry_watcher_task = asyncio.create_task(watch_retry_requests())
 
     try:
         while True:
             await recv_result()
     finally:
+        if retry_watcher_task is not None:
+            retry_watcher_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await retry_watcher_task
         if vision_task is not None:
             with contextlib.suppress(Exception):
                 await stop_vision_context_service(vision_task)

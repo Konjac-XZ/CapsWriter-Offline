@@ -71,6 +71,7 @@ from PySide6.QtWidgets import (
 # Intentionally defer theme import/application until after first paint for faster startup
 
 from src.infra.config import ClientConfig as Config
+from src.audio.retry_cache import has_retry_audio, write_retry_request
 from src.polish.llm_polish import get_polish_prompt_text, reload_polish_config, update_polish_prompt_text
 
 def _resolve_pythonw_client() -> str | None:
@@ -666,26 +667,38 @@ class GUI(QMainWindow):
         self.clear_history_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         action_row.addWidget(self.clear_history_button)
 
+        self.retry_latest_button = QPushButton("重试最近请求")
+        self.retry_latest_button.setToolTip("重新发送最近一次录音缓存，并将结果照常上屏")
+        self.retry_latest_button.clicked.connect(self.retry_latest_request)
+        self.retry_latest_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        action_row.addWidget(self.retry_latest_button)
+
+        self.clear_screen_button = QPushButton("清屏")
+        self.clear_screen_button.setToolTip("清空当前 GUI 日志")
+        self.clear_screen_button.clicked.connect(self.clear_text_box)
+        self.clear_screen_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        action_row.addWidget(self.clear_screen_button)
+
         context_toggle_row = QHBoxLayout()
         context_toggle_row.setSpacing(10)
         context_toggle_row.setContentsMargins(0, 0, 0, 0)
 
         self.append_history_checkbox = self._create_context_toggle(
-            "附加最近上屏内容",
+            "最近上屏",
             "控制 LLM 润色时是否附加最近几条已上屏文本作为上下文",
         )
         self.append_history_checkbox.toggled.connect(self.on_append_history_toggled)
         context_toggle_row.addWidget(self.append_history_checkbox)
 
         self.append_textbox_checkbox = self._create_context_toggle(
-            "附加文本框上下文",
+            "文本框",
             "控制 LLM 润色时是否附加当前活动文本框全文作为上下文",
         )
         self.append_textbox_checkbox.toggled.connect(self.on_append_textbox_toggled)
         context_toggle_row.addWidget(self.append_textbox_checkbox)
 
         self.append_vision_checkbox = self._create_context_toggle(
-            "附加视觉上下文",
+            "视觉",
             "控制 LLM 润色时是否附加当前活动窗口的视觉摘要作为上下文",
         )
         self.append_vision_checkbox.toggled.connect(self.on_append_vision_toggled)
@@ -708,10 +721,12 @@ class GUI(QMainWindow):
         for button in (
             self.modify_prompt_button,
             self.edit_polish_prompt_button,
-            self.clear_history_button,
             self.edit_lexicon_button,
         ):
             button.setMinimumWidth(uniform_button_width)
+        for button in (self.clear_history_button, self.retry_latest_button):
+            button.setMinimumWidth(108)
+        self.clear_screen_button.setMinimumWidth(56)
 
         self._sync_context_toggle_states()
 
@@ -1301,6 +1316,16 @@ class GUI(QMainWindow):
             except Exception:
                 pass
 
+    def retry_latest_request(self) -> None:
+        try:
+            if not has_retry_audio():
+                self.append_colored_line("没有可重试的最近录音。", "#ff8800")
+                return
+            write_retry_request()
+            self.append_colored_line("已请求重试最近一次录音。", "#008000")
+        except Exception as exc:
+            self.append_colored_line(f"请求重试失败：{exc}", "#ff5555")
+
     def show_startup_info(self):
         """Show startup information using YAML-based provider configuration."""
         if not self.provider_manager:
@@ -1752,6 +1777,10 @@ class GUI(QMainWindow):
             widgets.append(self.edit_lexicon_button)
         if hasattr(self, 'clear_history_button'):
             widgets.append(self.clear_history_button)
+        if hasattr(self, 'retry_latest_button'):
+            widgets.append(self.retry_latest_button)
+        if hasattr(self, 'clear_screen_button'):
+            widgets.append(self.clear_screen_button)
         if hasattr(self, 'model_combo'):
             widgets.append(self.model_combo)
         if hasattr(self, 'model_label'):

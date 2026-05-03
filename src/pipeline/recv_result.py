@@ -61,7 +61,7 @@ async def recv_result():
             # 仅在最终结果时进行音频重命名与 Markdown 写入
             file_audio = None
             if is_final:
-                if Config.save_audio:
+                if Config.save_audio and message.get("task_id") in Cosmic.audio_files:
                     # 重命名录音文件
                     file_audio = rename_audio(
                         message.get("task_id"), text, message.get("time_start")
