@@ -71,7 +71,7 @@ def _load_vision_config() -> dict:
         _vision_config_cache = {}
         _vision_config_mtime = None
         console.print(
-            f"[vision_context] 配置文件未找到：{config_path}，功能默认关闭。",
+            f"[视觉上下文] 配置文件未找到：{config_path}，功能默认关闭。",
             style="yellow",
         )
         return {}
@@ -79,7 +79,7 @@ def _load_vision_config() -> dict:
         _vision_config_cache = {}
         _vision_config_mtime = None
         console.print(
-            f"[vision_context] 配置文件状态读取失败：{config_path}，功能默认关闭。",
+            f"[视觉上下文] 配置文件状态读取失败：{config_path}，功能默认关闭。",
             style="yellow",
         )
         return {}
@@ -93,7 +93,7 @@ def _load_vision_config() -> dict:
         _vision_config_cache = {}
         _vision_config_mtime = mtime
         console.print(
-            f"[vision_context] 配置文件加载失败：{exc}，功能默认关闭。",
+            f"[视觉上下文] 配置文件加载失败：{exc}，功能默认关闭。",
             style="yellow",
         )
         return {}
@@ -129,7 +129,7 @@ def is_vision_context_enabled() -> bool:
 
 def start_vision_context_service() -> asyncio.Task | None:
     if platform.system() != "Windows":
-        console.print("[vision_context] 当前平台不是 Windows，已跳过。", style="yellow")
+        console.print("[视觉上下文] 当前平台不是 Windows，已跳过。", style="yellow")
         return None
 
     loop = asyncio.get_running_loop()
@@ -194,7 +194,7 @@ async def _vision_context_loop() -> None:
 
     if not _feature_state_logged:
         if is_vision_context_enabled():
-            console.print("[vision_context] 功能已启用。", style="dim")
+            console.print("[视觉上下文] 功能已启用。", style="dim")
         _feature_state_logged = True
 
     if not is_vision_context_enabled():
@@ -209,7 +209,7 @@ async def _vision_context_loop() -> None:
         except Exception as exc:
             Cosmic.vision_context_last_error = f"{type(exc).__name__}: {exc}"
             console.print(
-                f"[vision_context] 后台更新异常：{type(exc).__name__}: {exc}",
+                f"[视觉上下文] 后台更新异常：{type(exc).__name__}: {exc}",
                 style="yellow",
             )
         await asyncio.sleep(interval_s)
@@ -236,7 +236,7 @@ async def _refresh_vision_context_once() -> None:
                 if not value
             ]
             console.print(
-                f"[vision_context] 配置不完整，跳过视觉摘要。缺少：{', '.join(missing)}",
+                f"[视觉上下文] 配置不完整，跳过视觉摘要。缺少：{', '.join(missing)}",
                 style="yellow",
             )
             _missing_config_warned = True
@@ -246,12 +246,12 @@ async def _refresh_vision_context_once() -> None:
 
     capture = await asyncio.to_thread(_capture_active_window)
     if capture is None:
-        console.print("[vision_context] 未能捕获当前活动窗口，保留上次视觉摘要。", style="dim")
+        console.print("[视觉上下文] 未能捕获当前活动窗口，保留上次视觉摘要。", style="dim")
         return
 
     console.print(
         (
-            "[vision_context] 已捕获活动窗口"
+            "[视觉上下文] 已捕获活动窗口"
             f" hwnd={capture.hwnd} size={capture.width}x{capture.height}"
             f" title={capture.title or 'unknown'}"
         ),
@@ -275,7 +275,7 @@ async def _refresh_vision_context_once() -> None:
     }
     Cosmic.vision_context_last_error = None
     console.print(
-        f"[vision_context] 视觉摘要已更新，长度={len(summary)}",
+        f"[视觉上下文] 视觉摘要已更新，长度={len(summary)}",
         style="dim",
     )
 
@@ -367,7 +367,7 @@ async def _request_vision_summary(
 
     console.print(
         (
-            f"[vision_context] 发送视觉摘要请求 -> {url}"
+            f"[视觉上下文] 发送视觉摘要请求 -> {url}"
             f" model={model} image_bytes={len(capture.image_bytes)}"
         ),
         style="dim",
@@ -385,7 +385,7 @@ async def _request_vision_summary(
                 detail_text = response.text.strip() or None
             Cosmic.vision_context_last_error = f"HTTP {response.status_code}: {detail_text or ''}".strip()
             console.print(
-                f"[vision_context] 视觉摘要请求失败：{response.status_code} {detail_text or ''}".rstrip(),
+                f"[视觉上下文] 视觉摘要请求失败：{response.status_code} {detail_text or ''}".rstrip(),
                 style="yellow",
             )
             return None
@@ -401,21 +401,21 @@ async def _request_vision_summary(
             return summary.strip()
 
         console.print(
-            f"[vision_context] 响应未提取到摘要，原始正文（前 400 字符）：{body_text[:400]}",
+            f"[视觉上下文] 响应未提取到摘要，原始正文（前 400 字符）：{body_text[:400]}",
             style="yellow",
         )
         return None
     except httpx.TimeoutException as exc:
         Cosmic.vision_context_last_error = f"timeout: {exc}"
         console.print(
-            f"[vision_context] 视觉摘要请求超时（timeout={timeout_s}s）：{exc}",
+            f"[视觉上下文] 视觉摘要请求超时（timeout={timeout_s}s）：{exc}",
             style="yellow",
         )
         return None
     except Exception as exc:
         Cosmic.vision_context_last_error = f"{type(exc).__name__}: {exc}"
         console.print(
-            f"[vision_context] 视觉摘要异常：{type(exc).__name__}: {exc}",
+            f"[视觉上下文] 视觉摘要异常：{type(exc).__name__}: {exc}",
             style="yellow",
         )
         return None
