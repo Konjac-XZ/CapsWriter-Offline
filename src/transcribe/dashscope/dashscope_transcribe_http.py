@@ -64,6 +64,10 @@ def should_use_http2() -> bool:
     return True
 
 
+def should_show_debug_logs() -> bool:
+    return ps_get_bool("debug", env="DASHSCOPE_DEBUG", default=False)
+
+
 def _next_request_id() -> str:
     global _REQUEST_SEQ
     _REQUEST_SEQ += 1
@@ -89,6 +93,9 @@ def _log_request_event(
     elapsed_ms: float | None = None,
     detail: str | None = None,
 ) -> None:
+    if not should_show_debug_logs():
+        return
+
     parts = [f"[dashscope:{request_id}]", event]
     if attempt is not None:
         parts.append(f"attempt={attempt}")
@@ -423,7 +430,8 @@ async def close_http_client(reason: str = "manual") -> None:
     if _HTTP_CLIENT is None:
         return
     try:
-        console.print(f"DashScope persistent session closed: {reason}")
+        if should_show_debug_logs():
+            console.print(f"DashScope persistent session closed: {reason}")
     except Exception:
         pass
     try:
@@ -449,12 +457,14 @@ async def get_http_client() -> httpx.AsyncClient:
     if reuse_client:
         _HTTP_CLIENT = client
         try:
-            console.print(f"DashScope persistent session ready; HTTP/2={'ON' if http2 else 'OFF'}")
+            if should_show_debug_logs():
+                console.print(f"DashScope persistent session ready; HTTP/2={'ON' if http2 else 'OFF'}")
         except Exception:
             pass
     else:
         try:
-            console.print(f"DashScope one-shot session mode; HTTP/2={'ON' if http2 else 'OFF'}", style="bright_yellow")
+            if should_show_debug_logs():
+                console.print(f"DashScope one-shot session mode; HTTP/2={'ON' if http2 else 'OFF'}", style="bright_yellow")
         except Exception:
             pass
     return client
@@ -473,7 +483,8 @@ def _atexit_close_client() -> None:
         except Exception:
             loop = None
         try:
-            console.print("DashScope persistent session closed: atexit")
+            if should_show_debug_logs():
+                console.print("DashScope persistent session closed: atexit")
         except Exception:
             pass
         if loop and loop.is_running():
