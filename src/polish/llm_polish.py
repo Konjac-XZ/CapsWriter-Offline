@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 import yaml
 
+from src.polish.smart_quotes import normalize_zh_cn_smart_quotes
 from src.polish.textbox_context import get_active_textbox_context
 from src.polish.vision_context import get_recent_vision_context_summary
 from src.infra.response_parse import extract_text_from_body
@@ -191,6 +192,13 @@ def update_polish_prompt_text(prompt_text: str) -> bool:
 
 def should_polish_text(text: str) -> bool:
     return is_llm_polish_enabled() and bool((text or "").strip())
+
+
+def is_smart_quotes_enabled() -> bool:
+    smart_quotes_cfg = _cfg().get("smart_quotes", {})
+    if not isinstance(smart_quotes_cfg, dict):
+        return True
+    return bool(smart_quotes_cfg.get("enabled", True))
 
 
 def _build_url(base_url: str) -> str:
@@ -453,11 +461,14 @@ async def polish_text(text: str) -> str:
 
         polished = extract_text_from_body(body_text)
         if isinstance(polished, str) and polished.strip():
+            polished_text = polished.strip()
+            if is_smart_quotes_enabled():
+                polished_text = normalize_zh_cn_smart_quotes(polished_text)
             # console.print(
             #     f"[LLM 润色] 润色完成，HTTP 耗时={_http_elapsed:.2f}s  输入长度={len(text)}  输出长度={len(polished.strip())}",
             #     style="dim",
             # )
-            return polished.strip()
+            return polished_text
 
         # console.print(
         #     f"[LLM 润色] 润色响应未提取到文本，原始正文（前 400 字符）：{body_text[:400]}",

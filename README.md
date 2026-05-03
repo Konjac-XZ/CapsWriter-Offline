@@ -110,6 +110,7 @@ Launcher behavior: before starting, it terminates any existing running `start_cl
    LLM_POLISH_API_KEY=your_key_here
    ```
    This feature uses the OpenAI-compatible Chat Completions API in non-streaming mode and runs before regex replacement and whitespace reformatting in the live microphone pipeline.
+   LLM polish also runs a conservative Chinese smart-quotes post-processor by default (`smart_quotes.enabled=true`) to turn abused straight quotes into Chinese quotes while protecting Markdown code, inline code, URLs, paths, HTML, math, frontmatter, and structured text.
    When `textbox_context.enabled=true`, it tries Windows UI Automation in this order: focused element → `TextPattern` → `ValuePattern` → `LegacyIAccessible`; if those all fail, it finally falls back to a more intrusive `Ctrl+A` / `Ctrl+C` clipboard probe before attaching a truncated snapshot as extra reference context.
    Set `textbox_context.debug=true` in `config/polish/polish.yaml` to log why each UIA stage succeeded, returned empty text, or fell through to clipboard fallback.
 - Use `python provider_switch.py --list` to see available providers
