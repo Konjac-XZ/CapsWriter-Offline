@@ -7,6 +7,7 @@ import os
 import random
 import time
 import tempfile
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import httpx
@@ -28,6 +29,7 @@ _HTTP_CLIENT: httpx.AsyncClient | None = None
 _HTTP2_ENABLED: bool = False
 _STREAM_WARNED: bool = False
 _REQUEST_SEQ: int = 0
+_DEBUG_BUILD = "dashscope-sdk-status-normalize-v2"
 
  
 
@@ -300,14 +302,22 @@ def _extract_text_from_content(content: Any) -> List[str]:
                     parts.extend(_extract_text_from_content(item["content"]))
             elif isinstance(item, str):
                 parts.append(item)
+            else:
+                parts.extend(_extract_text_from_content(item))
     elif isinstance(content, dict):
         parts.extend(_extract_text_from_content(content.get("content")))
         if "text" in content and isinstance(content["text"], str):
             parts.append(content["text"])
     elif isinstance(content, str):
         parts.append(content)
+    elif content is not None:
+        text = getattr(content, "text", None)
+        if isinstance(text, str):
+            parts.append(text)
+        nested = getattr(content, "content", None)
+        if nested is not None:
+            parts.extend(_extract_text_from_content(nested))
     return parts
-
 
 def _normalize_text(s: str) -> str:
     # strip common wrappers and collapse whitespace
@@ -320,6 +330,60 @@ def _normalize_text(s: str) -> str:
     # collapse internal whitespace
     s = " ".join(s.split())
     return s
+
+
+def _get_field(obj: Any, key: str) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(key)
+    return getattr(obj, key, None)
+
+
+def _extract_parts_from_choice(choice: Any) -> List[str]:
+    parts: List[str] = []
+    parts.extend(_extract_text_from_content(_get_field(choice, "content")))
+    text = _get_field(choice, "text")
+    if isinstance(text, str):
+        parts.append(text)
+    message = _get_field(choice, "message")
+    if message is not None:
+        parts.extend(_extract_text_from_content(_get_field(message, "content")))
+    return parts
+
+
+def _payload_preview(payload: Any) -> str | None:
+    try:
+        preview = json.dumps(payload, ensure_ascii=False, default=str)
+    except Exception:
+        try:
+            preview = str(payload)
+        except Exception:
+            return None
+    preview = " ".join(preview.split())
+    if len(preview) > 500:
+        preview = preview[:500] + "..."
+    return preview or None
+
+
+def _sdk_response_preview(response: Any, payload_data: Any) -> str | None:
+    parts: List[str] = []
+    try:
+        parts.append(f"response_type={type(response).__name__}")
+    except Exception:
+        pass
+    for name in ("status_code", "code", "message", "request_id", "output"):
+        try:
+            value = getattr(response, name, None)
+        except Exception:
+            value = None
+        if value is not None:
+            parts.append(f"{name}={_payload_preview(value) or value}")
+    payload = _payload_preview(payload_data)
+    if payload:
+        parts.append(f"payload={payload}")
+    preview = " ".join(str(part) for part in parts if part)
+    if len(preview) > 900:
+        preview = preview[:900] + "..."
+    return preview or None
 
 
 def _extract_transcript(payload: Any) -> Tuple[str, Dict[str, Any]]:
@@ -343,15 +407,17 @@ def _extract_transcript(payload: Any) -> Tuple[str, Dict[str, Any]]:
             results = output.get("results") or output.get("choices")
             if isinstance(results, list):
                 for item in results:
-                    if isinstance(item, dict):
-                        parts.extend(_extract_text_from_content(item.get("content")))
-                        if "text" in item and isinstance(item["text"], str):
-                            parts.append(item["text"])
-                        if item.get("message") and isinstance(item["message"], dict):
-                            parts.extend(_extract_text_from_content(item["message"].get("content")))
+                    parts.extend(_extract_parts_from_choice(item))
+            else:
+                parts.extend(_extract_text_from_content(output))
         elif isinstance(output, list):
             for item in output:
                 parts.extend(_extract_text_from_content(item))
+                parts.extend(_extract_parts_from_choice(item))
+        results = payload.get("results") or payload.get("choices")
+        if isinstance(results, list):
+            for item in results:
+                parts.extend(_extract_parts_from_choice(item))
         if not parts and "text" in payload and isinstance(payload["text"], str):
             parts = [payload["text"]]
         text = "\n".join(p.strip() for p in parts if isinstance(p, str) and p.strip())
@@ -360,15 +426,13 @@ def _extract_transcript(payload: Any) -> Tuple[str, Dict[str, Any]]:
     else:
         text = ""
 
-    if not text and payload is not None:
-        try:
-            text = json.dumps(payload, ensure_ascii=False)
-        except Exception:
-            text = str(payload)
-
     meta = {"dashscope_request_id": request_id}
     if message:
         meta["dashscope_message"] = message
+    if not text:
+        preview = _payload_preview(payload)
+        if preview:
+            meta["dashscope_payload_preview"] = preview
     return text, meta
 
 
@@ -601,11 +665,13 @@ async def _send_with_sdk(
     """
     import asyncio
     t_complete = time.time()
-    meta: Dict[str, Any] = {"via": "dashscope-sdk"}
+    meta: Dict[str, Any] = {"via": "dashscope-sdk", "debug_build": _DEBUG_BUILD}
     try:
         import dashscope
     except Exception as exc:  # SDK not available
-        return "", 0, t_complete, meta, str(exc)
+        err = f"{exc.__class__.__name__}: {exc}"
+        meta["dashscope_sdk_import_error"] = err
+        return "", 503, t_complete, meta, err
 
     audio_bytes = _read_audio_bytes(payload_buf)
     ext = _ext_for_mime(payload_mime)
@@ -616,12 +682,13 @@ async def _send_with_sdk(
             f.write(audio_bytes)
             tmp_path = f.name
 
-        # Build messages per docs: local audio as absolute path string
+        # The DashScope SDK accepts local audio as an absolute filesystem path.
+        audio_uri = str(Path(tmp_path).resolve())
         context = get_context_text()
         messages: List[Dict[str, Any]] = []
         if context:
             messages.append({"role": "system", "content": [{"text": context}]})
-        messages.append({"role": "user", "content": [{"audio": tmp_path}]})
+        messages.append({"role": "user", "content": [{"audio": audio_uri}]})
         model = get_model()
 
         asr_options: Dict[str, Any] = {}
@@ -663,14 +730,37 @@ async def _send_with_sdk(
         transcript, extra = _extract_transcript(payload_data)
         meta.update(extra)
         meta["dashscope_sdk"] = True
-        # Best-effort status code
+        meta["audio_bytes"] = len(audio_bytes)
+        meta["audio_uri"] = audio_uri
+
+        # Best-effort HTTP status. DashScope SDK response often contains
+        # business code=0 for success, which must not be treated as HTTP 0.
         status = 200
+        response_status = getattr(response, "status_code", None)
+        meta["raw_status"] = response_status
+        if response_status is not None:
+            try:
+                candidate_status = int(response_status)
+                if 100 <= candidate_status <= 599:
+                    status = candidate_status
+            except Exception:
+                pass
         if isinstance(payload_data, dict):
-            status = int(payload_data.get("status_code") or payload_data.get("code") or 200)
+            try:
+                candidate_status = int(payload_data.get("status_code") or status)
+                if 100 <= candidate_status <= 599:
+                    status = candidate_status
+            except Exception:
+                pass
+        if not transcript:
+            preview = _sdk_response_preview(response, payload_data)
+            if preview:
+                meta["dashscope_payload_preview"] = preview
         return transcript, status, t_complete, meta, None if transcript else None
     except Exception as exc:
         t_complete = time.time()
-        err = str(exc)
+        err = f"{exc.__class__.__name__}: {exc}"
+        meta["dashscope_sdk_exception"] = err
         return "", 400, t_complete, meta, err
     finally:
         if tmp_path:
@@ -734,7 +824,36 @@ async def transcribe_with_retries(
                 )
             transport_meta = {"http2": _HTTP2_ENABLED, **meta}
             if err_text and _should_retry(status_code):
-                raise HTTPError(err_text)
+                if use_sdk and isinstance(meta, dict) and meta.get("dashscope_sdk_import_error"):
+                    import_error = str(meta.get("dashscope_sdk_import_error"))
+                    _log_request_event(
+                        request_id,
+                        "sdk_unavailable",
+                        client=client,
+                        attempt=attempt + 1,
+                        status=status_code,
+                        detail=import_error,
+                    )
+                    client = await get_http_client()
+                    close_after_request = not should_reuse_http_client()
+                    text_result, status_code, t_complete, meta, err_text = await _send_once(
+                        client, payload_buf, payload_mime, request_id, attempt + 1
+                    )
+                    meta["dashscope_sdk_import_error"] = import_error
+                    meta["dashscope_sdk_fallback"] = "http"
+                    transport_meta = {"http2": _HTTP2_ENABLED, **meta}
+                if err_text and _should_retry(status_code):
+                    raise HTTPError(err_text)
+            success_detail = f"text_len={len(text_result)}"
+            if isinstance(meta, dict) and meta.get("debug_build"):
+                success_detail += f" build={meta.get('debug_build')}"
+            if isinstance(meta, dict) and meta.get("raw_status") is not None:
+                success_detail += f" raw_status={meta.get('raw_status')}"
+            if err_text:
+                err_preview = " ".join(str(err_text).split())
+                if len(err_preview) > 220:
+                    err_preview = err_preview[:220] + "..."
+                success_detail += f" err={err_preview}"
             _log_request_event(
                 request_id,
                 "success",
@@ -743,8 +862,18 @@ async def transcribe_with_retries(
                 attempt=attempt + 1,
                 status=status_code,
                 elapsed_ms=(t_complete - t_submit) * 1000,
-                detail=f"text_len={len(text_result)}",
+                detail=success_detail,
             )
+            if not text_result and isinstance(meta, dict) and meta.get("dashscope_payload_preview"):
+                _log_request_event(
+                    request_id,
+                    "empty_payload",
+                    client=client,
+                    endpoint=meta.get("dashscope_endpoint"),
+                    attempt=attempt + 1,
+                    status=status_code,
+                    detail=str(meta.get("dashscope_payload_preview")),
+                )
             break
         except (ReadTimeout, ConnectTimeout, ConnectError, RemoteProtocolError, HTTPError, OSError) as exc:
             t_complete = time.time()
