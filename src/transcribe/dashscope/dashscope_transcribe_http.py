@@ -1,73 +1,66 @@
-﻿"""DashScope Qwen ASR HTTP integration."""
+"""DashScope Qwen ASR HTTP integration."""
 import atexit
 import base64
 import io
-import json
-import os
 import random
 import time
-import tempfile
-from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Tuple
 
 import httpx
 
 from src.infra.cosmic import console
-from src.provider.provider_settings import (
-    get_str as ps_get_str,
-    get_bool as ps_get_bool,
-    get_prompt as ps_get_prompt,
+from src.transcribe.dashscope import settings
+from src.transcribe.dashscope.response_parser import (
+    extract_transcript,
+    payload_preview,
+    sdk_response_preview,
 )
-
-try:
-    from src.provider.provider_config import provider_manager
-except Exception:  # pragma: no cover
-    provider_manager = None  # type: ignore
+from src.transcribe.dashscope.sdk_transport import send_with_sdk
+from src.transcribe.dashscope.settings import (
+    build_headers,
+    build_limits,
+    build_messages,
+    build_request_body,
+    candidate_endpoints,
+    bool_from_env,
+    clean_str,
+    ext_for_mime,
+    get_timeout_seconds,
+    guess_audio_format,
+    should_reuse_http_client,
+    should_show_debug_logs,
+    should_use_http2,
+    use_sdk,
+)
 
 
 _HTTP_CLIENT: httpx.AsyncClient | None = None
 _HTTP2_ENABLED: bool = False
-_STREAM_WARNED: bool = False
 _REQUEST_SEQ: int = 0
-_DEBUG_BUILD = "dashscope-sdk-status-normalize-v2"
 
- 
+# Backward-compatible aliases for existing ad hoc imports/tests.
+get_api_base = settings.get_api_base
+get_api_key = settings.get_api_key
+get_context_text = settings.get_context_text
+get_enable_itn = settings.get_enable_itn
+get_enable_lid = settings.get_enable_lid
+get_language = settings.get_language
+get_model = settings.get_model
+get_response_format = settings.get_response_format
+get_result_format = settings.get_result_format
+get_stream_enabled = settings.get_stream_enabled
 
-
-
-def _clean_str(value: str | None) -> str | None:
-    if value is None:
-        return None
-    value = value.strip()
-    return value if value else None
-
-
-def _bool_from_env(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() not in {"0", "false", "no"}
-
-
-def _use_sdk() -> bool:
-    # Prefer SDK by default if available
-    return _bool_from_env("DASHSCOPE_USE_SDK", True)
-
-
-def should_reuse_http_client() -> bool:
-    if ps_get_str("reuse_http_client", env="DASHSCOPE_REUSE_HTTP_CLIENT", default=None) is not None:
-        return ps_get_bool("reuse_http_client", env="DASHSCOPE_REUSE_HTTP_CLIENT", default=False)
-    return True
-
-
-def should_use_http2() -> bool:
-    if ps_get_str("http2", env="DASHSCOPE_HTTP2", default=None) is not None:
-        return ps_get_bool("http2", env="DASHSCOPE_HTTP2", default=False)
-    return True
-
-
-def should_show_debug_logs() -> bool:
-    return ps_get_bool("debug", env="DASHSCOPE_DEBUG", default=False)
+_bool_from_env = bool_from_env
+_build_messages = build_messages
+_build_request_body = build_request_body
+_candidate_endpoints = candidate_endpoints
+_clean_str = clean_str
+_ext_for_mime = ext_for_mime
+_extract_transcript = extract_transcript
+_guess_audio_format = guess_audio_format
+_payload_preview = payload_preview
+_sdk_response_preview = sdk_response_preview
+_use_sdk = use_sdk
 
 
 def _next_request_id() -> str:
@@ -114,379 +107,6 @@ def _log_request_event(
     if detail:
         parts.append(f"detail={detail}")
     console.print(" ".join(parts), style="bright_black")
-
-
-def get_api_base() -> str:
-    base = _clean_str(ps_get_str("base_url", env="DASHSCOPE_BASE_URL", default=None))
-    if not base:
-        base = "https://dashscope.aliyuncs.com"
-    return base.rstrip("/")
-
-
-def get_api_key() -> str:
-    key = _clean_str(ps_get_str("api_key", env="DASHSCOPE_API_KEY", default=None))
-    if not key:
-        raise RuntimeError("DASHSCOPE_API_KEY environment variable is required for provider=dashscope")
-    return key
-
-
-def get_timeout_seconds() -> float:
-    raw = ps_get_str("timeout_seconds", env=["DASHSCOPE_TIMEOUT_SECONDS", "OPENAI_HTTP_TIMEOUT"], default="120")
-    try:
-        val = max(1.0, float(raw or "120"))
-        return val
-    except Exception:
-        return 120.0
-
-
-def _candidate_endpoints() -> List[str]:
-    base = get_api_base()
-    override = _clean_str(os.getenv("DASHSCOPE_ENDPOINT"))
-    path_override = _clean_str(os.getenv("DASHSCOPE_ENDPOINT_PATH"))
-    candidates: List[str] = []
-
-    def _add_endpoint(url: str) -> None:
-        if url not in candidates:
-            candidates.append(url)
-
-    if override:
-        _add_endpoint(override)
-        return candidates
-
-    if path_override:
-        if path_override.startswith("http"):
-            _add_endpoint(path_override)
-        else:
-            if not path_override.startswith("/"):
-                path_override = "/" + path_override
-            _add_endpoint(f"{base}{path_override}")
-
-    # Default fallbacks cover current DashScope ASR routes
-    _add_endpoint(f"{base}/api/v1/multimodal_conversation")
-    _add_endpoint(f"{base}/api/v1/audio/recognitions")
-    _add_endpoint(f"{base}/api/v1/services/audio/asr/transcriptions")
-    return candidates
-
-
-def get_model() -> str:
-    variant = _clean_str(ps_get_str("model_variant", env="DASHSCOPE_MODEL_VARIANT", default=None))
-    if variant:
-        return variant
-    model = _clean_str(ps_get_str("model", env="DASHSCOPE_MODEL", default=None))
-    if model:
-        return model
-    fallback = _clean_str(os.getenv("TRANSCRIBE_MODEL"))
-    if fallback:
-        return fallback
-    return "qwen3-asr-flash"
-
-
-def get_language() -> str | None:
-    return _clean_str(ps_get_str("language", env=["DASHSCOPE_LANGUAGE", "OPENAI_TRANSCRIBE_LANGUAGE"], default=None))
-
-
-def get_result_format() -> str | None:
-    return _clean_str(ps_get_str("result_format", env="DASHSCOPE_RESULT_FORMAT", default=None))
-
-
-def get_response_format() -> str | None:
-    return _clean_str(ps_get_str("response_format", env="DASHSCOPE_RESPONSE_FORMAT", default=None))
-
-
-def get_context_text() -> str | None:
-    """Return contextual text (aka "prompt") to bias ASR.
-
-    Priority:
-    1) DASHSCOPE_CONTEXT env var (raw override)
-    2) Provider/YAML prompt preset (via ps_get_prompt)
-
-    The returned text will be truncated to a safe, configurable length to
-    avoid exceeding model-side limits (DashScope doc mentions ~10k tokens).
-    We cap by characters as an approximation.
-    """
-
-    def _truncate_context_text(s: str) -> str:
-        # Approximate guard against very large contexts; configurable via env
-        # Example: set DASHSCOPE_CONTEXT_MAX_CHARS=20000 to raise the cap
-        try:
-            max_chars = int(os.getenv("DASHSCOPE_CONTEXT_MAX_CHARS", "12000"))
-        except Exception:
-            max_chars = 12000
-        if max_chars <= 0:
-            return s
-        if len(s) <= max_chars:
-            return s
-        return s[:max_chars]
-
-    # 1) explicit env override
-    context = _clean_str(os.getenv("DASHSCOPE_CONTEXT"))
-    if context:
-        return _truncate_context_text(context)
-
-    # 2) YAML/provider prompt preset resolved via DRY utility
-    prompt = _clean_str(ps_get_prompt())
-    if prompt:
-        return _truncate_context_text(prompt)
-    return None
-
-
-def get_stream_enabled() -> bool:
-    # YAML -> env(DASHSCOPE_STREAM) -> env(OPENAI_TRANSCRIBE_STREAM) fallback
-    if ps_get_str("stream", env="DASHSCOPE_STREAM", default=None) is not None:
-        return ps_get_bool("stream", env="DASHSCOPE_STREAM", default=False)
-    return ps_get_bool("stream", env="OPENAI_TRANSCRIBE_STREAM", default=False)
-
-
-def get_enable_itn() -> bool:
-    return True  # ITN enabled by default
-
-
-def get_enable_lid() -> bool:
-    return ps_get_bool("enable_lid", env="DASHSCOPE_ENABLE_LID", default=False)
-
-
-def _build_messages(audio_payload: str, audio_format: str) -> List[Dict[str, Any]]:
-    messages: List[Dict[str, Any]] = []
-    context = get_context_text()
-    if context:
-        messages.append({"role": "system", "content": [{"text": context}]})
-    messages.append(
-        {
-            "role": "user",
-            "content": [
-                {
-                    "audio": {
-                        "format": audio_format,
-                        "data": audio_payload,
-                    }
-                }
-            ],
-        }
-    )
-    return messages
-
-
-def _guess_audio_format(mime: str) -> str:
-    mime = (mime or "").split(";")[0].strip().lower()
-    if "/" in mime:
-        subtype = mime.split("/", 1)[1]
-    else:
-        subtype = mime
-    mapping = {
-        "mpeg": "mp3",
-        "x-m4a": "m4a",
-        "x-wav": "wav",
-        "wave": "wav",
-        "ogg": "ogg",
-        "opus": "opus",
-        "webm": "webm",
-        "aiff": "aiff",
-        "x-aiff": "aiff",
-    }
-    return mapping.get(subtype, subtype or "wav")
-
-
-def _ext_for_mime(mime: str) -> str:
-    fmt = _guess_audio_format(mime)
-    return fmt if fmt else "wav"
-
-
-def _extract_text_from_content(content: Any) -> List[str]:
-    parts: List[str] = []
-    if isinstance(content, list):
-        for item in content:
-            if isinstance(item, dict):
-                if "text" in item and isinstance(item["text"], str):
-                    parts.append(item["text"])
-                elif "content" in item:
-                    parts.extend(_extract_text_from_content(item["content"]))
-            elif isinstance(item, str):
-                parts.append(item)
-            else:
-                parts.extend(_extract_text_from_content(item))
-    elif isinstance(content, dict):
-        parts.extend(_extract_text_from_content(content.get("content")))
-        if "text" in content and isinstance(content["text"], str):
-            parts.append(content["text"])
-    elif isinstance(content, str):
-        parts.append(content)
-    elif content is not None:
-        text = getattr(content, "text", None)
-        if isinstance(text, str):
-            parts.append(text)
-        nested = getattr(content, "content", None)
-        if nested is not None:
-            parts.extend(_extract_text_from_content(nested))
-    return parts
-
-def _normalize_text(s: str) -> str:
-    # strip common wrappers and collapse whitespace
-    if not isinstance(s, str):
-        return ""
-    s = s.strip()
-    # remove wrapping quotes if present
-    if len(s) >= 2 and ((s[0] == '"' and s[-1] == '"') or (s[0] == "'" and s[-1] == "'")):
-        s = s[1:-1]
-    # collapse internal whitespace
-    s = " ".join(s.split())
-    return s
-
-
-def _get_field(obj: Any, key: str) -> Any:
-    if isinstance(obj, dict):
-        return obj.get(key)
-    return getattr(obj, key, None)
-
-
-def _extract_parts_from_choice(choice: Any) -> List[str]:
-    parts: List[str] = []
-    parts.extend(_extract_text_from_content(_get_field(choice, "content")))
-    text = _get_field(choice, "text")
-    if isinstance(text, str):
-        parts.append(text)
-    message = _get_field(choice, "message")
-    if message is not None:
-        parts.extend(_extract_text_from_content(_get_field(message, "content")))
-    return parts
-
-
-def _payload_preview(payload: Any) -> str | None:
-    try:
-        preview = json.dumps(payload, ensure_ascii=False, default=str)
-    except Exception:
-        try:
-            preview = str(payload)
-        except Exception:
-            return None
-    preview = " ".join(preview.split())
-    if len(preview) > 500:
-        preview = preview[:500] + "..."
-    return preview or None
-
-
-def _sdk_response_preview(response: Any, payload_data: Any) -> str | None:
-    parts: List[str] = []
-    try:
-        parts.append(f"response_type={type(response).__name__}")
-    except Exception:
-        pass
-    for name in ("status_code", "code", "message", "request_id", "output"):
-        try:
-            value = getattr(response, name, None)
-        except Exception:
-            value = None
-        if value is not None:
-            parts.append(f"{name}={_payload_preview(value) or value}")
-    payload = _payload_preview(payload_data)
-    if payload:
-        parts.append(f"payload={payload}")
-    preview = " ".join(str(part) for part in parts if part)
-    if len(preview) > 900:
-        preview = preview[:900] + "..."
-    return preview or None
-
-
-def _extract_transcript(payload: Any) -> Tuple[str, Dict[str, Any]]:
-    request_id = None
-    message = None
-    # If payload is a JSON string, attempt to parse it first
-    if isinstance(payload, str):
-        try:
-            parsed = json.loads(payload)
-            return _extract_transcript(parsed)
-        except Exception:
-            # treat as plain text
-            text = _normalize_text(payload)
-            return text, {}
-    if isinstance(payload, dict):
-        request_id = payload.get("request_id") or payload.get("id")
-        message = payload.get("message")
-        output = payload.get("output") or payload.get("result") or payload.get("data")
-        parts: List[str] = []
-        if isinstance(output, dict):
-            results = output.get("results") or output.get("choices")
-            if isinstance(results, list):
-                for item in results:
-                    parts.extend(_extract_parts_from_choice(item))
-            else:
-                parts.extend(_extract_text_from_content(output))
-        elif isinstance(output, list):
-            for item in output:
-                parts.extend(_extract_text_from_content(item))
-                parts.extend(_extract_parts_from_choice(item))
-        results = payload.get("results") or payload.get("choices")
-        if isinstance(results, list):
-            for item in results:
-                parts.extend(_extract_parts_from_choice(item))
-        if not parts and "text" in payload and isinstance(payload["text"], str):
-            parts = [payload["text"]]
-        text = "\n".join(p.strip() for p in parts if isinstance(p, str) and p.strip())
-        if text:
-            text = _normalize_text(text)
-    else:
-        text = ""
-
-    meta = {"dashscope_request_id": request_id}
-    if message:
-        meta["dashscope_message"] = message
-    if not text:
-        preview = _payload_preview(payload)
-        if preview:
-            meta["dashscope_payload_preview"] = preview
-    return text, meta
-
-
-def _build_request_body(audio_payload: str, audio_format: str) -> Dict[str, Any]:
-    body: Dict[str, Any] = {
-        "model": get_model(),
-        "messages": _build_messages(audio_payload, audio_format),
-    }
-
-    result_format = get_result_format() or "message"
-    body["result_format"] = result_format
-
-    response_format = get_response_format()
-    if response_format:
-        body["response_format"] = response_format
-
-    language = get_language()
-    asr_options: Dict[str, Any] = {}
-    if language:
-        asr_options["language"] = language
-    if get_enable_lid():
-        asr_options["enable_lid"] = True
-    if get_enable_itn():
-        asr_options["enable_itn"] = True
-    if asr_options:
-        body["asr_options"] = asr_options
-
-    global _STREAM_WARNED
-    if get_stream_enabled():
-        if not _STREAM_WARNED:
-            try:
-                console.print("DashScope streaming not yet supported; falling back to non-streaming", style="bright_yellow")
-            except Exception:
-                pass
-            _STREAM_WARNED = True
-        body["stream"] = False
-    return body
-
-
-def build_headers() -> dict:
-    headers = {
-        "Accept": "application/json",
-        "Authorization": f"Bearer {get_api_key()}",
-        "Content-Type": "application/json",
-    }
-    if not should_reuse_http_client():
-        headers["Connection"] = "close"
-    return headers
-
-
-def build_limits() -> httpx.Limits:
-    keepalive_expiry = float(os.getenv("DASHSCOPE_KEEPALIVE_EXPIRY", "90"))
-    limits = httpx.Limits(max_keepalive_connections=5, max_connections=10, keepalive_expiry=keepalive_expiry)
-    return limits
 
 
 async def close_http_client(reason: str = "manual") -> None:
@@ -579,14 +199,6 @@ def _decode_audio_payload(payload_buf: io.BytesIO) -> Tuple[str, Dict[str, Any]]
     return encoded, meta
 
 
-def _read_audio_bytes(payload_buf: io.BytesIO) -> bytes:
-    try:
-        payload_buf.seek(0)
-    except Exception:
-        pass
-    return payload_buf.read()
-
-
 def _should_retry(status_code: int) -> bool:
     return status_code >= 500 or status_code in (408, 409, 429, 499)
 
@@ -599,9 +211,9 @@ async def _send_once(
     attempt: int,
 ) -> Tuple[str, int, float, Dict[str, Any], str | None]:
     encoded_audio, _ = _decode_audio_payload(payload_buf)
-    audio_format = _guess_audio_format(payload_mime)
-    request_body = _build_request_body(encoded_audio, audio_format)
-    endpoints = _candidate_endpoints()
+    audio_format = guess_audio_format(payload_mime)
+    request_body = build_request_body(encoded_audio, audio_format)
+    endpoints = candidate_endpoints()
     last_status = 0
     last_error = None
     t_complete = time.time()
@@ -641,18 +253,15 @@ async def _send_once(
                 err_text = ""
             last_error = err_text or f"HTTP {response.status_code}"
             if response.status_code in (404, 405):
-                # try next candidate endpoint
                 continue
-            payload_data = None
         else:
             try:
                 payload_data = response.json()
             except Exception:
                 payload_data = response.text
-            transcript, meta = _extract_transcript(payload_data)
+            transcript, meta = extract_transcript(payload_data)
             meta["dashscope_endpoint"] = endpoint
             return transcript, response.status_code, t_complete, meta, None
-    # No successful endpoint
     return "", last_status, t_complete, {"dashscope_error": last_error}, last_error
 
 
@@ -660,114 +269,7 @@ async def _send_with_sdk(
     payload_buf: io.BytesIO,
     payload_mime: str,
 ) -> Tuple[str, int, float, Dict[str, Any], str | None]:
-    """Use official dashscope SDK for transcription. Creates a temp local file
-    and passes absolute path as required by the SDK for local audio.
-    """
-    import asyncio
-    t_complete = time.time()
-    meta: Dict[str, Any] = {"via": "dashscope-sdk", "debug_build": _DEBUG_BUILD}
-    try:
-        import dashscope
-    except Exception as exc:  # SDK not available
-        err = f"{exc.__class__.__name__}: {exc}"
-        meta["dashscope_sdk_import_error"] = err
-        return "", 503, t_complete, meta, err
-
-    audio_bytes = _read_audio_bytes(payload_buf)
-    ext = _ext_for_mime(payload_mime)
-
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as f:
-            f.write(audio_bytes)
-            tmp_path = f.name
-
-        # The DashScope SDK accepts local audio as an absolute filesystem path.
-        audio_uri = str(Path(tmp_path).resolve())
-        context = get_context_text()
-        messages: List[Dict[str, Any]] = []
-        if context:
-            messages.append({"role": "system", "content": [{"text": context}]})
-        messages.append({"role": "user", "content": [{"audio": audio_uri}]})
-        model = get_model()
-
-        asr_options: Dict[str, Any] = {}
-        language = get_language()
-        if language:
-            asr_options["language"] = language
-        if get_enable_lid():
-            asr_options["enable_lid"] = True
-        if get_enable_itn():
-            asr_options["enable_itn"] = True
-
-
-        # Call SDK in a thread to avoid blocking event loop
-        def _call_sdk() -> Any:
-            return dashscope.MultiModalConversation.call(
-                api_key=get_api_key(),
-                model=model,
-                messages=messages,
-                result_format="message",
-                asr_options=asr_options,
-                # stream not used here (non-streaming)
-            )
-
-        response = await asyncio.to_thread(_call_sdk)
-        t_complete = time.time()
-
-        # Convert response to a dict-ish structure for a unified parser
-        payload_data: Any
-        try:
-            if hasattr(response, "to_dict"):
-                payload_data = response.to_dict()  # type: ignore[attr-defined]
-            elif isinstance(response, dict):
-                payload_data = response
-            else:
-                payload_data = json.loads(str(response))
-        except Exception:
-            payload_data = str(response)
-
-        transcript, extra = _extract_transcript(payload_data)
-        meta.update(extra)
-        meta["dashscope_sdk"] = True
-        meta["audio_bytes"] = len(audio_bytes)
-        meta["audio_uri"] = audio_uri
-
-        # Best-effort HTTP status. DashScope SDK response often contains
-        # business code=0 for success, which must not be treated as HTTP 0.
-        status = 200
-        response_status = getattr(response, "status_code", None)
-        meta["raw_status"] = response_status
-        if response_status is not None:
-            try:
-                candidate_status = int(response_status)
-                if 100 <= candidate_status <= 599:
-                    status = candidate_status
-            except Exception:
-                pass
-        if isinstance(payload_data, dict):
-            try:
-                candidate_status = int(payload_data.get("status_code") or status)
-                if 100 <= candidate_status <= 599:
-                    status = candidate_status
-            except Exception:
-                pass
-        if not transcript:
-            preview = _sdk_response_preview(response, payload_data)
-            if preview:
-                meta["dashscope_payload_preview"] = preview
-        return transcript, status, t_complete, meta, None if transcript else None
-    except Exception as exc:
-        t_complete = time.time()
-        err = f"{exc.__class__.__name__}: {exc}"
-        meta["dashscope_sdk_exception"] = err
-        return "", 400, t_complete, meta, err
-    finally:
-        if tmp_path:
-            try:
-                os.unlink(tmp_path)
-            except Exception:
-                pass
+    return await send_with_sdk(payload_buf, payload_mime)
 
 
 async def transcribe_with_retries(
@@ -787,7 +289,7 @@ async def transcribe_with_retries(
     t_complete = t_submit
     transport_meta: Dict[str, Any] = {"http2": _HTTP2_ENABLED}
 
-    use_sdk = _use_sdk()
+    prefer_sdk = use_sdk()
     for attempt in range(max_retries):
         if attempt > 0:
             try:
@@ -799,14 +301,14 @@ async def transcribe_with_retries(
         request_id = _next_request_id()
         try:
             t_submit = time.time()
-            if use_sdk:
+            if prefer_sdk:
                 _log_request_event(
                     request_id,
                     "sdk_begin",
                     attempt=attempt + 1,
                     detail=f"task_id={task_id} mime={payload_mime}",
                 )
-                text_result, status_code, t_complete, meta, err_text = await _send_with_sdk(
+                text_result, status_code, t_complete, meta, err_text = await send_with_sdk(
                     payload_buf, payload_mime
                 )
             else:
@@ -824,7 +326,7 @@ async def transcribe_with_retries(
                 )
             transport_meta = {"http2": _HTTP2_ENABLED, **meta}
             if err_text and _should_retry(status_code):
-                if use_sdk and isinstance(meta, dict) and meta.get("dashscope_sdk_import_error"):
+                if prefer_sdk and isinstance(meta, dict) and meta.get("dashscope_sdk_import_error"):
                     import_error = str(meta.get("dashscope_sdk_import_error"))
                     _log_request_event(
                         request_id,
@@ -894,7 +396,7 @@ async def transcribe_with_retries(
             except Exception:
                 pass
         finally:
-            if not use_sdk and close_after_request and client is not None:
+            if not prefer_sdk and close_after_request and client is not None:
                 _log_request_event(request_id, "client_close", client=client, attempt=attempt + 1)
                 try:
                     await client.aclose()
