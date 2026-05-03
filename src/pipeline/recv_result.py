@@ -38,11 +38,10 @@ async def recv_result():
 
             # 最终结果可选走一次 LLM 润色；保持在正则替换与空白格式化之前
             if is_final:
-                console.print(f"ASR 原文：{raw_asr}", soft_wrap=True)
+                console.print(f"转录原文：{raw_asr}", soft_wrap=True)
                 _t_polish = time.monotonic()
                 text = await polish_text(text)
                 _polish_elapsed = time.monotonic() - _t_polish
-                console.print(f"润色时延：{_polish_elapsed:.2f}s", style="dim")
 
             # 正则替换（在 strip_punc 之后、pangu / opencc 之前执行）
             text = regex_replace(text)
@@ -81,7 +80,10 @@ async def recv_result():
                 # 若末尾不是有效标点，则补中文句号
                 # 将已完成的文本存入历史，供下一次 LLM 润色使用
                 record_finalized_text(text)
-                console.print(f"转录时延：{delay:.2f}s")
+                console.print(f"识别结果：{text}", soft_wrap=True)
+                console.print(
+                    f"总时延：{delay + _polish_elapsed:.2f}s = {delay:.2f}s + {_polish_elapsed:.2f}s"
+                )
                 dbg = message.get("debug_timing")
                 if os.getenv("CAPSWRITER_DEBUG_TIMING"):
                     console.print(
@@ -93,7 +95,6 @@ async def recv_result():
                         ),
                         style="dim",
                     )
-                console.print(f"识别结果：{text}", soft_wrap=True)
                 console.line()
             else:
                 # 轻量日志：帮助定位流式过程中是否有数据
