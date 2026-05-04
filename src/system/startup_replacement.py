@@ -1,21 +1,23 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
+from typing import Callable
 
 
 _LOCK_HANDLES: dict[Path, object] = {}
 
 
-def _lock_path(root: Path, name: str) -> Path:
+def _slot_path(root: Path, role: str) -> Path:
     lock_dir = root / ".tmp" / "locks"
     lock_dir.mkdir(parents=True, exist_ok=True)
-    return lock_dir / f"{name}.lock"
+    return lock_dir / f"{role}.lock"
 
 
-def acquire_single_instance(root: Path, name: str) -> bool:
-    """Acquire a process-scoped singleton lock for this repository checkout."""
-    path = _lock_path(root, name)
+def acquire_startup_slot(root: Path, role: str) -> bool:
+    """Acquire the runtime slot for the process that will own this role."""
+    path = _slot_path(root, role)
     handle = path.open("a+b")
     try:
         if os.name == "nt":
@@ -39,8 +41,27 @@ def acquire_single_instance(root: Path, name: str) -> bool:
     return True
 
 
-def release_single_instance(root: Path, name: str) -> None:
-    path = _lock_path(root, name)
+def prepare_replacement_startup(
+    root: Path,
+    role: str,
+    replace_existing: Callable[[], object],
+    attempts: int = 10,
+    delay_s: float = 0.2,
+) -> bool:
+    """Take over a role, replacing older matching processes when needed."""
+    if acquire_startup_slot(root, role):
+        return True
+
+    replace_existing()
+    for _ in range(max(1, attempts)):
+        if acquire_startup_slot(root, role):
+            return True
+        time.sleep(delay_s)
+    return False
+
+
+def release_startup_slot(root: Path, role: str) -> None:
+    path = _slot_path(root, role)
     handle = _LOCK_HANDLES.pop(path, None)
     if handle is None:
         return

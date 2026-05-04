@@ -130,6 +130,60 @@ def terminate_python_script_processes(script_path: Path, exclude_pid: int | None
     return terminate_process_matches(processes, exclude_pid=exclude_pid)
 
 
+def terminate_python_script_basename_processes(
+    script_path: Path, exclude_pid: int | None = None
+) -> list[int]:
+    """Terminate Python script processes for this checkout by command-line basename.
+
+    This is for entry scripts that may be launched by absolute or relative path.
+    It still requires the process command line to contain this repository root.
+    """
+    if os.name != "nt":
+        return []
+
+    try:
+        import pythoncom
+        import win32com.client
+
+        pythoncom.CoInitialize()
+        try:
+            service = win32com.client.GetObject("winmgmts:")
+            query = "SELECT ProcessId, ParentProcessId, Name, CommandLine FROM Win32_Process"
+            rows = service.ExecQuery(query)
+        finally:
+            pythoncom.CoUninitialize()
+    except Exception:
+        return []
+
+    root_text = _norm_text(str(script_path.resolve().parent))
+    basename = script_path.name.lower()
+    matches: list[dict[str, int | str | None]] = []
+    for row in rows:
+        name = getattr(row, "Name", None)
+        command_line = getattr(row, "CommandLine", None)
+        normalized_command = _norm_text(command_line)
+        if (
+            not _is_python_process(name)
+            or root_text not in normalized_command
+            or basename not in normalized_command
+        ):
+            continue
+        try:
+            pid = int(getattr(row, "ProcessId"))
+            ppid = int(getattr(row, "ParentProcessId"))
+        except Exception:
+            continue
+        matches.append(
+            {
+                "pid": pid,
+                "parent_pid": ppid,
+                "name": name,
+                "command_line": command_line,
+            }
+        )
+    return terminate_process_matches(matches, exclude_pid=exclude_pid)
+
+
 def terminate_executable_processes(exe_path: Path, exclude_pid: int | None = None) -> list[int]:
     """Terminate processes launched from an exact executable path."""
     processes = find_executable_processes(exe_path)

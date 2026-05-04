@@ -24,7 +24,8 @@ from src.audio.send_audio import retry_latest_audio
 from src.audio.stream import stream_close, stream_open
 from src.polish.vision_context import start_vision_context_service, stop_vision_context_service
 from src.system.empty_working_set import empty_current_working_set
-from src.system.single_instance import acquire_single_instance, release_single_instance
+from src.system.process_cleanup import terminate_python_script_processes
+from src.system.startup_replacement import prepare_replacement_startup, release_startup_slot
 
 Cosmic.transcribe_subtitles = bool(sys.argv[1:])
 
@@ -117,18 +118,25 @@ async def main_mic():
 
 
 def init_mic():
-    if not Cosmic.transcribe_subtitles and not acquire_single_instance(
-        Path(ROOT_DIR), "core_client"
-    ):
-        console.print("已有 CapsWriter 后台录音进程正在运行，本次启动已退出。", style="bright_yellow")
-        return
+    startup_slot_acquired = False
+    if not Cosmic.transcribe_subtitles:
+        startup_slot_acquired = prepare_replacement_startup(
+            Path(ROOT_DIR),
+            "core_client",
+            lambda: terminate_python_script_processes(
+                Path(ROOT_DIR) / "core_client.py", exclude_pid=os.getpid()
+            ),
+        )
+        if not startup_slot_acquired:
+            console.print("无法完成 CapsWriter 后台录音进程替换，本次启动已退出。", style="bright_red")
+            return
     try:
         asyncio.run(main_mic())
     except KeyboardInterrupt:
         console.print("再见！")
     finally:
-        if not Cosmic.transcribe_subtitles:
-            release_single_instance(Path(ROOT_DIR), "core_client")
+        if startup_slot_acquired:
+            release_startup_slot(Path(ROOT_DIR), "core_client")
         print("...")
 
 

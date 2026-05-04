@@ -64,8 +64,12 @@ from src.gui.listening_overlay import StatusOverlayController
 from src.gui.prompt_editor import PromptEditDialog
 from src.gui.startup_profiler import StartupProfileOptions, StartupProfiler
 from src.polish.llm_polish import get_polish_prompt_text, reload_polish_config, update_polish_prompt_text
-from src.system.process_cleanup import terminate_python_script_processes
-from src.system.single_instance import acquire_single_instance, release_single_instance
+from src.system.process_cleanup import (
+    terminate_executable_processes,
+    terminate_python_script_basename_processes,
+    terminate_python_script_processes,
+)
+from src.system.startup_replacement import prepare_replacement_startup, release_startup_slot
 
 
 # AHK hint tooltip removed for leaner startup
@@ -1648,8 +1652,15 @@ class GUI(QMainWindow):
 
 
 def start_client_gui(profile_options: StartupProfileOptions | None = None):
-    if not acquire_single_instance(ROOT, "client_gui"):
-        print("已有 CapsWriter GUI 实例正在运行，本次启动已退出。")
+    def replace_existing_gui() -> None:
+        terminate_python_script_basename_processes(ROOT / "start_client_gui.py", exclude_pid=os.getpid())
+        terminate_executable_processes(ROOT / "start_client_gui.exe", exclude_pid=os.getpid())
+        terminate_executable_processes(ROOT / "start_client_gui_admin.exe", exclude_pid=os.getpid())
+        terminate_python_script_processes(core_client_script_path(), exclude_pid=os.getpid())
+
+    startup_slot_acquired = prepare_replacement_startup(ROOT, "client_gui", replace_existing_gui)
+    if not startup_slot_acquired:
+        print("无法完成 CapsWriter GUI 替换，本次启动已退出。")
         return
     startup_profiler = StartupProfiler(profile_options)
     try:
@@ -1677,7 +1688,7 @@ def start_client_gui(profile_options: StartupProfileOptions | None = None):
             startup_profiler.stop("timer schedule failed")
         sys.exit(app.exec())
     finally:
-        release_single_instance(ROOT, "client_gui")
+        release_startup_slot(ROOT, "client_gui")
 
 
 if __name__ == "__main__":

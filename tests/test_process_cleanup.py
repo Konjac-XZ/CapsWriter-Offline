@@ -55,6 +55,23 @@ class ProcessCleanupTest(unittest.TestCase):
         self.assertEqual(terminated, [11])
         self.assertEqual(calls, [["taskkill", "/PID", "11", "/T", "/F"]])
 
+    def test_matches_gui_script_by_repo_root_and_basename(self) -> None:
+        script_path = Path(r"D:\GitHub\CapsWriter-Offline\start_client_gui.py")
+        root_text = process_cleanup._norm_text(str(script_path.resolve().parent))
+        basename = script_path.name.lower()
+
+        same_repo_command = process_cleanup._norm_text(
+            r'"D:\GitHub\CapsWriter-Offline\.venv\Scripts\python.exe" start_client_gui.py'
+        )
+        other_repo_command = process_cleanup._norm_text(
+            r'"D:\Other\CapsWriter-Offline\.venv\Scripts\python.exe" start_client_gui.py'
+        )
+
+        self.assertIn(root_text, same_repo_command)
+        self.assertIn(basename, same_repo_command)
+        self.assertNotIn(root_text, other_repo_command)
+        self.assertIn(basename, other_repo_command)
+
 
 if __name__ == "__main__":
     unittest.main()
