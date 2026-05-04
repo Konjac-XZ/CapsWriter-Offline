@@ -44,16 +44,72 @@ class ProcessCleanupTest(unittest.TestCase):
 
         original_run = process_cleanup.subprocess.run
         original_sleep = process_cleanup.time.sleep
+        original_family = process_cleanup.current_process_family
         try:
             process_cleanup.subprocess.run = fake_run
             process_cleanup.time.sleep = lambda _seconds: None
+            process_cleanup.current_process_family = lambda _processes=None: {10}
             terminated = process_cleanup.terminate_process_matches(processes, exclude_pid=10)
         finally:
             process_cleanup.subprocess.run = original_run
             process_cleanup.time.sleep = original_sleep
+            process_cleanup.current_process_family = original_family
 
         self.assertEqual(terminated, [11])
         self.assertEqual(calls, [["taskkill", "/PID", "11", "/T", "/F"]])
+
+    def test_terminate_process_matches_protects_current_process_family(self) -> None:
+        processes = [
+            {"pid": 100, "parent_pid": 1, "name": "python.exe", "command_line": "old gui"},
+            {"pid": 200, "parent_pid": 1, "name": "pythonw.exe", "command_line": "new launcher"},
+            {"pid": 201, "parent_pid": 200, "name": "pythonw.exe", "command_line": "new worker"},
+            {"pid": 300, "parent_pid": 1, "name": "pythonw.exe", "command_line": "old worker"},
+            {"pid": 301, "parent_pid": 300, "name": "pythonw.exe", "command_line": "old child"},
+        ]
+        calls: list[list[str]] = []
+
+        def fake_run(command, **_kwargs):
+            calls.append(command)
+
+        original_run = process_cleanup.subprocess.run
+        original_sleep = process_cleanup.time.sleep
+        original_family = process_cleanup.current_process_family
+        try:
+            process_cleanup.subprocess.run = fake_run
+            process_cleanup.time.sleep = lambda _seconds: None
+            process_cleanup.current_process_family = lambda _processes=None: {200, 201}
+            terminated = process_cleanup.terminate_process_matches(processes)
+        finally:
+            process_cleanup.subprocess.run = original_run
+            process_cleanup.time.sleep = original_sleep
+            process_cleanup.current_process_family = original_family
+
+        self.assertEqual(terminated, [301, 100, 300])
+        self.assertEqual(
+            calls,
+            [
+                ["taskkill", "/PID", "301", "/T", "/F"],
+                ["taskkill", "/PID", "100", "/T", "/F"],
+                ["taskkill", "/PID", "300", "/T", "/F"],
+            ],
+        )
+
+    def test_current_process_family_walks_ancestors(self) -> None:
+        original_getpid = process_cleanup.os.getpid
+        try:
+            process_cleanup.os.getpid = lambda: 201
+            family = process_cleanup.current_process_family(
+                [
+                    {"pid": 1, "parent_pid": 0, "name": None, "command_line": None},
+                    {"pid": 200, "parent_pid": 1, "name": None, "command_line": None},
+                    {"pid": 201, "parent_pid": 200, "name": None, "command_line": None},
+                    {"pid": 300, "parent_pid": 1, "name": None, "command_line": None},
+                ]
+            )
+        finally:
+            process_cleanup.os.getpid = original_getpid
+
+        self.assertEqual(family, {1, 200, 201})
 
     def test_matches_gui_script_by_repo_root_and_basename(self) -> None:
         script_path = Path(r"D:\GitHub\CapsWriter-Offline\start_client_gui.py")
