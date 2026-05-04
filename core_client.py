@@ -4,6 +4,7 @@ import contextlib
 import os
 import signal
 import sys
+from pathlib import Path
 from platform import system
 
 import colorama
@@ -18,16 +19,18 @@ except Exception:
 
 from src.pipeline.recv_result import recv_result
 from src.keyboard.shortcut_handler import bond_shortcut
-from src.audio.retry_cache import read_retry_request
+from src.audio.retry_cache import claim_retry_request, read_retry_request
 from src.audio.send_audio import retry_latest_audio
 from src.audio.stream import stream_close, stream_open
 from src.polish.vision_context import start_vision_context_service, stop_vision_context_service
 from src.system.empty_working_set import empty_current_working_set
+from src.system.single_instance import acquire_single_instance, release_single_instance
 
 Cosmic.transcribe_subtitles = bool(sys.argv[1:])
 
 # 确保根目录位置正确，用相对路径加载模型
-BASE_DIR = os.getcwd()
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = ROOT_DIR
 os.chdir(BASE_DIR)
 # BASE_DIR = os.path.dirname(__file__); os.chdir(BASE_DIR)
 
@@ -64,6 +67,8 @@ async def watch_retry_requests():
                     console.print("当前正在识别，稍后再重试。", style="bright_yellow")
                 elif retry_task is not None and not retry_task.done():
                     console.print("当前已有重试请求正在进行。", style="bright_yellow")
+                elif not claim_retry_request(request_id):
+                    pass
                 else:
                     retry_task = asyncio.create_task(retry_latest_audio())
 
@@ -112,11 +117,18 @@ async def main_mic():
 
 
 def init_mic():
+    if not Cosmic.transcribe_subtitles and not acquire_single_instance(
+        Path(ROOT_DIR), "core_client"
+    ):
+        console.print("已有 CapsWriter 后台录音进程正在运行，本次启动已退出。", style="bright_yellow")
+        return
     try:
         asyncio.run(main_mic())
     except KeyboardInterrupt:
         console.print("再见！")
     finally:
+        if not Cosmic.transcribe_subtitles:
+            release_single_instance(Path(ROOT_DIR), "core_client")
         print("...")
 
 

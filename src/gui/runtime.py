@@ -60,7 +60,7 @@ def availability_test_script_path() -> Path:
 
 
 def restart_script_path() -> Path:
-    return ROOT / "src" / "client_restart.py"
+    return ROOT / "src" / "system" / "restart.py"
 
 
 def theme_css_path() -> Path:

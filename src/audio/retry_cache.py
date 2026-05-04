@@ -1,5 +1,6 @@
 import json
 import time
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -7,6 +8,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 TMP_DIR = ROOT / ".tmp"
 RETRY_AUDIO_DIR = TMP_DIR / "retry_audio"
+RETRY_CLAIM_DIR = TMP_DIR / "retry_claims"
 RETRY_REQUEST_PATH = TMP_DIR / "retry_latest_request.json"
 RETRY_METADATA_PATH = RETRY_AUDIO_DIR / "latest.json"
 
@@ -94,3 +96,44 @@ def write_retry_request() -> dict[str, Any]:
     tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     tmp.replace(RETRY_REQUEST_PATH)
     return payload
+
+
+def _retry_claim_path(request_id: Any) -> Path:
+    request_key = str(request_id).encode("utf-8", errors="replace")
+    claim_name = hashlib.sha256(request_key).hexdigest()
+    return RETRY_CLAIM_DIR / f"{claim_name}.json"
+
+
+def _prune_retry_claims(max_age_s: float = 86400.0) -> None:
+    try:
+        cutoff = time.time() - max_age_s
+        for path in RETRY_CLAIM_DIR.glob("*.json"):
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink()
+            except FileNotFoundError:
+                pass
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def claim_retry_request(request_id: Any) -> bool:
+    """Atomically claim a retry request so only one client process handles it."""
+    if request_id is None:
+        return False
+
+    RETRY_CLAIM_DIR.mkdir(parents=True, exist_ok=True)
+    _prune_retry_claims()
+    claim_path = _retry_claim_path(request_id)
+    payload = {"request_id": request_id, "claimed_at": time.time()}
+
+    try:
+        with claim_path.open("x", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False)
+        return True
+    except FileExistsError:
+        return False
+    except Exception:
+        return False

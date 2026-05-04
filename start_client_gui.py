@@ -64,6 +64,8 @@ from src.gui.listening_overlay import StatusOverlayController
 from src.gui.prompt_editor import PromptEditDialog
 from src.gui.startup_profiler import StartupProfileOptions, StartupProfiler
 from src.polish.llm_polish import get_polish_prompt_text, reload_polish_config, update_polish_prompt_text
+from src.system.process_cleanup import terminate_python_script_processes
+from src.system.single_instance import acquire_single_instance, release_single_instance
 
 
 # AHK hint tooltip removed for leaner startup
@@ -1392,29 +1394,14 @@ class GUI(QMainWindow):
             self.status_overlay.hide_all()
         except Exception:
             pass
-        # Terminate core_client.py process
-        if hasattr(self, "core_client_process") and self.core_client_process:
-            self.core_client_process.terminate()
-            self.core_client_process.kill()
+        # Terminate core_client.py and any launcher-spawned child processes from this checkout.
+        self._stop_core_client_processes()
 
         # Hide the system tray icon
         self.tray_icon.setVisible(False)
 
         # Quit the application
         QApplication.quit()
-
-        # TODO: Quit models The above method can not completely exit the model, rename pythonw.exe to pythonw_CapsWriter.exe and taskkill. It's working but not the best way.
-        try:
-            subprocess.Popen(
-                "taskkill /IM start_client_gui_admin.exe /IM start_client_gui.exe /IM pythonw_CapsWriter_Client.exe /F",
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                shell=True,
-                text=True,
-            )
-        except Exception:
-            pass
 
     def on_tray_icon_activated(self, reason):
         # Called when the system tray icon is activated
@@ -1502,12 +1489,34 @@ class GUI(QMainWindow):
 
     # ============ Worker restart utilities ============
 
+    def _stop_core_client_processes(self) -> None:
+        self._stop_process(getattr(self, "core_client_process", None), "core_client")
+        try:
+            terminate_python_script_processes(core_client_script_path())
+        except Exception:
+            pass
+        self.core_client_process = None
+
     def _stop_process(self, proc: subprocess.Popen | None, name: str) -> None:
         if not proc:
             return
         try:
             if proc.poll() is None:
-                proc.terminate()
+                if os.name == "nt":
+                    try:
+                        subprocess.run(
+                            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                            creationflags=subprocess.CREATE_NO_WINDOW,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            stdin=subprocess.DEVNULL,
+                            timeout=2.0,
+                            check=False,
+                        )
+                    except Exception:
+                        proc.terminate()
+                else:
+                    proc.terminate()
                 try:
                     proc.wait(timeout=0.8)
                 except Exception:
@@ -1549,8 +1558,8 @@ class GUI(QMainWindow):
         except Exception:
             pass
         # Stop existing workers
-        self._stop_process(getattr(self, "core_client_process", None), "core_client")
-        
+        self._stop_core_client_processes()
+
         # Core client last
         self._start_worker("core_client.py", "core_client_process")
 
@@ -1639,30 +1648,36 @@ class GUI(QMainWindow):
 
 
 def start_client_gui(profile_options: StartupProfileOptions | None = None):
+    if not acquire_single_instance(ROOT, "client_gui"):
+        print("已有 CapsWriter GUI 实例正在运行，本次启动已退出。")
+        return
     startup_profiler = StartupProfiler(profile_options)
-    startup_profiler.start()
-    app = QApplication(sys.argv)
-    configure_app_locale_and_font(app, GUI._preferred_cn_font_family())
-    # Defer theme application to improve first paint time
-    apply_theme_later(app)
-    # Print screen info after Qt app is initialized (accurate in multi-monitor setups)
     try:
-        global scale_x, scale_y
-        scale_x, scale_y = print_screen_scale()
-    except Exception as e:
-        # Don't block startup if printing screen info fails
-        print(f"print_screen_scale error: {e}")
-    global gui
-    gui = GUI()
-    if not Config.shrink_automatically_to_tray:
-        gui.show()
-    try:
-        if startup_profiler.enabled:
-            delay = max(100, int((profile_options.duration_ms if profile_options else 5000)))
-            QTimer.singleShot(delay, lambda: startup_profiler.stop("startup window"))
-    except Exception:
-        startup_profiler.stop("timer schedule failed")
-    sys.exit(app.exec())
+        startup_profiler.start()
+        app = QApplication(sys.argv)
+        configure_app_locale_and_font(app, GUI._preferred_cn_font_family())
+        # Defer theme application to improve first paint time
+        apply_theme_later(app)
+        # Print screen info after Qt app is initialized (accurate in multi-monitor setups)
+        try:
+            global scale_x, scale_y
+            scale_x, scale_y = print_screen_scale()
+        except Exception as e:
+            # Don't block startup if printing screen info fails
+            print(f"print_screen_scale error: {e}")
+        global gui
+        gui = GUI()
+        if not Config.shrink_automatically_to_tray:
+            gui.show()
+        try:
+            if startup_profiler.enabled:
+                delay = max(100, int((profile_options.duration_ms if profile_options else 5000)))
+                QTimer.singleShot(delay, lambda: startup_profiler.stop("startup window"))
+        except Exception:
+            startup_profiler.stop("timer schedule failed")
+        sys.exit(app.exec())
+    finally:
+        release_single_instance(ROOT, "client_gui")
 
 
 if __name__ == "__main__":

@@ -3,43 +3,40 @@ import subprocess
 from pathlib import Path
 from time import sleep
 
-from src.system.check_process import check_process
 from src.infra.env_loader import load_dotenv_files
+from src.system.process_cleanup import (
+    find_executable_processes,
+    terminate_executable_processes,
+    terminate_python_script_processes,
+)
+
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def stop_exe(exe_name: str):
-    print(f"Stopping {exe_name}")
-    subprocess.Popen(
-        f"taskkill /IM {exe_name} /F",
-        creationflags=subprocess.CREATE_NO_WINDOW,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        shell=True,
-        text=True,
-    )
-    sleep(1)
-    if check_process(exe_name):
-        stop_exe(exe_name)
+    exe_path = ROOT / exe_name
+    print(f"Stopping {exe_path}")
+    if exe_path.exists():
+        terminate_executable_processes(exe_path, exclude_pid=os.getpid())
     else:
-        return
+        print(f"Skip missing executable: {exe_path}")
 
 
 def start_exe(exe_name: str):
     print(f"Starting {exe_name}")
-    # Refresh environment from .env files before launching so the started
-    # process inherits the latest values.
     load_dotenv_files()
-
-    # Make a copy of the current environment and pass it explicitly to Popen.
     env = os.environ.copy()
 
-    # Launch directly (avoid 'start' which spawns via cmd and may drop env/cwd)
-    cwd = Path(__file__).resolve().parent.parent.parent
-    exe_path = cwd / exe_name
+    exe_path = ROOT / exe_name
+    if not exe_path.exists():
+        print(f"Skip missing executable: {exe_path}")
+        return
+
     try:
         subprocess.Popen(
             [str(exe_path)],
-            cwd=str(cwd),
+            cwd=str(ROOT),
             creationflags=subprocess.CREATE_NO_WINDOW,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -48,10 +45,9 @@ def start_exe(exe_name: str):
             env=env,
         )
     except FileNotFoundError:
-        # Fallback to shell invocation if needed
         subprocess.Popen(
             f'"{exe_name}"',
-            cwd=str(cwd),
+            cwd=str(ROOT),
             creationflags=subprocess.CREATE_NO_WINDOW,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -60,10 +56,8 @@ def start_exe(exe_name: str):
             env=env,
         )
     sleep(1)
-    if not check_process(exe_name):
+    if not find_executable_processes(exe_path):
         start_exe(exe_name)
-    else:
-        return
 
 
 def restart_exe(exe_name: str):
@@ -72,10 +66,11 @@ def restart_exe(exe_name: str):
 
 
 def stop_client():
+    terminate_python_script_processes(ROOT / "core_client.py", exclude_pid=os.getpid())
+
     exe_name_list = [
         "start_client_gui_admin.exe",
         "start_client_gui.exe",
-        "pythonw_CapsWriter_Client.exe",
         "hint_while_recording.exe",
     ]
 
@@ -94,7 +89,7 @@ def restart_client():
 
 
 if __name__ == "__main__":
-    if check_process("start_client_gui_admin.exe"):
+    if find_executable_processes(ROOT / "start_client_gui_admin.exe"):
         restart_client_admin()
     else:
         restart_client()
