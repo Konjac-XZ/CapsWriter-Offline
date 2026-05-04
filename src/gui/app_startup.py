@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from PySide6.QtCore import QLocale, QTimer
 from PySide6.QtGui import QFont, QGuiApplication
@@ -51,15 +52,16 @@ def configure_app_locale_and_font(app: QApplication, font_family: str) -> None:
 
     try:
         app_font = QFont(font_family)
-        if hasattr(QFont, "StyleStrategy") and hasattr(QFont.StyleStrategy, "PreferAntialias"):
+        qfont_type: Any = QFont
+        if hasattr(qfont_type, "StyleStrategy") and hasattr(qfont_type.StyleStrategy, "PreferAntialias"):
             app_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
-        elif hasattr(QFont, "PreferAntialias"):
-            app_font.setStyleStrategy(QFont.PreferAntialias)
+        elif hasattr(qfont_type, "PreferAntialias"):
+            app_font.setStyleStrategy(qfont_type.PreferAntialias)
 
-        if hasattr(QFont, "HintingPreference") and hasattr(QFont.HintingPreference, "PreferFullHinting"):
+        if hasattr(qfont_type, "HintingPreference") and hasattr(qfont_type.HintingPreference, "PreferFullHinting"):
             app_font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
-        elif hasattr(QFont, "PreferFullHinting"):
-            app_font.setHintingPreference(QFont.PreferFullHinting)
+        elif hasattr(qfont_type, "PreferFullHinting"):
+            app_font.setHintingPreference(qfont_type.PreferFullHinting)
         app.setFont(app_font)
     except Exception as e:
         print(f"Error setting app font: {e}")

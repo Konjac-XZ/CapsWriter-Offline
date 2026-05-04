@@ -175,7 +175,7 @@ class StatusOverlay(QWidget):
         cursor_pos = QCursor.pos()
         screen = QGuiApplication.screenAt(cursor_pos)
         if screen is None:
-            screen = app.primaryScreen()
+            screen = QGuiApplication.primaryScreen()
         self._move_to_screen_bottom(screen)
 
     def _move_to_last_screen_bottom(self) -> None:

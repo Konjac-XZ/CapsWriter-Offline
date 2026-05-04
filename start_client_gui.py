@@ -7,6 +7,7 @@ import threading
 import asyncio
 from pathlib import Path
 from queue import Queue
+from typing import Any, cast
 
 import yaml
 
@@ -16,9 +17,11 @@ from PySide6.QtGui import (
     QIcon,
     QWheelEvent,
     QTextOption,
+    QTextCursor,
     QShortcut,
     QKeySequence,
     QColor,
+    QGuiApplication,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -71,13 +74,16 @@ class GUI(QMainWindow):
         super().__init__()
 
         # Queue to store early log messages before UI is ready
-        self.early_messages = []
+        self.early_messages: list[tuple[str, str]] = []
         # Ensure provider_manager attribute exists before UI uses it
-        self.provider_manager = None
+        self.provider_manager: Any | None = None
         self._syncing_context_toggle_states = False
+        self.core_client_process: subprocess.Popen[str] | None = None
+        self.text_box_wordCountLabel: QLabel | None = None
+        self.old_pos = QPoint()
 
         self.init_ui()
-        self.output_queue_client = Queue()
+        self.output_queue_client: Queue[str] = Queue()
         self.status_overlay = StatusOverlayController()
         self.edgeMargin = 5  # 侧边停靠残余像素值
         self.isBerthLeft = False
@@ -204,8 +210,8 @@ class GUI(QMainWindow):
 
     def create_text_box(self):
         self.text_box_client = QTextEdit()
-        self.text_box_client.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.text_box_client.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.text_box_client.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.text_box_client.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         # Treat content strictly as plain text to avoid HTML rendering side-effects
         self.text_box_client.setAcceptRichText(False)
         # Make widget read-only to prevent user edits while still allowing programmatic updates
@@ -214,11 +220,12 @@ class GUI(QMainWindow):
         self.text_box_client.setAcceptDrops(False)
         # Allow selection by mouse/keyboard but forbid editing
         self.text_box_client.setTextInteractionFlags(
-            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
         )
         # Wrap at widget width and allow wrapping anywhere to avoid mid-glyph clipping for long CJK strings
-        self.text_box_client.setLineWrapMode(QTextEdit.WidgetWidth)
-        self.text_box_client.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+        self.text_box_client.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        self.text_box_client.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
         # Always follow the latest output (auto-scroll to the bottom on new text)
         try:
             self.text_box_client.textChanged.connect(self.scroll_to_bottom)
@@ -228,7 +235,7 @@ class GUI(QMainWindow):
     def _configure_collapsible_combo(self, combo: QComboBox, *, editable: bool = False) -> None:
         """Apply a unified style and sizing policy to combo boxes."""
         combo.setEditable(editable)
-        combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         combo.setMinimumWidth(0)
         combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         combo.setMinimumContentsLength(0)
@@ -250,12 +257,12 @@ class GUI(QMainWindow):
         layout.setSpacing(4)
 
         label = QLabel(label_text)
-        label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
         layout.addWidget(label)
         layout.addWidget(combo)
 
-        container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         return container, label
 
     @staticmethod
@@ -269,7 +276,7 @@ class GUI(QMainWindow):
     def _create_context_toggle(self, text: str, tooltip: str) -> QCheckBox:
         checkbox = QCheckBox(text)
         checkbox.setToolTip(tooltip)
-        checkbox.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        checkbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         return checkbox
 
     def _update_yaml_bool(self, path: Path, key_path: tuple[str, ...], value: bool) -> bool:
@@ -441,7 +448,7 @@ class GUI(QMainWindow):
         self.modify_prompt_button = QPushButton("编辑 ASR 提示词")
         self.modify_prompt_button.setToolTip("编辑当前转录服务商的自定义提示词")
         self.modify_prompt_button.clicked.connect(self.show_modify_prompt_dialog)
-        self.modify_prompt_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.modify_prompt_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         provider_row.addWidget(self.modify_prompt_button)
 
         prompt_row = QHBoxLayout()
@@ -458,7 +465,7 @@ class GUI(QMainWindow):
         self.edit_polish_prompt_button = QPushButton("编辑 LLM 提示词")
         self.edit_polish_prompt_button.setToolTip("编辑 config/polish/polish.yaml 中的 LLM 润色提示词")
         self.edit_polish_prompt_button.clicked.connect(self.show_edit_polish_prompt_dialog)
-        self.edit_polish_prompt_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.edit_polish_prompt_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         prompt_row.addWidget(self.edit_polish_prompt_button)
 
         action_row = QHBoxLayout()
@@ -468,19 +475,19 @@ class GUI(QMainWindow):
         self.clear_history_button = QPushButton("清除最近上屏")
         self.clear_history_button.setToolTip("暂时清除 LLM 润色使用的最近上屏消息记录")
         self.clear_history_button.clicked.connect(self.clear_recent_output_history)
-        self.clear_history_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.clear_history_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         action_row.addWidget(self.clear_history_button)
 
         self.retry_latest_button = QPushButton("重试最近请求")
         self.retry_latest_button.setToolTip("重新发送最近一次录音缓存，并将结果照常上屏")
         self.retry_latest_button.clicked.connect(self.retry_latest_request)
-        self.retry_latest_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.retry_latest_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         action_row.addWidget(self.retry_latest_button)
 
         self.clear_screen_button = QPushButton("清屏")
         self.clear_screen_button.setToolTip("清空当前 GUI 日志")
         self.clear_screen_button.clicked.connect(self.clear_text_box)
-        self.clear_screen_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.clear_screen_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         action_row.addWidget(self.clear_screen_button)
 
         context_toggle_row = QHBoxLayout()
@@ -510,7 +517,7 @@ class GUI(QMainWindow):
 
         context_toggle_container = QWidget()
         context_toggle_container.setLayout(context_toggle_row)
-        context_toggle_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        context_toggle_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         action_row.addSpacing(8)
         action_row.addWidget(context_toggle_container, 1)
         action_row.addSpacing(8)
@@ -518,7 +525,7 @@ class GUI(QMainWindow):
         self.edit_lexicon_button = QPushButton("编辑词库")
         self.edit_lexicon_button.setToolTip("编辑用户自定义词库（config/user_lexicon.yaml）")
         self.edit_lexicon_button.clicked.connect(self.show_edit_lexicon_dialog)
-        self.edit_lexicon_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.edit_lexicon_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         action_row.addWidget(self.edit_lexicon_button)
 
         uniform_button_width = 144
@@ -587,7 +594,7 @@ class GUI(QMainWindow):
                         if len(preview) > 160:
                             preview = preview[:157] + "..."
                         idx = self.prompt_combo.count() - 1
-                        self.prompt_combo.setItemData(idx, preview, Qt.ToolTipRole)
+                        self.prompt_combo.setItemData(idx, preview, Qt.ItemDataRole.ToolTipRole)
                 except Exception:
                     pass
 
@@ -614,7 +621,7 @@ class GUI(QMainWindow):
                 label = self._inline_prompt_label(inline_prompt)
                 custom_index = self.prompt_combo.count()
                 self.prompt_combo.addItem(label, "__INLINE__")
-                self.prompt_combo.setItemData(custom_index, inline_prompt, Qt.ToolTipRole)
+                self.prompt_combo.setItemData(custom_index, inline_prompt, Qt.ItemDataRole.ToolTipRole)
                 selected_index = custom_index
             elif isinstance(current_preset, str) and current_preset:
                 for i in range(self.prompt_combo.count()):
@@ -691,7 +698,7 @@ class GUI(QMainWindow):
             initial_text = self._resolve_prompt_text_for_provider(provider_id)
 
         dialog = PromptEditDialog(self, initial_text=initial_text, window_title="编辑 ASR 提示词")
-        if dialog.exec() != QDialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
         new_prompt_raw = dialog.prompt_text()
@@ -757,7 +764,7 @@ class GUI(QMainWindow):
             return
 
         dialog = PromptEditDialog(self, initial_text=initial_text, window_title="编辑 LLM 提示词")
-        if dialog.exec() != QDialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
         try:
@@ -1078,8 +1085,9 @@ class GUI(QMainWindow):
                         self.log_message(line, "#000000")
 
             if hasattr(self, "test_all_button"):
-                self.test_all_button.setEnabled(True)
-                self.test_all_button.setText("Test All")
+                test_all_button = cast(QPushButton, getattr(self, "test_all_button"))
+                test_all_button.setEnabled(True)
+                test_all_button.setText("Test All")
 
         QTimer.singleShot(0, update_gui)
 
@@ -1092,7 +1100,7 @@ class GUI(QMainWindow):
             else:
                 # Fallback: ensure cursor at end (rarely needed)
                 cursor = self.text_box_client.textCursor()
-                cursor.movePosition(cursor.End)
+                cursor.movePosition(QTextCursor.MoveOperation.End)
                 self.text_box_client.setTextCursor(cursor)
                 self.text_box_client.ensureCursorVisible()
         except Exception:
@@ -1330,9 +1338,10 @@ class GUI(QMainWindow):
         total_text_bytes = len(self.text_box_client.toPlainText().encode("utf-8"))
         unselect_text_count = total_text_count - select_text_count
         unselect_text_bytes = total_text_bytes - select_text_bytes
-        self.text_box_wordCountLabel.setText(
-            f"{select_text_count} + {unselect_text_count} = {total_text_count} Words |  {select_text_bytes} + {unselect_text_bytes} = {total_text_bytes} Bytes"
-        )
+        if self.text_box_wordCountLabel is not None:
+            self.text_box_wordCountLabel.setText(
+                f"{select_text_count} + {unselect_text_count} = {total_text_count} Words |  {select_text_bytes} + {unselect_text_bytes} = {total_text_bytes} Bytes"
+            )
         if total_text_count > 10000:  # 字符数过多时自动清空
             self.text_box_client.clear()
 
@@ -1409,11 +1418,11 @@ class GUI(QMainWindow):
 
     def on_tray_icon_activated(self, reason):
         # Called when the system tray icon is activated
-        if reason == QSystemTrayIcon.DoubleClick:
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self.showNormal()  # Show the main window
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Escape:
+        if event.key() == Qt.Key.Key_Escape:
             self.hide()  # Press ESC to hide main window
 
     def start_script(self):
@@ -1548,11 +1557,11 @@ class GUI(QMainWindow):
 
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             self.old_pos = event.globalPosition().toPoint()
 
     def mouseMoveEvent(self, event):
-        if event.buttons() == Qt.LeftButton:
+        if event.buttons() == Qt.MouseButton.LeftButton:
             delta = QPoint(event.globalPosition().toPoint() - self.old_pos)
             self.move(self.x() + delta.x(), self.y() + delta.y())
             self.old_pos = event.globalPosition().toPoint()
@@ -1563,7 +1572,9 @@ class GUI(QMainWindow):
         y = geometry.y()
         width = geometry.width()
         height = geometry.height()
-        primaryScreen = QApplication.instance().primaryScreen()
+        primaryScreen = QGuiApplication.primaryScreen()
+        if primaryScreen is None:
+            return x, y, width, height, 0, 0
         screenRect = primaryScreen.geometry()
         screenWidth = screenRect.width()
         screenHeight = screenRect.height()
@@ -1576,7 +1587,7 @@ class GUI(QMainWindow):
         self.min_scale = 0.5
         self.max_scale = 2.0
         # 检测Ctrl键是否被按下
-        if event.modifiers() == Qt.ControlModifier:
+        if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             # 计算缩放因子
             # print(event.angleDelta().y())
             if event.angleDelta().y() > 0:
@@ -1594,7 +1605,7 @@ class GUI(QMainWindow):
 
     def apply_scale_factor(self):
         # 应用缩放因子
-        widgets = [self.text_box_client]
+        widgets: list[QWidget] = [self.text_box_client]
         if hasattr(self, 'provider_combo'):
             widgets.append(self.provider_combo)
         if hasattr(self, 'modify_prompt_button'):

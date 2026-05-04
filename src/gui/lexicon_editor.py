@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 import yaml
 from PySide6.QtCore import QEvent, QObject, Qt
@@ -100,11 +100,11 @@ class MonacoYamlEditor(QWidget):
         page = getattr(editor, "page", None)
         if not callable(page):
             return
-        web_page = page()
+        web_page = cast(Any, page())
         if web_page is None:
             return
         web_page.runJavaScript(
-            """
+            r"""
             (() => {
               const state = window.qtmonaco;
               if (!state || !state.editor || !state.monaco) {

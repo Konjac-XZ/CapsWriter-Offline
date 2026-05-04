@@ -12,5 +12,5 @@ def write_file(file: Union[Popen, wave.Wave_write], data: np.ndarray):
             stdin.write(data.tobytes())
             stdin.flush()
     elif isinstance(file, wave.Wave_write):
-        data = (data * (2**15 - 1)).astype(np.int16).tobytes()
-        file.writeframes(data)
+        frame_data = (data * (2**15 - 1)).astype(np.int16).tobytes()
+        file.writeframes(frame_data)

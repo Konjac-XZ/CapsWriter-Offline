@@ -10,7 +10,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import yaml
@@ -430,9 +430,11 @@ def _capture_active_window() -> ActiveWindowCapture | None:
         return None
     if not all((win32gui, win32ui, win32process, win32con)):
         return None
+    gui = cast(Any, win32gui)
+    process_api = cast(Any, win32process)
 
     try:
-        hwnd = int(win32gui.GetForegroundWindow() or 0)
+        hwnd = int(gui.GetForegroundWindow() or 0)
     except Exception:
         return None
 
@@ -440,11 +442,11 @@ def _capture_active_window() -> ActiveWindowCapture | None:
         return None
 
     try:
-        if not win32gui.IsWindow(hwnd) or not win32gui.IsWindowVisible(hwnd):
+        if not gui.IsWindow(hwnd) or not gui.IsWindowVisible(hwnd):
             return None
-        if win32gui.IsIconic(hwnd):
+        if gui.IsIconic(hwnd):
             return None
-        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        left, top, right, bottom = gui.GetWindowRect(hwnd)
     except Exception:
         return None
 
@@ -459,7 +461,7 @@ def _capture_active_window() -> ActiveWindowCapture | None:
 
     process_id = None
     try:
-        process_id = int(win32process.GetWindowThreadProcessId(hwnd)[1])
+        process_id = int(process_api.GetWindowThreadProcessId(hwnd)[1])
     except Exception:
         process_id = None
 
@@ -477,14 +479,14 @@ def _capture_active_window() -> ActiveWindowCapture | None:
 
 def _safe_window_title(hwnd: int) -> str:
     try:
-        return win32gui.GetWindowText(hwnd) or ""
+        return cast(Any, win32gui).GetWindowText(hwnd) or ""
     except Exception:
         return ""
 
 
 def _safe_class_name(hwnd: int) -> str | None:
     try:
-        class_name = win32gui.GetClassName(hwnd)
+        class_name = cast(Any, win32gui).GetClassName(hwnd)
     except Exception:
         return None
     return class_name or None
@@ -503,25 +505,28 @@ def _safe_process_name(process_id: int | None) -> str | None:
 
 
 def _capture_window_png(hwnd: int, width: int, height: int) -> bytes | None:
+    gui = cast(Any, win32gui)
+    ui = cast(Any, win32ui)
+    con = cast(Any, win32con)
     hwnd_dc = None
     src_dc = None
     mem_dc = None
     bitmap = None
     try:
-        hwnd_dc = win32gui.GetWindowDC(hwnd)
+        hwnd_dc = gui.GetWindowDC(hwnd)
         if not hwnd_dc:
             return None
 
-        src_dc = win32ui.CreateDCFromHandle(hwnd_dc)
+        src_dc = ui.CreateDCFromHandle(hwnd_dc)
         mem_dc = src_dc.CreateCompatibleDC()
-        bitmap = win32ui.CreateBitmap()
+        bitmap = ui.CreateBitmap()
         bitmap.CreateCompatibleBitmap(src_dc, width, height)
         mem_dc.SelectObject(bitmap)
 
         render_full_content_flag = 0x00000002
         result = ctypes.windll.user32.PrintWindow(hwnd, mem_dc.GetSafeHdc(), render_full_content_flag)
         if result != 1:
-            mem_dc.BitBlt((0, 0), (width, height), src_dc, (0, 0), win32con.SRCCOPY)
+            mem_dc.BitBlt((0, 0), (width, height), src_dc, (0, 0), con.SRCCOPY)
 
         bmp_info = bitmap.GetInfo()
         bmp_bytes = bitmap.GetBitmapBits(True)
@@ -536,7 +541,7 @@ def _capture_window_png(hwnd: int, width: int, height: int) -> bytes | None:
     finally:
         try:
             if bitmap is not None:
-                win32gui.DeleteObject(bitmap.GetHandle())
+                gui.DeleteObject(bitmap.GetHandle())
         except Exception:
             pass
         try:
@@ -551,7 +556,7 @@ def _capture_window_png(hwnd: int, width: int, height: int) -> bytes | None:
             pass
         try:
             if hwnd_dc is not None:
-                win32gui.ReleaseDC(hwnd, hwnd_dc)
+                gui.ReleaseDC(hwnd, hwnd_dc)
         except Exception:
             pass
 
@@ -570,7 +575,7 @@ def _bitmap_to_png(bitmap_bytes: bytes, width: int, height: int, bytes_per_line:
         return None
     if not image.save(buffer, b"PNG"):
         return None
-    return bytes(buffer.data())
+    return bytes(cast(Any, buffer.data()))
 
 
 # ---------------------------------------------------------------------------

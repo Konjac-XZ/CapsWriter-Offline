@@ -1,6 +1,6 @@
 import io
 import sys
-from asyncio import AbstractEventLoop, Queue
+from asyncio import AbstractEventLoop, Queue, Task
 from typing import Union, cast, Any
 
 import sounddevice as sd
@@ -85,7 +85,7 @@ class Cosmic:
     用一个 class 存储需要跨模块访问的变量值，命名为 Cosmic
     """
 
-    on = False
+    on: bool | float = False
     queue_in: Queue
     queue_out: Queue
     loop: Union[None, AbstractEventLoop] = None
@@ -96,9 +96,9 @@ class Cosmic:
     opposite_state = False
     # Whether we've already shown the non-USB-device warning during this run
     usb_warning_shown = False
-    vision_context = {}
-    vision_context_task = None
-    vision_context_last_error = None
+    vision_context: dict[str, Any] = {}
+    vision_context_task: Task[None] | None = None
+    vision_context_last_error: str | None = None
     transcribe_busy = False
     _last_stream_len = 0
     _stream_had_increments = False

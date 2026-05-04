@@ -59,6 +59,8 @@ async def recv_result():
                     _emit_status_overlay("show", "polishing")
                 text = await polish_text(text)
                 _polish_elapsed = time.monotonic() - _t_polish
+            else:
+                _polish_elapsed = 0.0
 
             # 正则替换（在 strip_punc 之后、pangu / opencc 之前执行）
             text = regex_replace(text)
@@ -194,4 +196,4 @@ async def recv_result():
 
 
 if __name__ == "__main__":
-    None
+    pass

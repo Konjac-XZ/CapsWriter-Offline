@@ -2,6 +2,7 @@ import asyncio
 import sys
 import threading
 import time
+from typing import Any, cast
 
 import numpy as np
 import sounddevice as sd
@@ -46,7 +47,9 @@ def stream_reopen():
     # 重载 PortAudio，更新设备列表
     sd._terminate()
     sd._ffi.dlclose(sd._lib)
-    sd._lib = sd._ffi.dlopen(sd._libname)
+    libname = sd._libname
+    if libname is not None:
+        sd._lib = sd._ffi.dlopen(libname)
     sd._initialize()
 
     # 打开新流
@@ -58,7 +61,7 @@ def stream_open():
     # 显示录音所用的音频设备
     channels = 1
     try:
-        device = sd.query_devices(kind="input")
+        device = cast(dict[str, Any], sd.query_devices(kind="input"))
         device_name = device["name"]
         channels = min(2, device["max_input_channels"])
         # If device name doesn't include 'USB', warn the user once per run.

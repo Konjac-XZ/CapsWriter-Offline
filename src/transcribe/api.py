@@ -12,6 +12,7 @@ try:
     from src.provider.provider_config import provider_manager
     PROVIDER_MANAGER_AVAILABLE = True
 except ImportError:
+    provider_manager: Any | None = None
     PROVIDER_MANAGER_AVAILABLE = False
 
 
@@ -22,7 +23,7 @@ def get_stream_flag() -> bool:
 
 def initialize_providers() -> None:
     """Initialize provider configurations on startup."""
-    if PROVIDER_MANAGER_AVAILABLE:
+    if provider_manager is not None:
         # Load providers and set active one in environment
         provider_manager.load_providers()
         active_provider = provider_manager.get_active_provider()
@@ -66,7 +67,7 @@ async def transcribe_audio(
         payload_buf = io.BytesIO(bytes(payload_buf))
 
     provider = None
-    if PROVIDER_MANAGER_AVAILABLE:
+    if provider_manager is not None:
         try:
             ptype = provider_manager.get_active_provider_type()
             provider = (ptype or "").strip().lower() or None

@@ -3,13 +3,14 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from typing import cast
 
 from src.infra.env_loader import load_dotenv_files
 
 
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
     ROOT: Path = Path(sys.executable).resolve().parent
-    BUNDLE_ROOT: Path = Path(sys._MEIPASS)
+    BUNDLE_ROOT: Path = Path(cast(str, getattr(sys, "_MEIPASS")))
 else:
     ROOT = Path(__file__).resolve().parents[2]
     BUNDLE_ROOT = ROOT

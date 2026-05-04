@@ -2,6 +2,7 @@ import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
+from typing import Any, cast
 
 import keyboard
 from pycaw.pycaw import AudioUtilities
@@ -58,7 +59,8 @@ def shortcut_correct(e: keyboard.KeyboardEvent):
     # 即便设置 right ctrl 触发，在按下 left ctrl 时也会触发
     # 不过，虽然两个按键的 keycode 一样，但事件 e.name 是不一样的
     # 在这里加一个判断，如果 e.name 不是我们期待的按键，就返回
-    key_expect = keyboard.normalize_name(Config.speech_recognition_shortcut).replace(
+    keyboard_api = cast(Any, keyboard)
+    key_expect = keyboard_api.normalize_name(Config.speech_recognition_shortcut).replace(
         "left ", ""
     )
     key_name = e.name or ""
