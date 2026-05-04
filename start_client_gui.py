@@ -1,48 +1,18 @@
 import argparse
-import cProfile
 import os
-import pstats
 import re
 import subprocess
 import sys
 import threading
 import asyncio
-import time
-from dataclasses import dataclass
 from pathlib import Path
 from queue import Queue
 
 import yaml
-from src.infra.env_loader import load_dotenv_files
 
-# Project root is the directory containing this script; normalize CWD for reliability
-# When running from PyInstaller, ROOT points to the exe's directory (repo root)
-# and BUNDLE_ROOT points to the temporary extraction folder for bundled resources
-if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-    # Running in PyInstaller bundle
-    ROOT: Path = Path(sys.executable).resolve().parent
-    BUNDLE_ROOT: Path = Path(sys._MEIPASS)
-else:
-    # Running as script
-    ROOT: Path = Path(__file__).resolve().parent
-    BUNDLE_ROOT: Path = ROOT
-
-try:
-    os.chdir(str(ROOT))
-except Exception:
-    pass
-
-# Always reload latest .env on startup; prefer files next to this script
-try:
-    load_dotenv_files()
-except Exception:
-    # Don't block startup on dotenv issues
-    pass
-
-from PySide6.QtCore import QPoint, Qt, QTimer, QLocale
+from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtGui import (
     QAction,
-    QFont,
     QIcon,
     QWheelEvent,
     QTextOption,
@@ -55,12 +25,10 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
-    QDialogButtonBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMenu,
-    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
     QSystemTrayIcon,
@@ -70,198 +38,32 @@ from PySide6.QtWidgets import (
 )
 # Intentionally defer theme import/application until after first paint for faster startup
 
+from src.gui.runtime import (
+    ROOT,
+    availability_test_script_path,
+    client_icon_path,
+    core_client_script_path,
+    ensure_project_cwd,
+    load_startup_env,
+    read_file_list,
+    resolve_console_python,
+    resolve_pythonw_client,
+    restart_script_path,
+)
+
+ensure_project_cwd()
+load_startup_env()
+
 from src.infra.config import ClientConfig as Config
 from src.audio.retry_cache import has_retry_audio, write_retry_request
+from src.gui.app_startup import apply_theme_later, configure_app_locale_and_font, print_screen_scale
 from src.gui.listening_overlay import StatusOverlayController
+from src.gui.prompt_editor import PromptEditDialog
+from src.gui.startup_profiler import StartupProfileOptions, StartupProfiler
 from src.polish.llm_polish import get_polish_prompt_text, reload_polish_config, update_polish_prompt_text
-
-def _resolve_pythonw_client() -> str | None:
-    """Return a usable Python interpreter for client child processes.
-
-    Preference order:
-    - .venv/Scripts/pythonw.exe (uv-managed venv)
-    - .venv/Scripts/python.exe (uv-managed venv)
-    - current sys.executable (fallback)
-    """
-    candidates: list[Path] = [
-        ROOT / ".venv" / "Scripts" / "pythonw.exe",
-        ROOT / ".venv" / "Scripts" / "python.exe",
-    ]
-    if sys.executable:
-        candidates.append(Path(sys.executable))
-    for p in candidates:
-        if p.exists():
-            return str(p)
-    return None
-
-
-@dataclass
-class StartupProfileOptions:
-    enabled: bool = False
-    tool: str = "cprofile"
-    output: Path | None = None
-    duration_ms: int = 5000
-
-
-def _default_profile_output(tool: str) -> Path:
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    profile_dir = ROOT / "profiles" / "startup"
-    profile_dir.mkdir(parents=True, exist_ok=True)
-    return profile_dir / f"startup_{tool}_{timestamp}"
-
-
-class StartupProfiler:
-    """Optional startup profiler with multiple backends and safe fallback."""
-
-    def __init__(self, options: StartupProfileOptions | None = None):
-        self.options = options or StartupProfileOptions()
-        self.enabled = bool(self.options.enabled)
-        self.tool = (self.options.tool or "cprofile").strip().lower()
-        self.output_base = self.options.output or _default_profile_output(self.tool)
-        self.output_base.parent.mkdir(parents=True, exist_ok=True)
-        self._started_at: float | None = None
-        self._cprofile: cProfile.Profile | None = None
-        self._pyinstrument = None
-        self._viztracer = None
-        self._yappi = None
-
-    def start(self) -> None:
-        if not self.enabled:
-            return
-        self._started_at = time.perf_counter()
-        try:
-            if self.tool == "cprofile":
-                self._cprofile = cProfile.Profile()
-                self._cprofile.enable()
-                print(f"[startup-profiler] cProfile started -> {self.output_base.with_suffix('.pstats')}")
-                return
-
-            if self.tool == "pyinstrument":
-                from pyinstrument import Profiler
-
-                self._pyinstrument = Profiler(async_mode="disabled")
-                self._pyinstrument.start()
-                print(f"[startup-profiler] pyinstrument started -> {self.output_base.with_suffix('.html')}")
-                return
-
-            if self.tool == "viztracer":
-                from viztracer import VizTracer
-
-                self._viztracer = VizTracer(output_file=str(self.output_base.with_suffix(".json")))
-                self._viztracer.start()
-                print(f"[startup-profiler] viztracer started -> {self.output_base.with_suffix('.json')}")
-                return
-
-            if self.tool == "yappi":
-                import yappi
-
-                self._yappi = yappi
-                self._yappi.clear_stats()
-                self._yappi.set_clock_type("wall")
-                self._yappi.start()
-                print(f"[startup-profiler] yappi started -> {self.output_base.with_suffix('.pstat')}")
-                return
-
-            print(f"[startup-profiler] unknown tool '{self.tool}', fallback to cprofile")
-            self.tool = "cprofile"
-            self._cprofile = cProfile.Profile()
-            self._cprofile.enable()
-        except Exception as e:
-            print(f"[startup-profiler] failed to start '{self.tool}': {e}; fallback to cprofile")
-            self.tool = "cprofile"
-            self._cprofile = cProfile.Profile()
-            self._cprofile.enable()
-
-    def stop(self, reason: str = "") -> None:
-        if not self.enabled:
-            return
-
-        elapsed_ms = None
-        if self._started_at is not None:
-            elapsed_ms = int((time.perf_counter() - self._started_at) * 1000)
-
-        try:
-            if self.tool == "cprofile" and self._cprofile is not None:
-                pstats_path = self.output_base.with_suffix(".pstats")
-                summary_path = self.output_base.with_suffix(".txt")
-                self._cprofile.disable()
-                self._cprofile.dump_stats(str(pstats_path))
-
-                with summary_path.open("w", encoding="utf-8") as f:
-                    stats = pstats.Stats(self._cprofile, stream=f)
-                    stats.sort_stats("cumulative")
-                    stats.print_stats(100)
-
-                print(f"[startup-profiler] cProfile saved: {pstats_path}")
-                print(f"[startup-profiler] cProfile summary: {summary_path}")
-
-            elif self.tool == "pyinstrument" and self._pyinstrument is not None:
-                txt_path = self.output_base.with_suffix(".txt")
-                html_path = self.output_base.with_suffix(".html")
-                self._pyinstrument.stop()
-
-                txt_path.write_text(self._pyinstrument.output_text(unicode=True, color=False), encoding="utf-8")
-                html_path.write_text(self._pyinstrument.output_html(), encoding="utf-8")
-
-                print(f"[startup-profiler] pyinstrument text: {txt_path}")
-                print(f"[startup-profiler] pyinstrument html: {html_path}")
-
-            elif self.tool == "viztracer" and self._viztracer is not None:
-                json_path = self.output_base.with_suffix(".json")
-                self._viztracer.stop()
-                self._viztracer.save()
-                print(f"[startup-profiler] viztracer trace: {json_path}")
-
-            elif self.tool == "yappi" and self._yappi is not None:
-                pstat_path = self.output_base.with_suffix(".pstat")
-                self._yappi.stop()
-                stats = self._yappi.get_func_stats()
-                stats.save(str(pstat_path), type="pstat")
-                print(f"[startup-profiler] yappi stats: {pstat_path}")
-
-            if elapsed_ms is not None:
-                reason_str = f" ({reason})" if reason else ""
-                print(f"[startup-profiler] captured ~{elapsed_ms}ms{reason_str}")
-        except Exception as e:
-            print(f"[startup-profiler] failed to save profile output: {e}")
-        finally:
-            self.enabled = False
 
 
 # AHK hint tooltip removed for leaner startup
-
-
-class PromptEditDialog(QDialog):
-    """Simple dialog for editing prompt text."""
-
-    def __init__(
-        self,
-        parent: QWidget | None = None,
-        *,
-        initial_text: str = "",
-        window_title: str = "编辑提示词",
-    ):
-        super().__init__(parent)
-        self.setWindowTitle(window_title)
-        self.resize(420, 320)
-
-        layout = QVBoxLayout(self)
-        self.text_edit = QPlainTextEdit(self)
-        self.text_edit.setPlainText(initial_text)
-        layout.addWidget(self.text_edit)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel, parent=self)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        try:
-            buttons.button(QDialogButtonBox.Save).setText("保存")
-            buttons.button(QDialogButtonBox.Cancel).setText("取消")
-        except Exception:
-            pass
-        layout.addWidget(buttons)
-
-    def prompt_text(self) -> str:
-        return self.text_edit.toPlainText()
 
 
 class GUI(QMainWindow):
@@ -325,7 +127,7 @@ class GUI(QMainWindow):
     def init_ui(self):
         self.setWindowTitle("CapsWriter-Offline-Client")
         try:
-            self.setWindowIcon(QIcon(str(BUNDLE_ROOT / "assets" / "client-icon.ico")))
+            self.setWindowIcon(QIcon(str(client_icon_path())))
         except Exception:
             pass
         self.setWindowOpacity(1.0)
@@ -1375,7 +1177,7 @@ class GUI(QMainWindow):
     def create_systray_icon(self):
         self.tray_icon = QSystemTrayIcon(self)
         try:
-            self.tray_icon.setIcon(QIcon(str(BUNDLE_ROOT / "assets" / "client-icon.ico")))
+            self.tray_icon.setIcon(QIcon(str(client_icon_path())))
         except Exception:
             pass
 
@@ -1421,13 +1223,13 @@ class GUI(QMainWindow):
     def run_test_all_providers(self):
         """Launch availability test script and stream its output to the GUI."""
         try:
-            exe = _resolve_pythonw_client()
+            exe = resolve_pythonw_client()
             if exe is None:
                 self.text_box_client.append("无法启动测试：未找到可用的 Python 运行时。")
                 return
-            script = ROOT / "src" / "run_provider_availability_test.py"
+            script = availability_test_script_path()
             if not script.exists():
-                self.text_box_client.append("找不到测试脚本：util/run_provider_availability_test.py")
+                self.text_box_client.append(f"找不到测试脚本：{script}")
                 return
             self.append_colored_line("开始测试所有 OpenAI 类型服务商（每个最多 10 秒）…", QColor("#000000"))
             p = subprocess.Popen(
@@ -1484,15 +1286,12 @@ class GUI(QMainWindow):
     def restart_client(self):
         # Important: run the restart helper with the console Python (python.exe),
         # not pythonw.exe. Otherwise the helper would be killed by its own taskkill.
-        exe_console = str(ROOT / ".venv" / "Scripts" / "python.exe")
-        if not Path(exe_console).exists():
-            exe_console = sys.executable
-        exe = exe_console
+        exe = resolve_console_python()
         try:
             DETACHED_PROCESS = 0x00000008
             CREATE_NEW_PROCESS_GROUP = 0x00000200
             subprocess.Popen(
-                [exe, str(ROOT / "src" / "client_restart.py")],
+                [exe, str(restart_script_path())],
                 creationflags=(subprocess.CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -1619,7 +1418,7 @@ class GUI(QMainWindow):
 
     def start_script(self):
         # Start core_client.py and redirect output to the client queue
-        exe = _resolve_pythonw_client()
+        exe = resolve_pythonw_client()
         if exe is None:
             try:
                 self.text_box_client.append("未找到可用的 Python 运行时。请确保已运行 'uv sync' 安装依赖。")
@@ -1710,7 +1509,7 @@ class GUI(QMainWindow):
             pass
 
     def _start_worker(self, script_rel_path: str, attr_name: str) -> None:
-        exe = _resolve_pythonw_client()
+        exe = resolve_pythonw_client()
         if exe is None:
             self.text_box_client.append("未找到可用的 Python 运行时。无法重启子进程。")
             return
@@ -1828,80 +1627,20 @@ class GUI(QMainWindow):
             widget.setFont(current_font)
 
 
-def _apply_theme_later(app: QApplication) -> None:
-    """Apply qt_material theme after the first paint to improve perceived startup speed.
-
-    Imports are done lazily; if anything fails, startup is not blocked.
-    """
-    enable_theme = os.getenv("CW_ENABLE_QT_MATERIAL", "0").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    if not enable_theme:
-        return
-
-    try:
-        from qt_material import apply_stylesheet  # local import to avoid import cost on cold start
-    except Exception:
-        return
-
-    def do_apply():
-        try:
-            apply_stylesheet(
-                app, theme="dark_teal.xml", css_file=str(BUNDLE_ROOT / "src" / "client_gui_theme_custom.css")
-            )
-        except Exception:
-            pass
-
-    try:
-        delay_ms = int(os.getenv("CW_THEME_DELAY_MS", "3000"))
-        if delay_ms < 0:
-            delay_ms = 0
-        QTimer.singleShot(delay_ms, do_apply)
-    except Exception:
-        # Fallback: apply immediately if singleShot isn't available
-        try:
-            do_apply()
-        except Exception:
-            pass
-
-
 def start_client_gui(profile_options: StartupProfileOptions | None = None):
     startup_profiler = StartupProfiler(profile_options)
     startup_profiler.start()
     app = QApplication(sys.argv)
-    # Force CN locale to influence font fallback toward Simplified Chinese glyphs
-    try:
-        QLocale.setDefault(QLocale(QLocale.Chinese, QLocale.China))
-    except Exception:
-        pass
-    # Set global font to Segoe UI with anti-aliasing and full hinting
-    try:
-        app_font = QFont(GUI._preferred_cn_font_family())
-        # Prefer anti-aliased rendering
-        if hasattr(QFont, "StyleStrategy") and hasattr(QFont.StyleStrategy, "PreferAntialias"):
-            app_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
-        elif hasattr(QFont, "PreferAntialias"):
-            app_font.setStyleStrategy(QFont.PreferAntialias)
-        # Prefer full hinting if available
-        if hasattr(QFont, "HintingPreference") and hasattr(QFont.HintingPreference, "PreferFullHinting"):
-            app_font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
-        elif hasattr(QFont, "PreferFullHinting"):
-            app_font.setHintingPreference(QFont.PreferFullHinting)
-        app.setFont(app_font)
-    except Exception as e:
-        print(f"Error setting app font: {e}")
-        pass
+    configure_app_locale_and_font(app, GUI._preferred_cn_font_family())
     # Defer theme application to improve first paint time
-    _apply_theme_later(app)
+    apply_theme_later(app)
     # Print screen info after Qt app is initialized (accurate in multi-monitor setups)
     try:
-        Print_Screen_Scale()
+        global scale_x, scale_y
+        scale_x, scale_y = print_screen_scale()
     except Exception as e:
         # Don't block startup if printing screen info fails
-        print(f"Print_Screen_Scale error: {e}")
+        print(f"print_screen_scale error: {e}")
     global gui
     gui = GUI()
     if not Config.shrink_automatically_to_tray:
@@ -1913,55 +1652,6 @@ def start_client_gui(profile_options: StartupProfileOptions | None = None):
     except Exception:
         startup_profiler.stop("timer schedule failed")
     sys.exit(app.exec())
-
-
-def Print_Screen_Scale():
-    """打印多显示器场景下更准确的屏幕信息。
-
-    - 逻辑尺寸: 使用 Qt 的 virtualGeometry 获取整个虚拟桌面的逻辑像素尺寸。
-    - 缩放比例: 使用主屏的逻辑 DPI 推导缩放比例（dpi/96）。
-    注：当多显示器缩放不同步时，仅报告主屏缩放比例，避免将“总物理像素/总逻辑像素”误判为缩放。
-    """
-    from PySide6.QtGui import QGuiApplication
-
-    screen = QGuiApplication.primaryScreen()
-    if screen is None:
-        raise RuntimeError("No primary screen available")
-
-    # 虚拟桌面的逻辑像素尺寸（包含所有扩展显示器）
-    vrect = screen.virtualGeometry()
-    logical_width = int(vrect.width())
-    logical_height = int(vrect.height())
-    print(f"逻辑尺寸(虚拟桌面): {logical_width}x{logical_height}")
-
-    # 主屏缩放比例，基于逻辑 DPI（96 DPI 视为 100%）
-    dpi_x = float(getattr(screen, "logicalDotsPerInchX", lambda: screen.logicalDotsPerInch())())
-    dpi_y = float(getattr(screen, "logicalDotsPerInchY", lambda: screen.logicalDotsPerInch())())
-
-    global scale_x, scale_y
-    scale_x = dpi_x / 96.0 if dpi_x else 1.0
-    scale_y = dpi_y / 96.0 if dpi_y else 1.0
-    print(f"主屏缩放比例: {scale_x:.2f}, {scale_y:.2f}")
-
-    # 估算物理像素尺寸（按主屏缩放比例，仅作参考）
-    est_physical_w = int(round(logical_width * scale_x))
-    est_physical_h = int(round(logical_height * scale_y))
-    print(f"估算虚拟桌面物理像素(按主屏缩放): {est_physical_w}x{est_physical_h}")
-
-    # Fallback: 若需要原生 Win32 值，可在调试时取消注释
-    # hDC = win32gui.GetDC(0)
-    # try:
-    #     desktop_w = win32print.GetDeviceCaps(hDC, win32con.DESKTOPHORZRES)
-    #     desktop_h = win32print.GetDeviceCaps(hDC, win32con.DESKTOPVERTRES)
-    #     print(f"原生桌面像素(供参考): {desktop_w}x{desktop_h}")
-    # finally:
-    #     win32gui.ReleaseDC(0, hDC)
-
-
-def read_file_list(file_list_path: Path):
-    """读取文件列表文件，返回文件路径列表"""
-    with open(file_list_path, "r", encoding="utf-8") as f:
-        return [Path(line.strip()) for line in f if line.strip()]
 
 
 if __name__ == "__main__":
@@ -2024,15 +1714,12 @@ if __name__ == "__main__":
         files = args.files  # 直接传递的文件列表
 
     if files:  # 如果有文件需要处理
-        CapsWriter_path = Path(__file__).parent
-        script_path = CapsWriter_path / "core_client.py"
-        python_exe_path = CapsWriter_path / ".venv" / "Scripts" / "python.exe"
-        if not python_exe_path.exists():
-            python_exe_path = Path(sys.executable)
+        script_path = core_client_script_path()
+        python_exe_path = resolve_console_python()
         files_quoted = [str(file) for file in files]
-        command = [str(python_exe_path), str(script_path)] + files_quoted
+        command = [python_exe_path, str(script_path)] + files_quoted
         try:
-            subprocess.Popen(command, cwd=str(CapsWriter_path))
+            subprocess.Popen(command, cwd=str(ROOT))
         except Exception as e:
             print(f"Error starting the process: {e}")
     else:
