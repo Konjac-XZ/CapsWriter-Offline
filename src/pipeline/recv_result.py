@@ -10,9 +10,23 @@ from src.pipeline.strip_punc import strip_punc
 from src.pipeline.type_result import type_result
 from src.pipeline.write_md import write_md
 from src.infra.config import ClientConfig as Config
+from src.infra.gui_output import gui_event
+from src.polish.llm_polish import should_polish_text
 import warnings
 
 warnings.filterwarnings("ignore")
+
+
+def _emit_status_overlay(action: str, state: str | None = None) -> None:
+    if not Config.show_listening_overlay:
+        return
+    try:
+        payload = {"action": action}
+        if state:
+            payload["state"] = state
+        gui_event("status_overlay", **payload)
+    except Exception:
+        pass
 
 
 async def recv_result():
@@ -31,6 +45,7 @@ async def recv_result():
             # 基本标记
             is_final = bool(message.get("is_final"))
             is_stream = bool(message.get("stream"))
+            hide_status_overlay_when_done = is_final
 
             # 流式时：对中间增量不做末尾标点剥离，避免抖动
             if not (is_stream and not is_final):
@@ -40,6 +55,8 @@ async def recv_result():
             if is_final:
                 console.print(f"转录原文：{raw_asr}", soft_wrap=True)
                 _t_polish = time.monotonic()
+                if should_polish_text(text):
+                    _emit_status_overlay("show", "polishing")
                 text = await polish_text(text)
                 _polish_elapsed = time.monotonic() - _t_polish
 
@@ -167,7 +184,10 @@ async def recv_result():
                 else:
                     await type_final(text)
             Cosmic.opposite_state = False
+            if hide_status_overlay_when_done:
+                _emit_status_overlay("hide")
     except Exception as e:
+        _emit_status_overlay("hide")
         print(e)
     finally:
         return

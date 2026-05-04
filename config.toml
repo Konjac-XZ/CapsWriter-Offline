@@ -155,6 +155,9 @@ stop_music_volume = "100"
 hint_while_recording_at_edit_position_powered_by_ahk = false
 # 是否启用基于 AHK 的输入光标位置的输入状态提示功能
 
+show_listening_overlay = true
+# 录音时是否在当前鼠标所在显示器下方居中显示“正在监听”悬浮窗
+
 
 
 check_microphone_usage_by = "注册表"

@@ -11,6 +11,7 @@ from src.keyboard.pause_other_audio import audio_playering_app_name
 from src.audio.send_audio import send_audio
 from src.audio.stream import stream_reopen
 from src.infra.config import ClientConfig as Config
+from src.infra.gui_output import gui_event
 from src.infra.my_status import Status
 
 task = asyncio.Future()
@@ -37,6 +38,18 @@ def _safe_session_process_name(session) -> str | None:
         return process.name()
     except Exception:
         return None
+
+
+def _emit_status_overlay(action: str, state: str | None = None) -> None:
+    if not Config.show_listening_overlay:
+        return
+    try:
+        payload = {"action": action}
+        if state:
+            payload["state"] = state
+        gui_event("status_overlay", **payload)
+    except Exception:
+        pass
 
 
 def shortcut_correct(e: keyboard.KeyboardEvent):
@@ -137,6 +150,7 @@ def launch_task():
 
     # 打印动画：正在录音
     status.start()
+    _emit_status_overlay("show", "listening")
 
     # 启动识别任务
     global task
@@ -150,6 +164,7 @@ def cancel_task():
     # 通知停止录音，关掉滚动条
     Cosmic.on = False
     status.stop()
+    _emit_status_overlay("hide")
 
     # 取消音频静音
     if Config.mute_other_audio:
@@ -185,7 +200,9 @@ def finish_task():
 
     # 通知结束任务
     if Cosmic.loop is None:
+        _emit_status_overlay("hide")
         return
+    _emit_status_overlay("show", "transcribing")
     asyncio.run_coroutine_threadsafe(
         Cosmic.queue_in.put(
             {"type": "finish", "time": time.time(), "data": None},

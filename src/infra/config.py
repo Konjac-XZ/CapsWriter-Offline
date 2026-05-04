@@ -92,6 +92,7 @@ class ClientConfig:
     hint_while_recording_at_edit_position_powered_by_ahk: bool = bool(
         client_cfg.get("hint_while_recording_at_edit_position_powered_by_ahk", False)
     )
+    show_listening_overlay: bool = bool(client_cfg.get("show_listening_overlay", True))
 
     check_microphone_usage_by: str = str(client_cfg.get("check_microphone_usage_by", ""))
     enable_double_click_opposite_state: bool = bool(

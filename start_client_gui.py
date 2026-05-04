@@ -72,6 +72,7 @@ from PySide6.QtWidgets import (
 
 from src.infra.config import ClientConfig as Config
 from src.audio.retry_cache import has_retry_audio, write_retry_request
+from src.gui.listening_overlay import StatusOverlayController
 from src.polish.llm_polish import get_polish_prompt_text, reload_polish_config, update_polish_prompt_text
 
 def _resolve_pythonw_client() -> str | None:
@@ -275,6 +276,7 @@ class GUI(QMainWindow):
 
         self.init_ui()
         self.output_queue_client = Queue()
+        self.status_overlay = StatusOverlayController()
         self.edgeMargin = 5  # 侧边停靠残余像素值
         self.isBerthLeft = False
         self.isBerthRight = False
@@ -1578,6 +1580,10 @@ class GUI(QMainWindow):
         event.ignore()  # Ignore the close event
 
     def quit_app(self):
+        try:
+            self.status_overlay.hide_all()
+        except Exception:
+            pass
         # Terminate core_client.py process
         if hasattr(self, "core_client_process") and self.core_client_process:
             self.core_client_process.terminate()
@@ -1651,6 +1657,10 @@ class GUI(QMainWindow):
                         import json
 
                         payload = json.loads(line[len("CW_GUI:") :])
+                        event = payload.get("event")
+                        if event in {"status_overlay", "listening_overlay"}:
+                            self._handle_status_overlay_event(payload)
+                            continue
                         text = payload.get("text", "")
                         color = payload.get("color")
                         if color:
@@ -1666,6 +1676,21 @@ class GUI(QMainWindow):
             except Exception as e:
                 self.text_box_client.append(str(e))
                 break
+
+    def _handle_status_overlay_event(self, payload: dict) -> None:
+        try:
+            action = payload.get("action")
+            state = payload.get("state")
+            if action == "show" and state == "listening":
+                self.status_overlay.show_listening()
+            elif action == "show" and state in {"transcribing", "polishing"}:
+                self.status_overlay.show_processing(str(state))
+            elif action == "show":
+                self.status_overlay.show_listening()
+            elif action == "hide":
+                self.status_overlay.hide_all()
+        except Exception:
+            pass
 
     # ============ Worker restart utilities ============
 
@@ -1711,6 +1736,10 @@ class GUI(QMainWindow):
 
     def restart_children_with_env(self) -> None:
         """Restart only worker subprocesses to pick up new environment, keep GUI alive."""
+        try:
+            self.status_overlay.hide_all()
+        except Exception:
+            pass
         # Stop existing workers
         self._stop_process(getattr(self, "core_client_process", None), "core_client")
         

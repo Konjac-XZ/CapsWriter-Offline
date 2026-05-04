@@ -11,12 +11,25 @@ from src.audio.finish_file import finish_file
 from src.audio.retry_cache import get_latest_audio_path, mime_for_path, write_retry_cache
 from src.audio.write_file import write_file
 from src.infra.config import ClientConfig as Config
+from src.infra.gui_output import gui_event
 
 # New modules for clearer separation of concerns
 from src.transcribe.openai.openai_transcribe_audio import preprocess_audio
 from src.transcribe.openai.openai_transcribe_audio import make_audio_payload
 from src.transcribe.openai.openai_transcribe_audio import get_mp3_bitrate
 from src.transcribe.api import transcribe_audio, get_stream_flag
+
+
+def _emit_status_overlay(action: str, state: str | None = None) -> None:
+    if not Config.show_listening_overlay:
+        return
+    try:
+        payload = {"action": action}
+        if state:
+            payload["state"] = state
+        gui_event("status_overlay", **payload)
+    except Exception:
+        pass
 
 
 def _payload_bytes(payload_buf) -> bytes:
@@ -214,6 +227,7 @@ async def send_audio():
             cache_retry_audio=True,
         )
     except Exception as e:
+        _emit_status_overlay("hide")
         console.print(e)
     finally:
         Cosmic.transcribe_busy = False
