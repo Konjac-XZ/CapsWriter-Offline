@@ -40,10 +40,7 @@ class StatusOverlay(QWidget):
         layout.setContentsMargins(18, 10, 18, 10)
         layout.setSpacing(0)
 
-        self.label = QLabel(self._format_text(0), self)
-        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.label.setStyleSheet(
+        label_style = (
             "QLabel {"
             "color: #ffffff;"
             "background: transparent;"
@@ -51,7 +48,19 @@ class StatusOverlay(QWidget):
             "font-weight: 600;"
             "}"
         )
-        layout.addWidget(self.label)
+
+        self.prefix_label = QLabel(self._text_prefix, self)
+        self.prefix_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.prefix_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.prefix_label.setStyleSheet(label_style)
+        layout.addWidget(self.prefix_label)
+
+        self.timer_label = QLabel(self._format_elapsed(0), self)
+        self.timer_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.timer_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.timer_label.setStyleSheet(label_style)
+        layout.addWidget(self.timer_label)
+
         self._reserve_stable_width()
 
         self._timer = QTimer(self)
@@ -102,7 +111,7 @@ class StatusOverlay(QWidget):
     def hide_overlay(self) -> None:
         self._timer.stop()
         self.hide()
-        self.label.setText(self._format_text(0))
+        self.timer_label.setText(self._format_elapsed(0))
 
     def last_position(self) -> QPoint | None:
         if self._last_pos is None:
@@ -114,7 +123,8 @@ class StatusOverlay(QWidget):
 
     def set_text_prefix(self, text_prefix: str) -> None:
         self._text_prefix = text_prefix
-        self.label.setText(self._format_text(0))
+        self.prefix_label.setText(text_prefix)
+        self.timer_label.setText(self._format_elapsed(0))
         self._reserve_stable_width()
         self.adjustSize()
 
@@ -146,27 +156,28 @@ class StatusOverlay(QWidget):
 
     def _update_elapsed(self) -> None:
         elapsed = max(0.0, time.monotonic() - self._started_at)
-        self.label.setText(self._format_text(elapsed))
+        self.timer_label.setText(self._format_elapsed(elapsed))
         if self.isVisible():
             old_size = self.size()
             self.adjustSize()
             if self.size() != old_size:
                 self._move_to_current_cursor_screen()
 
-    def _format_text(self, elapsed: float) -> str:
-        return f"{self._text_prefix} {min(elapsed, 999.9):5.1f}s"
+    def _format_elapsed(self, elapsed: float) -> str:
+        return f" {min(elapsed, 999.9):5.1f}s"
 
     def _reserve_stable_width(self) -> None:
-        self.label.ensurePolished()
-        metrics = self.label.fontMetrics()
-        text_width = max(
-            metrics.horizontalAdvance(f"{prefix} {MAX_TIMER_TEXT}")
-            for prefix in STATUS_PREFIXES
-        )
+        self.prefix_label.ensurePolished()
+        self.timer_label.ensurePolished()
+        prefix_metrics = self.prefix_label.fontMetrics()
+        timer_metrics = self.timer_label.fontMetrics()
+        prefix_width = max(prefix_metrics.horizontalAdvance(prefix) for prefix in STATUS_PREFIXES)
+        timer_width = timer_metrics.horizontalAdvance(f" {MAX_TIMER_TEXT}")
+
         # Leave a small cushion for platform font fallback and bold text rendering.
-        label_width = text_width + 12
-        self.label.setFixedWidth(label_width)
-        self.setFixedWidth(label_width + 36)
+        self.prefix_label.setFixedWidth(prefix_width + 6)
+        self.timer_label.setFixedWidth(timer_width + 6)
+        self.setFixedWidth(self.prefix_label.width() + self.timer_label.width() + 36)
 
     def _move_to_current_cursor_screen(self) -> None:
         app = QApplication.instance()

@@ -20,6 +20,11 @@ from src.infra.user_lexicon import _lexicon_path
 DEFAULT_LEXICON_TEXT = "words: []\n"
 
 
+class LexiconYamlDumper(yaml.SafeDumper):
+    def increase_indent(self, flow: bool = False, indentless: bool = False) -> Any:
+        return super().increase_indent(flow, False)
+
+
 class TextEditorWidget(Protocol):
     def set_text(self, value: str) -> None: ...
 
@@ -114,9 +119,11 @@ class MonacoYamlEditor(QWidget):
               const monaco = state.monaco;
                             monaco.editor.setTheme('vs');
               editor.updateOptions({
-                autoIndent: 'advanced',
+                autoIndent: 'keep',
                 autoClosingBrackets: 'languageDefined',
-                formatOnPaste: true,
+                detectIndentation: false,
+                formatOnPaste: false,
+                formatOnType: false,
                 insertSpaces: true,
                 quickSuggestions: true,
                 scrollBeyondLastLine: false,
@@ -142,7 +149,24 @@ class MonacoYamlEditor(QWidget):
                 }
                 const indent = match[1] || '';
                 const payload = match[2].trim().length > 0 ? `\n${indent}- ` : '\n';
-                editor.trigger('keyboard', 'type', { text: payload });
+                const selection = editor.getSelection();
+                const range = selection || new monaco.Range(
+                  position.lineNumber,
+                  position.column,
+                  position.lineNumber,
+                  position.column
+                );
+                editor.executeEdits('capswriter-yaml-list-continuation', [{
+                  range,
+                  text: payload,
+                  forceMoveMarkers: true,
+                }]);
+                const lines = payload.split('\n');
+                const nextLine = range.startLineNumber + lines.length - 1;
+                const nextColumn = lines.length === 1
+                  ? range.startColumn + lines[0].length
+                  : lines[lines.length - 1].length + 1;
+                editor.setPosition({ lineNumber: nextLine, column: nextColumn });
               });
             })();
             """
@@ -186,6 +210,33 @@ def write_lexicon_text(text: str) -> None:
         handle.write(text)
 
 
+def normalize_lexicon_text(text: str) -> str:
+    data = yaml.safe_load(text) or {}
+    if not isinstance(data, dict):
+        raise ValueError("用户词库必须是包含 words 数组的 YAML 对象")
+
+    words = data.get("words") or []
+    if not isinstance(words, list):
+        raise ValueError("用户词库的 words 必须是 YAML 数组")
+
+    normalized_words: list[str] = []
+    for word in words:
+        if isinstance(word, (dict, list, tuple, set)):
+            raise ValueError("用户词库的 words 只能包含扁平文本项")
+        normalized_words.append(str(word))
+
+    if not normalized_words:
+        return DEFAULT_LEXICON_TEXT
+    return yaml.dump(
+        {"words": normalized_words},
+        Dumper=LexiconYamlDumper,
+        allow_unicode=True,
+        default_flow_style=False,
+        sort_keys=False,
+        width=1000,
+    )
+
+
 class LexiconEditDialog(QDialog):
     """Dialog for editing the user lexicon YAML file."""
 
@@ -222,18 +273,18 @@ class LexiconEditDialog(QDialog):
     def _handle_accept(self) -> None:
         raw_text = self.editor_api.get_text()
         try:
-            yaml.safe_load(raw_text)
+            normalized_text = normalize_lexicon_text(raw_text)
         except Exception as exc:
             QMessageBox.critical(self, "YAML 格式错误", f"用户词库 YAML 格式错误，未保存：\n{exc}")
             return
 
         try:
-            write_lexicon_text(raw_text)
+            write_lexicon_text(normalized_text)
         except Exception as exc:
             QMessageBox.critical(self, "保存失败", f"保存用户词库失败：\n{exc}")
             return
 
-        self._saved_text = raw_text
+        self._saved_text = normalized_text
         self.accept()
 
 
