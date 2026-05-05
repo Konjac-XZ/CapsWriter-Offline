@@ -31,6 +31,36 @@ key_pressed = False
 sessions = []
 
 
+def _task_is_running(task_obj: Any) -> bool:
+    try:
+        return task_obj is not None and not task_obj.done()
+    except Exception:
+        return False
+
+
+def _has_unfinished_nonrecording_task() -> bool:
+    if Cosmic.on:
+        return False
+    return (
+        bool(getattr(Cosmic, "active_task_id", None))
+        or bool(getattr(Cosmic, "transcribe_busy", False))
+        or _task_is_running(getattr(Cosmic, "active_send_task", None))
+        or _task_is_running(getattr(Cosmic, "active_polish_task", None))
+    )
+
+
+def _cancel_async_task(task_obj: Any) -> None:
+    if not _task_is_running(task_obj):
+        return
+    try:
+        if Cosmic.loop is not None:
+            Cosmic.loop.call_soon_threadsafe(task_obj.cancel)
+        else:
+            task_obj.cancel()
+    except Exception:
+        pass
+
+
 def _safe_session_process_name(session) -> str | None:
     process = getattr(session, "Process", None)
     if not process:
@@ -98,6 +128,11 @@ def unmute_all_sessions():
 
 
 def launch_task():
+    if _has_unfinished_nonrecording_task():
+        abandon_current_task()
+
+    Cosmic.abandon_requested = False
+    Cosmic.active_task_id = None
     # 开始任务时播放提示音
     if Config.play_start_music:
         from src.keyboard.play_music import play_music
@@ -191,6 +226,42 @@ def cancel_task():
         if Cosmic.stream is not None:
             Cosmic.stream.stop()
             Cosmic.stream.close()
+
+
+def abandon_current_task() -> None:
+    global double_clicked, key_pressed, is_short_duration, hold_mode_first_time_cancel_task
+
+    Cosmic.abandon_requested = True
+    active_task_id = getattr(Cosmic, "active_task_id", None)
+    if active_task_id:
+        Cosmic.abandoned_task_ids.add(str(active_task_id))
+
+    was_recording = bool(Cosmic.on)
+    if Cosmic.on:
+        cancel_task()
+    else:
+        status.stop()
+        _emit_status_overlay("hide")
+        if Config.mute_other_audio:
+            unmute_all_sessions()
+
+        global unpause_needed
+        if Config.pause_other_audio and unpause_needed:
+            keyboard.send("play/pause")
+            unpause_needed = False
+
+    task_attrs = ["active_polish_task"]
+    if not was_recording:
+        task_attrs.append("active_send_task")
+    for attr_name in task_attrs:
+        active_task = getattr(Cosmic, attr_name, None)
+        _cancel_async_task(active_task)
+
+    double_clicked = False
+    key_pressed = False
+    is_short_duration = False
+    hold_mode_first_time_cancel_task = False
+    Cosmic.opposite_state = False
 
 
 def finish_task():

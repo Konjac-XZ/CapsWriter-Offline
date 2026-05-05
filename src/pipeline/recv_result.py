@@ -1,3 +1,4 @@
+import asyncio
 import os
 import time
 import opencc
@@ -29,6 +30,26 @@ def _emit_status_overlay(action: str, state: str | None = None) -> None:
         pass
 
 
+def _clear_abandoned_task(task_id: str | None) -> None:
+    if task_id is not None:
+        Cosmic.abandoned_task_ids.discard(task_id)
+        if getattr(Cosmic, "active_task_id", None) == task_id:
+            Cosmic.active_task_id = None
+    Cosmic.abandon_requested = False
+    Cosmic.opposite_state = False
+
+
+def _clear_active_task(task_id: str | None) -> None:
+    if task_id is not None and getattr(Cosmic, "active_task_id", None) == task_id:
+        Cosmic.active_task_id = None
+
+
+def _is_abandoned(task_id: str | None) -> bool:
+    return Cosmic.abandon_requested or (
+        task_id is not None and task_id in Cosmic.abandoned_task_ids
+    )
+
+
 async def recv_result():
     # 直接从本地结果队列读取（由 send_audio 推送），不再依赖远程 websocket
     try:
@@ -46,6 +67,18 @@ async def recv_result():
             is_final = bool(message.get("is_final"))
             is_stream = bool(message.get("stream"))
             hide_status_overlay_when_done = is_final
+            current_tid = message.get("task_id")
+            if current_tid is not None:
+                current_tid = str(current_tid)
+
+            if current_tid is not None:
+                Cosmic.active_task_id = current_tid
+            if _is_abandoned(current_tid):
+                _clear_abandoned_task(current_tid)
+                if hide_status_overlay_when_done:
+                    _emit_status_overlay("hide")
+                _clear_active_task(current_tid)
+                continue
 
             # 流式时：对中间增量不做末尾标点剥离，避免抖动
             if not (is_stream and not is_final):
@@ -57,10 +90,30 @@ async def recv_result():
                 _t_polish = time.monotonic()
                 if should_polish_text(text):
                     _emit_status_overlay("show", "polishing")
-                text = await polish_text(text)
+                polish_task = asyncio.create_task(polish_text(text))
+                Cosmic.active_polish_task = polish_task
+                try:
+                    text = await polish_task
+                except asyncio.CancelledError:
+                    if _is_abandoned(current_tid):
+                        _clear_abandoned_task(current_tid)
+                        _emit_status_overlay("hide")
+                        _clear_active_task(current_tid)
+                        continue
+                    raise
+                finally:
+                    if getattr(Cosmic, "active_polish_task", None) is polish_task:
+                        Cosmic.active_polish_task = None
                 _polish_elapsed = time.monotonic() - _t_polish
             else:
                 _polish_elapsed = 0.0
+
+            if _is_abandoned(current_tid):
+                _clear_abandoned_task(current_tid)
+                if hide_status_overlay_when_done:
+                    _emit_status_overlay("hide")
+                _clear_active_task(current_tid)
+                continue
 
             # 正则替换（在 strip_punc 之后、pangu / opencc 之前执行）
             text = regex_replace(text)
@@ -75,6 +128,13 @@ async def recv_result():
                 converter = opencc.OpenCC(Config.opencc_converter)
                 traditional_text = converter.convert(text)
                 convert_to_traditional_chinese_done = True
+
+            if _is_abandoned(current_tid):
+                _clear_abandoned_task(current_tid)
+                if hide_status_overlay_when_done:
+                    _emit_status_overlay("hide")
+                _clear_active_task(current_tid)
+                continue
 
             # 仅在最终结果时进行音频重命名与 Markdown 写入
             file_audio = None
@@ -96,6 +156,11 @@ async def recv_result():
             if is_final:
                 # 使用 pangu 对完整文本进行中英文混排空格优化，仅用于显示/输出
                 text = pangu.spacing_text(text)
+                if _is_abandoned(current_tid):
+                    _clear_abandoned_task(current_tid)
+                    _emit_status_overlay("hide")
+                    _clear_active_task(current_tid)
+                    continue
                 # 若末尾不是有效标点，则补中文句号
                 # 将已完成的文本存入历史，供下一次 LLM 润色使用
                 record_finalized_text(text)
@@ -144,7 +209,6 @@ async def recv_result():
                 await type_result(s)
 
             # 每个 task 流式独立计数，切换 task 时重置（避免跨任务污染）
-            current_tid = message.get("task_id")
             last_tid = getattr(Cosmic, "_last_stream_task", None)
             if current_tid != last_tid:
                 Cosmic._last_stream_task = current_tid
@@ -186,6 +250,7 @@ async def recv_result():
                 else:
                     await type_final(text)
             Cosmic.opposite_state = False
+            _clear_active_task(current_tid)
             if hide_status_overlay_when_done:
                 _emit_status_overlay("hide")
     except Exception as e:

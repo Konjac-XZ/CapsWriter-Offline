@@ -100,6 +100,11 @@ class Cosmic:
     vision_context_task: Task[None] | None = None
     vision_context_last_error: str | None = None
     transcribe_busy = False
+    abandon_requested = False
+    active_task_id: str | None = None
+    active_send_task: Task[Any] | None = None
+    active_polish_task: Task[Any] | None = None
+    abandoned_task_ids: set[str] = set()
     _last_stream_len = 0
     _stream_had_increments = False
     _last_stream_task: str | None = None

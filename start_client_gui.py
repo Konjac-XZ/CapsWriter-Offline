@@ -58,6 +58,7 @@ ensure_project_cwd()
 load_startup_env()
 
 from src.infra.config import ClientConfig as Config
+from src.audio.control_requests import write_abandon_request
 from src.audio.retry_cache import has_retry_audio, write_retry_request
 from src.gui.app_startup import apply_theme_later, configure_app_locale_and_font, print_screen_scale
 from src.gui.listening_overlay import StatusOverlayController
@@ -91,6 +92,7 @@ class GUI(QMainWindow):
         self.init_ui()
         self.output_queue_client: Queue[str] = Queue()
         self.status_overlay = StatusOverlayController()
+        self.status_overlay.set_abandon_callback(self.abandon_current_task)
         self.edgeMargin = 5  # 侧边停靠残余像素值
         self.isBerthLeft = False
         self.isBerthRight = False
@@ -1143,6 +1145,14 @@ class GUI(QMainWindow):
             self.append_colored_line("已请求重试最近一次录音。", "#008000")
         except Exception as exc:
             self.append_colored_line(f"请求重试失败：{exc}", "#ff5555")
+
+    def abandon_current_task(self) -> None:
+        try:
+            write_abandon_request()
+            self.status_overlay.hide_all()
+            self.append_colored_line("已请求放弃当前任务。", "#cc4444")
+        except Exception as exc:
+            self.append_colored_line(f"请求放弃失败：{exc}", "#ff5555")
 
     def show_startup_info(self):
         """Show startup information using YAML-based provider configuration."""

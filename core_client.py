@@ -18,7 +18,8 @@ except Exception:
     pass
 
 from src.pipeline.recv_result import recv_result
-from src.keyboard.shortcut_handler import bond_shortcut
+from src.keyboard.shortcut_handler import abandon_current_task, bond_shortcut
+from src.audio.control_requests import claim_abandon_request, read_abandon_request
 from src.audio.retry_cache import claim_retry_request, read_retry_request
 from src.audio.send_audio import retry_latest_audio
 from src.audio.stream import stream_close, stream_open
@@ -81,12 +82,37 @@ async def watch_retry_requests():
             await asyncio.sleep(1.0)
 
 
+async def watch_abandon_requests():
+    initial_payload = read_abandon_request()
+    last_request_id = (
+        initial_payload.get("request_id") if isinstance(initial_payload, dict) else None
+    )
+
+    while True:
+        try:
+            payload = read_abandon_request()
+            request_id = payload.get("request_id") if isinstance(payload, dict) else None
+
+            if request_id is not None and request_id != last_request_id:
+                last_request_id = request_id
+                if claim_abandon_request(request_id):
+                    abandon_current_task()
+
+            await asyncio.sleep(0.25)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            console.print(f"监听放弃请求失败：{exc}", style="bright_red")
+            await asyncio.sleep(1.0)
+
+
 async def main_mic():
     Cosmic.loop = asyncio.get_event_loop()
     Cosmic.queue_in = asyncio.Queue()
     Cosmic.queue_out = asyncio.Queue()
     vision_task = None
     retry_watcher_task = None
+    abandon_watcher_task = None
 
     # 打开音频流
     Cosmic.stream = stream_open()
@@ -103,6 +129,7 @@ async def main_mic():
 
     vision_task = start_vision_context_service()
     retry_watcher_task = asyncio.create_task(watch_retry_requests())
+    abandon_watcher_task = asyncio.create_task(watch_abandon_requests())
 
     try:
         while True:
@@ -112,6 +139,10 @@ async def main_mic():
             retry_watcher_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await retry_watcher_task
+        if abandon_watcher_task is not None:
+            abandon_watcher_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await abandon_watcher_task
         if vision_task is not None:
             with contextlib.suppress(Exception):
                 await stop_vision_context_service(vision_task)

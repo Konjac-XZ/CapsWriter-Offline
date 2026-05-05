@@ -1,5 +1,6 @@
 import os
 import io
+import asyncio
 import time
 import uuid
 
@@ -58,9 +59,11 @@ async def _submit_payload(
     duration: float,
     source: str,
     cache_retry_audio: bool,
-) -> None:
+) -> bool:
     if hasattr(payload_buf, "seek"):
         payload_buf.seek(0)
+    if Cosmic.abandon_requested or task_id in Cosmic.abandoned_task_ids:
+        return False
     payload_bytes = _payload_bytes(payload_buf)
 
     if cache_retry_audio and payload_bytes:
@@ -86,6 +89,8 @@ async def _submit_payload(
     text_result, status_code, t_submit, t_complete, transport_info = await transcribe_audio(
         upload_buf, payload_mime, task_id, time_start, record_stop, max_retries, base_delay
     )
+    if Cosmic.abandon_requested or task_id in Cosmic.abandoned_task_ids:
+        return False
 
     if os.getenv("CAPSWRITER_DEBUG_TIMING"):
         pre_submit_ms = (t_submit - t_presubmit) * 1000.0
@@ -126,6 +131,7 @@ async def _submit_payload(
         },
     }
     await Cosmic.queue_out.put(message)
+    return True
 
 
 async def _gather_audio_once(task_id: str) -> tuple[np.ndarray, float, float, float, float, str | None]:
@@ -182,13 +188,20 @@ async def _gather_audio_once(task_id: str) -> tuple[np.ndarray, float, float, fl
 
 
 async def send_audio():
+    task_id = str(uuid.uuid1())
+    message_queued = False
     try:
         Cosmic.transcribe_busy = True
-        task_id = str(uuid.uuid1())
+        Cosmic.active_task_id = task_id
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            Cosmic.active_send_task = current_task
         # Gather audio once (until finish or cancel)
         audio_concat, duration, time_start, record_stop, t_finish_entry, cancel_reason = await _gather_audio_once(task_id)
 
         if cancel_reason is not None:
+            if Cosmic.abandon_requested or task_id in Cosmic.abandoned_task_ids:
+                return
             # Emit a final empty result to restore UI state
             await Cosmic.queue_out.put(
                 {
@@ -212,7 +225,7 @@ async def send_audio():
         # Build payload
         payload_buf, payload_mime, encode_ms, payload_sr, payload_ch = await make_audio_payload(audio_proc, actual_sr)
 
-        await _submit_payload(
+        message_queued = await _submit_payload(
             payload_buf=payload_buf,
             payload_mime=payload_mime,
             task_id=task_id,
@@ -230,6 +243,13 @@ async def send_audio():
         _emit_status_overlay("hide")
         console.print(e)
     finally:
+        if getattr(Cosmic, "active_task_id", None) == task_id and not message_queued:
+            Cosmic.active_task_id = None
+        if getattr(Cosmic, "active_send_task", None) is asyncio.current_task():
+            Cosmic.active_send_task = None
+        if task_id in Cosmic.abandoned_task_ids and not message_queued:
+            Cosmic.abandoned_task_ids.discard(task_id)
+            Cosmic.abandon_requested = False
         Cosmic.transcribe_busy = False
 
 
