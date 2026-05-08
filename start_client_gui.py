@@ -5,7 +5,6 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from queue import Queue
 from typing import Any, cast
 
 import yaml
@@ -63,6 +62,7 @@ from src.gui.app_startup import apply_theme_later, configure_app_locale_and_font
 from src.gui.listening_overlay import StatusOverlayController
 from src.gui.prompt_editor import PromptEditDialog
 from src.gui.startup_profiler import StartupProfileOptions, StartupProfiler
+from src.gui.worker_output_router import WorkerOutputRouter
 from src.polish.llm_polish import get_polish_prompt_text, reload_polish_config, update_polish_prompt_text
 from src.system.process_cleanup import (
     terminate_executable_processes,
@@ -111,7 +111,15 @@ class GUI(QMainWindow):
         self.old_pos = QPoint()
 
         self.init_ui()
-        self.output_queue_client: Queue[str] = Queue()
+        self.output_router = WorkerOutputRouter()
+        self.output_router.overlay_event.connect(
+            self._handle_status_overlay_event,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        self.output_router.context_event.connect(
+            self._handle_context_toggle_event,
+            Qt.ConnectionType.QueuedConnection,
+        )
         self.status_overlay = StatusOverlayController()
         self.status_overlay.set_abandon_callback(self.abandon_current_task)
         self.edgeMargin = 5  # 侧边停靠残余像素值
@@ -1090,6 +1098,11 @@ class GUI(QMainWindow):
     def append_plain_line(self, text: str) -> None:
         self.append_colored_line(text, "#000000")
 
+    def append_colored_lines(self, lines: list[str], color: QColor | str = "green") -> None:
+        if not lines:
+            return
+        self.append_colored_line("\n".join(str(line) for line in lines), color)
+
     def append_colored_line(self, text: str, color: QColor | str = "green"):
         """Append a plain-text line with an explicit color.
 
@@ -1104,7 +1117,7 @@ class GUI(QMainWindow):
             cursor.movePosition(QTextCursor.MoveOperation.End)
             if not self.text_box_client.document().isEmpty():
                 cursor.insertBlock()
-            cursor.insertText(str(text), fmt)
+            cursor.insertText(str(text).replace("\n", "\u2029"), fmt)
         except Exception:
             pass
 
@@ -1383,55 +1396,35 @@ class GUI(QMainWindow):
         # Update text box
         try:
             self.update_timer = QTimer()
-            self.update_timer.timeout.connect(self.update_text_box)
-            self.update_timer.start(100)
+            self.update_timer.timeout.connect(self.update_worker_output)
+            self.update_timer.start(50)
         except Exception:
             pass
 
-    def enqueue_output(self, out, queue):
-        for line in iter(out.readline, ""):
-            line = line.strip()
-            queue.put(line)
+    def update_worker_output(self):
+        latest_level = self.output_router.take_latest_overlay_level()
+        if latest_level is not None:
+            self.status_overlay.set_level(latest_level)
 
-    def update_text_box(self):
-        # Update client text box
-        while not self.output_queue_client.empty():
-            try:
-                line = self.output_queue_client.get()
-                # Support structured GUI messages emitted by src.gui_output.gui_print
-                try:
-                    if isinstance(line, str) and line.startswith("CW_GUI:"):
-                        import json
-
-                        payload = json.loads(line[len("CW_GUI:") :])
-                        event = payload.get("event")
-                        if event in {"status_overlay", "listening_overlay"}:
-                            self._handle_status_overlay_event(payload)
-                            continue
-                        if event == "context_toggle":
-                            self._handle_context_toggle_event(payload)
-                            continue
-                        text = payload.get("text", "")
-                        color = payload.get("color")
-                        if color:
-                            self.append_colored_line(text, color)
-                        else:
-                            self.append_plain_line(text)
-                        continue
-                except Exception:
-                    # Fall back to raw line on any parse error
-                    pass
-
-                self.append_plain_line(line)
-            except Exception as e:
-                self.append_plain_line(str(e))
-                break
+        batch_texts: list[str] = []
+        batch_color: str | None = None
+        for line in self.output_router.take_log_lines_for(200, 0.004):
+            color = line.color or "#000000"
+            if batch_texts and color != batch_color:
+                self.append_colored_lines(batch_texts, batch_color or "#000000")
+                batch_texts = []
+            batch_color = color
+            batch_texts.append(line.text)
+        if batch_texts:
+            self.append_colored_lines(batch_texts, batch_color or "#000000")
 
     def _handle_status_overlay_event(self, payload: dict) -> None:
         try:
             action = payload.get("action")
             state = payload.get("state")
-            if action == "show" and state == "listening":
+            if action == "level":
+                self.status_overlay.set_level(float(payload.get("level", 0.0)))
+            elif action == "show" and state == "listening":
                 self.status_overlay.show_listening()
             elif action == "show" and state in {"transcribing", "polishing"}:
                 self.status_overlay.show_processing(str(state))
@@ -1512,8 +1505,8 @@ class GUI(QMainWindow):
             )
             setattr(self, attr_name, p)
             threading.Thread(
-                target=self.enqueue_output,
-                args=(p.stdout, self.output_queue_client),
+                target=self.output_router.read_stream,
+                args=(p.stdout,),
                 daemon=True,
             ).start()
         except Exception as e:

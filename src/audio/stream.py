@@ -7,6 +7,7 @@ from typing import Any, cast
 import numpy as np
 import sounddevice as sd
 
+from src.audio.level_publisher import update_latest_level
 from src.infra.cosmic import Cosmic, console
 from src.infra.config import ClientConfig as Config
 
@@ -18,11 +19,13 @@ def record_callback(
         return
     if Cosmic.loop is None:
         return
+    now = time.time()
+    update_latest_level(indata)
     asyncio.run_coroutine_threadsafe(
         Cosmic.queue_in.put(
             {
                 "type": "data",
-                "time": time.time(),
+                "time": now,
                 "data": indata.copy(),
             },
         ),

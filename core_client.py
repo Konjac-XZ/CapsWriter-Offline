@@ -27,6 +27,7 @@ from src.audio.control_requests import (
 )
 from src.audio.retry_cache import claim_retry_request, read_retry_request
 from src.audio.send_audio import retry_latest_audio
+from src.audio.level_publisher import publish_overlay_levels
 from src.audio.stream import stream_close, stream_open
 from src.polish.llm_polish import clear_finalized_history
 from src.polish.vision_context import start_vision_context_service, stop_vision_context_service
@@ -148,6 +149,7 @@ async def main_mic():
     retry_watcher_task = None
     abandon_watcher_task = None
     clear_history_watcher_task = None
+    level_publisher_task = None
 
     # 打开音频流
     Cosmic.stream = stream_open()
@@ -166,11 +168,16 @@ async def main_mic():
     retry_watcher_task = asyncio.create_task(watch_retry_requests())
     abandon_watcher_task = asyncio.create_task(watch_abandon_requests())
     clear_history_watcher_task = asyncio.create_task(watch_clear_history_requests())
+    level_publisher_task = asyncio.create_task(publish_overlay_levels())
 
     try:
         while True:
             await recv_result()
     finally:
+        if level_publisher_task is not None:
+            level_publisher_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await level_publisher_task
         if retry_watcher_task is not None:
             retry_watcher_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):

@@ -1,14 +1,82 @@
 import time
 from typing import Callable
 
-from PySide6.QtCore import QPoint, Qt, QTimer
-from PySide6.QtGui import QCursor, QGuiApplication, QScreen
+from PySide6.QtCore import QPoint, QRectF, Qt, QTimer
+from PySide6.QtGui import QColor, QCursor, QGuiApplication, QPainter, QPainterPath, QScreen
 from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QWidget
 
 
 LONGEST_STATUS_PREFIX = "正在监听"
 MAX_TIMER_TEXT = "999.9s"
 STATUS_PREFIXES = ("正在监听", "转录中", "润色中")
+
+
+class LevelMeterFrame(QFrame):
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._meter_enabled = False
+        self._target_level = 0.0
+        self._display_level = 0.0
+        self._animation_timer = QTimer(self)
+        self._animation_timer.timeout.connect(self._tick_level_animation)
+        self._animation_timer.setInterval(50)
+
+    def set_meter_enabled(self, enabled: bool) -> None:
+        self._meter_enabled = enabled
+        if not enabled:
+            self._target_level = 0.0
+            self._display_level = 0.0
+            self._animation_timer.stop()
+        elif not self._animation_timer.isActive():
+            self._animation_timer.start()
+        self.update()
+
+    def set_level(self, level: float) -> None:
+        self._target_level = max(0.0, min(1.0, float(level)))
+        if not self._meter_enabled:
+            self._target_level = 0.0
+            return
+        if not self._animation_timer.isActive():
+            self._animation_timer.start()
+
+    def _tick_level_animation(self) -> None:
+        if not self._meter_enabled:
+            self._animation_timer.stop()
+            return
+        target = self._target_level
+        if target > self._display_level:
+            self._display_level = self._display_level * 0.78 + target * 0.22
+        else:
+            self._display_level = self._display_level * 0.86 + target * 0.14
+        if abs(self._display_level - target) < 0.002:
+            self._display_level = target
+        self.update()
+        if self._display_level == target and target <= 0.001:
+            self._animation_timer.stop()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        radius = 18.0
+
+        pane_path = QPainterPath()
+        pane_path.addRoundedRect(rect, radius, radius)
+
+        painter.fillPath(pane_path, QColor(20, 24, 28, 230))
+
+        if self._meter_enabled and self._display_level > 0.001:
+            fill_rect = QRectF(rect)
+            fill_rect.setWidth(rect.width() * self._display_level)
+            painter.save()
+            painter.setClipPath(pane_path)
+            painter.fillRect(fill_rect, QColor(255, 255, 255, 46))
+            painter.restore()
+
+        painter.setPen(QColor(255, 255, 255, 55))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(pane_path)
 
 
 class StatusOverlay(QWidget):
@@ -42,15 +110,8 @@ class StatusOverlay(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        self.status_pane = QFrame(self)
+        self.status_pane = LevelMeterFrame(self)
         self.status_pane.setObjectName("statusPane")
-        self.status_pane.setStyleSheet(
-            "QFrame#statusPane {"
-            "background: rgba(20, 24, 28, 230);"
-            "border: 1px solid rgba(255, 255, 255, 55);"
-            "border-radius: 18px;"
-            "}"
-        )
         pane_layout = QHBoxLayout(self.status_pane)
         pane_layout.setContentsMargins(18, 10, 18, 10)
         pane_layout.setSpacing(0)
@@ -155,6 +216,7 @@ class StatusOverlay(QWidget):
 
     def hide_overlay(self) -> None:
         self._timer.stop()
+        self.status_pane.set_meter_enabled(False)
         self.hide()
         self.timer_label.setText(self._format_elapsed(0))
         self.abandon_button.setEnabled(True)
@@ -178,6 +240,10 @@ class StatusOverlay(QWidget):
     def set_abandon_callback(self, callback: Callable[[], None] | None) -> None:
         self._abandon_callback = callback
 
+    def set_level(self, level: float) -> None:
+        if self._state == "listening" and self.isVisible():
+            self.status_pane.set_level(level)
+
     def show_state(self, state: str) -> None:
         if state not in self._STATE_LABELS:
             self.hide_overlay()
@@ -185,6 +251,7 @@ class StatusOverlay(QWidget):
         previous_state = self._state
         self._state = state
         self.set_text_prefix(self._STATE_LABELS[state])
+        self.status_pane.set_meter_enabled(state == "listening")
         if self.isVisible():
             self._reset_elapsed()
             if previous_state == "listening" and state != "listening":
@@ -208,11 +275,6 @@ class StatusOverlay(QWidget):
     def _update_elapsed(self) -> None:
         elapsed = max(0.0, time.monotonic() - self._started_at)
         self.timer_label.setText(self._format_elapsed(elapsed))
-        if self.isVisible():
-            old_size = self.size()
-            self.adjustSize()
-            if self.size() != old_size:
-                self._move_to_current_cursor_screen()
 
     def _format_elapsed(self, elapsed: float) -> str:
         return f" {min(elapsed, 999.9):5.1f}s"
@@ -282,6 +344,9 @@ class StatusOverlayController:
 
     def show_processing(self, state: str) -> None:
         self.overlay.show_state(state)
+
+    def set_level(self, level: float) -> None:
+        self.overlay.set_level(level)
 
     def hide_all(self) -> None:
         self.overlay.hide_overlay()
