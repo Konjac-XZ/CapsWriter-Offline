@@ -56,6 +56,9 @@ speech_recognition_port = "6016"
 speech_recognition_shortcut = "f15"
 # 控制录音的快捷键，默认是 "caps lock"
 
+toggle_textbox_context_shortcut = "f16"
+# 快速切换 LLM 润色时是否附加当前文本框上下文；设为空字符串可禁用
+
 
 hold_mode = false
 # 长按模式，按下录音，松开停止，像对讲机一样用

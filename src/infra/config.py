@@ -56,6 +56,9 @@ class ClientConfig:
     addr: str = str(client_cfg.get("addr", ""))
     speech_recognition_port: str = str(client_cfg.get("speech_recognition_port", ""))
     speech_recognition_shortcut: str = str(client_cfg.get("speech_recognition_shortcut", ""))
+    toggle_textbox_context_shortcut: str = str(
+        client_cfg.get("toggle_textbox_context_shortcut", "")
+    )
     hold_mode: bool = bool(client_cfg.get("hold_mode", False))
     suppress: bool = bool(client_cfg.get("suppress", False))
     restore_key: bool = bool(client_cfg.get("restore_key", False))

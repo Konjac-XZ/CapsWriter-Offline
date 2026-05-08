@@ -1470,6 +1470,9 @@ class GUI(QMainWindow):
                         if event in {"status_overlay", "listening_overlay"}:
                             self._handle_status_overlay_event(payload)
                             continue
+                        if event == "context_toggle":
+                            self._handle_context_toggle_event(payload)
+                            continue
                         text = payload.get("text", "")
                         color = payload.get("color")
                         if color:
@@ -1498,6 +1501,19 @@ class GUI(QMainWindow):
                 self.status_overlay.show_listening()
             elif action == "hide":
                 self.status_overlay.hide_all()
+        except Exception:
+            pass
+
+    def _handle_context_toggle_event(self, payload: dict) -> None:
+        try:
+            if payload.get("target") != "textbox_context":
+                return
+            enabled = bool(payload.get("enabled"))
+            self._syncing_context_toggle_states = True
+            try:
+                self.append_textbox_checkbox.setChecked(enabled)
+            finally:
+                self._syncing_context_toggle_states = False
         except Exception:
             pass
 

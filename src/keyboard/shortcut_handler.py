@@ -7,13 +7,14 @@ from typing import Any, cast
 import keyboard
 from pycaw.pycaw import AudioUtilities
 
-from src.infra.cosmic import Cosmic
+from src.infra.cosmic import Cosmic, console
 from src.keyboard.pause_other_audio import audio_playering_app_name
 from src.audio.send_audio import send_audio
 from src.audio.stream import stream_reopen
 from src.infra.config import ClientConfig as Config
 from src.infra.gui_output import gui_event
 from src.infra.my_status import Status
+from src.polish.context_settings import toggle_textbox_context_enabled
 
 task = asyncio.Future()
 status = Status("开始录音", spinner="point")
@@ -28,6 +29,7 @@ hold_mode_first_time_cancel_task = False
 last_time_pressed = 0
 last_time_released = 0
 key_pressed = False
+textbox_context_toggle_pressed = False
 sessions = []
 
 
@@ -466,6 +468,37 @@ def click_handler(e: keyboard.KeyboardEvent) -> None:
     click_mode(e)
 
 
+def _normalize_shortcut_name(shortcut: str) -> str:
+    keyboard_api = cast(Any, keyboard)
+    try:
+        return keyboard_api.normalize_name(shortcut).replace("left ", "").strip()
+    except Exception:
+        return shortcut.strip().lower()
+
+
+def textbox_context_toggle_handler(e: keyboard.KeyboardEvent) -> None:
+    global textbox_context_toggle_pressed
+
+    if e.event_type == keyboard.KEY_UP:
+        textbox_context_toggle_pressed = False
+        return
+    if e.event_type != keyboard.KEY_DOWN or textbox_context_toggle_pressed:
+        return
+
+    textbox_context_toggle_pressed = True
+    enabled = toggle_textbox_context_enabled()
+    if enabled is None:
+        console.print(
+            "切换附加文本框上下文失败（请检查 config/polish/polish.yaml 权限或格式）",
+            style="#ff5555",
+        )
+        return
+
+    state_text = "启用" if enabled else "禁用"
+    gui_event("context_toggle", target="textbox_context", enabled=enabled)
+    console.print(f"已{state_text}附加文本框上下文。")
+
+
 def bond_shortcut():
     if Config.hold_mode:
         keyboard.hook_key(
@@ -477,3 +510,21 @@ def bond_shortcut():
         keyboard.hook_key(
             Config.speech_recognition_shortcut, click_handler, suppress=True
         )
+
+    toggle_shortcut = Config.toggle_textbox_context_shortcut.strip()
+    if not toggle_shortcut:
+        return
+
+    if _normalize_shortcut_name(toggle_shortcut) == _normalize_shortcut_name(
+        Config.speech_recognition_shortcut
+    ):
+        console.print(
+            "文本框上下文快捷键与录音快捷键冲突，已跳过绑定。请修改 config.toml。",
+            style="#ff8800",
+        )
+        return
+
+    try:
+        keyboard.hook_key(toggle_shortcut, textbox_context_toggle_handler, suppress=False)
+    except Exception as exc:
+        console.print(f"绑定文本框上下文快捷键失败：{exc}", style="#ff5555")
