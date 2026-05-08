@@ -59,7 +59,7 @@ ensure_project_cwd()
 load_startup_env()
 
 from src.infra.config import ClientConfig as Config
-from src.audio.control_requests import write_abandon_request
+from src.audio.control_requests import write_abandon_request, write_clear_history_request
 from src.audio.retry_cache import has_retry_audio, write_retry_request
 from src.gui.app_startup import apply_theme_later, configure_app_locale_and_font, print_screen_scale
 from src.gui.listening_overlay import StatusOverlayController
@@ -828,17 +828,12 @@ class GUI(QMainWindow):
     def clear_recent_output_history(self) -> None:
         """Clear the recent finalized-text history used as LLM polish context."""
         try:
-            from src.polish.llm_polish import clear_finalized_history
-
-            cleared = clear_finalized_history()
+            write_clear_history_request()
         except Exception as exc:
             self.append_colored_line(f"清除最近上屏记录失败：{exc}", "#ff5555")
             return
 
-        if cleared > 0:
-            self.append_colored_line(f"已清除最近上屏消息记录：{cleared} 条。")
-        else:
-            self.append_colored_line("最近上屏消息记录本来就是空的。", "#888888")
+        self.append_colored_line("已请求清除最近上屏消息记录。", "#008000")
 
     def on_prompt_changed(self, index: int):
         """Handle prompt preset selection change and persist."""

@@ -32,7 +32,6 @@
 - Record every change to `config.toml` defaults and provide migration snippets to keep packaged binaries in sync with source.
 
 ## Tooling & Shell Usage
-- Prefer the bundled bash helpers (`bash -lc`) when invoking shell commands; always set the `workdir` parameter.
 - Use `rg`/`rg --files` for searches; fall back only if unavailable.
 - Use the `apply_patch` to edit files
 - Avoid PowerShell-specific commands.
