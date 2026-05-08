@@ -496,7 +496,7 @@ def textbox_context_toggle_handler(e: keyboard.KeyboardEvent) -> None:
 
     state_text = "启用" if enabled else "禁用"
     gui_event("context_toggle", target="textbox_context", enabled=enabled)
-    console.print(f"已{state_text}附加文本框上下文。")
+    console.print(f"已{state_text}附加文本框上下文。", style="#888888")
 
 
 def bond_shortcut():

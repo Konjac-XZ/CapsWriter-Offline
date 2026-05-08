@@ -18,6 +18,7 @@ from PySide6.QtGui import (
     QWheelEvent,
     QTextOption,
     QTextCursor,
+    QTextCharFormat,
     QShortcut,
     QKeySequence,
     QColor,
@@ -74,6 +75,28 @@ from src.system.startup_replacement import prepare_replacement_startup, release_
 
 
 # AHK hint tooltip removed for leaner startup
+
+
+GUI_COLOR_ALIASES = {
+    "black": "#000000",
+    "bright_black": "#666666",
+    "dim": "#888888",
+    "red": "#cc4444",
+    "bright_red": "#ff5555",
+    "yellow": "#ff8800",
+    "bright_yellow": "#ff8800",
+    "orange": "#ff8800",
+    "green": "#008000",
+    "bright_green": "#008000",
+    "cyan": "#00a6c8",
+    "bright_cyan": "#00d4ff",
+    "blue": "#0066cc",
+    "bright_blue": "#3388ff",
+    "magenta": "#aa44aa",
+    "bright_magenta": "#cc55cc",
+    "white": "#000000",
+    "bright_white": "#000000",
+}
 
 
 class GUI(QMainWindow):
@@ -172,7 +195,7 @@ class GUI(QMainWindow):
         except Exception:
             # Don't block UI if startup info fails
             pass
-        self.text_box_client.append("准备就绪。")
+        self.append_plain_line("准备就绪。")
         # Defer heavy work to after first paint
         try:
             QTimer.singleShot(0, self._deferred_startup)
@@ -405,7 +428,7 @@ class GUI(QMainWindow):
                 pass
 
         state_text = "启用" if checked else "禁用"
-        self.append_colored_line(f"已{state_text}{label}。")
+        self.append_colored_line(f"已{state_text}{label}。", "#888888")
 
         if restart_workers:
             self.append_colored_line("正在重启录音进程以应用视觉上下文设置。", "#888888")
@@ -1114,27 +1137,40 @@ class GUI(QMainWindow):
         except Exception:
             pass
 
-    def append_colored_line(self, text: str, color: QColor | str = "green"):
-        """Append a single line to the client text box using the given color.
+    def _resolve_gui_color(self, color: QColor | str | None) -> QColor:
+        """Return a valid GUI QColor for Qt and Rich-style color names."""
+        if isinstance(color, QColor):
+            return color if color.isValid() else QColor("#000000")
+        color_text = str(color or "#000000").strip()
+        candidates = [color_text]
+        candidates.extend(color_text.split(" on ", 1)[0].split())
+        for candidate in candidates:
+            candidate = GUI_COLOR_ALIASES.get(candidate.lower(), candidate)
+            resolved = QColor(candidate)
+            if resolved.isValid():
+                return resolved
+        return QColor("#000000")
 
-        Uses QTextEdit.setTextColor so rich text remains disabled but colored output is shown.
-        Always resets to default black color after appending to prevent color bleeding.
+    def append_plain_line(self, text: str) -> None:
+        self.append_colored_line(text, "#000000")
+
+    def append_colored_line(self, text: str, color: QColor | str = "green"):
+        """Append a plain-text line with an explicit color.
+
+        Use a detached cursor at the document end so user selection and current
+        cursor formatting cannot recolor existing text or bleed into new lines.
         """
         try:
-            if isinstance(color, str):
-                color = QColor(color)
-            # Set the desired color
-            self.text_box_client.setTextColor(color)
-            self.text_box_client.append(text)
-            # Always reset to default black color to prevent color bleeding
-            self.text_box_client.setTextColor(QColor("#000000"))
+            fmt = QTextCharFormat()
+            fmt.setForeground(self._resolve_gui_color(color))
+
+            cursor = QTextCursor(self.text_box_client.document())
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            if not self.text_box_client.document().isEmpty():
+                cursor.insertBlock()
+            cursor.insertText(str(text), fmt)
         except Exception:
-            # Fallback to plain append on any error, ensure color is reset
-            try:
-                self.text_box_client.setTextColor(QColor("#000000"))
-                self.text_box_client.append(text)
-            except Exception:
-                pass
+            pass
 
     def retry_latest_request(self) -> None:
         try:
@@ -1157,13 +1193,13 @@ class GUI(QMainWindow):
     def show_startup_info(self):
         """Show startup information using YAML-based provider configuration."""
         if not self.provider_manager:
-            self.text_box_client.append("转录服务商配置系统未初始化")
-            self.text_box_client.append("================")
+            self.append_plain_line("转录服务商配置系统未初始化")
+            self.append_plain_line("================")
             return
 
         active = self.provider_manager.get_active_provider()
         if active:
-            self.text_box_client.append(f"转录服务提供商: {active.name} ({active.type})")
+            self.append_plain_line(f"转录服务提供商: {active.name} ({active.type})")
 
             # Show provider-specific settings
             if hasattr(active, 'settings') and active.settings:
@@ -1171,9 +1207,9 @@ class GUI(QMainWindow):
                     base_url = active.settings.get("base_url", "(none)")
                     model = active.settings.get("model", "(none)")
                     temperature = active.settings.get("temperature", "(none)")
-                    self.text_box_client.append(f"转录基础 URL: {base_url}")
-                    self.text_box_client.append(f"转录模型: {model}")
-                    self.text_box_client.append(f"转录温度: {temperature}")
+                    self.append_plain_line(f"转录基础 URL: {base_url}")
+                    self.append_plain_line(f"转录模型: {model}")
+                    self.append_plain_line(f"转录温度: {temperature}")
 
                     # Show resolved prompt (inline, preset, or global default)
                     try:
@@ -1189,13 +1225,13 @@ class GUI(QMainWindow):
                         prompt_to_show = (
                             prompt_normalized if len(prompt_normalized) <= max_len else prompt_normalized[: max_len - 3] + "..."
                         )
-                        self.text_box_client.append(f"转录提示: {prompt_to_show}")
+                        self.append_plain_line(f"转录提示: {prompt_to_show}")
                     else:
-                        self.text_box_client.append("转录提示: (none)")
+                        self.append_plain_line("转录提示: (none)")
         else:
-            self.text_box_client.append("转录服务提供商: 未配置")
+            self.append_plain_line("转录服务提供商: 未配置")
 
-        self.text_box_client.append("================")
+        self.append_plain_line("================")
 
 
     def create_systray_icon(self):
@@ -1249,11 +1285,11 @@ class GUI(QMainWindow):
         try:
             exe = resolve_pythonw_client()
             if exe is None:
-                self.text_box_client.append("无法启动测试：未找到可用的 Python 运行时。")
+                self.append_plain_line("无法启动测试：未找到可用的 Python 运行时。")
                 return
             script = availability_test_script_path()
             if not script.exists():
-                self.text_box_client.append(f"找不到测试脚本：{script}")
+                self.append_plain_line(f"找不到测试脚本：{script}")
                 return
             self.append_colored_line("开始测试所有 OpenAI 类型服务商（每个最多 10 秒）…", QColor("#000000"))
             p = subprocess.Popen(
@@ -1274,7 +1310,7 @@ class GUI(QMainWindow):
             ).start()
         except Exception as e:
             try:
-                self.text_box_client.append(f"启动可用性测试失败: {e}")
+                self.append_plain_line(f"启动可用性测试失败: {e}")
             except Exception:
                 pass
 
@@ -1325,7 +1361,7 @@ class GUI(QMainWindow):
         except Exception as e:
             # Surface the error but keep GUI alive
             try:
-                self.text_box_client.append(f"重启失败: {e}")
+                self.append_plain_line(f"重启失败: {e}")
             except Exception:
                 pass
 
@@ -1383,7 +1419,7 @@ class GUI(QMainWindow):
             os.startfile(str(ROOT))
         except Exception as e:
             try:
-                self.text_box_client.append(f"打开目录失败: {e}")
+                self.append_plain_line(f"打开目录失败: {e}")
             except Exception:
                 pass
 
@@ -1394,7 +1430,7 @@ class GUI(QMainWindow):
             subprocess.Popen([vscode_exe_path, current_directory], cwd=current_directory)
         except Exception as e:
             try:
-                self.text_box_client.append(f"启动 VSCode 失败: {e}")
+                self.append_plain_line(f"启动 VSCode 失败: {e}")
             except Exception:
                 pass
 
@@ -1431,7 +1467,7 @@ class GUI(QMainWindow):
         exe = resolve_pythonw_client()
         if exe is None:
             try:
-                self.text_box_client.append("未找到可用的 Python 运行时。请确保已运行 'uv sync' 安装依赖。")
+                self.append_plain_line("未找到可用的 Python 运行时。请确保已运行 'uv sync' 安装依赖。")
             except Exception:
                 pass
             return
@@ -1478,15 +1514,15 @@ class GUI(QMainWindow):
                         if color:
                             self.append_colored_line(text, color)
                         else:
-                            self.text_box_client.append(text)
+                            self.append_plain_line(text)
                         continue
                 except Exception:
                     # Fall back to raw line on any parse error
                     pass
 
-                self.text_box_client.append(line)
+                self.append_plain_line(line)
             except Exception as e:
-                self.text_box_client.append(str(e))
+                self.append_plain_line(str(e))
                 break
 
     def _handle_status_overlay_event(self, payload: dict) -> None:
@@ -1559,7 +1595,7 @@ class GUI(QMainWindow):
     def _start_worker(self, script_rel_path: str, attr_name: str) -> None:
         exe = resolve_pythonw_client()
         if exe is None:
-            self.text_box_client.append("未找到可用的 Python 运行时。无法重启子进程。")
+            self.append_plain_line("未找到可用的 Python 运行时。无法重启子进程。")
             return
         try:
             p = subprocess.Popen(
@@ -1579,7 +1615,7 @@ class GUI(QMainWindow):
                 daemon=True,
             ).start()
         except Exception as e:
-            self.text_box_client.append(f"启动子进程失败({script_rel_path}): {e}")
+            self.append_plain_line(f"启动子进程失败({script_rel_path}): {e}")
 
     def restart_children_with_env(self) -> None:
         """Restart only worker subprocesses to pick up new environment, keep GUI alive."""
