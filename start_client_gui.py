@@ -4,7 +4,6 @@ import re
 import subprocess
 import sys
 import threading
-import asyncio
 from pathlib import Path
 from queue import Queue
 from typing import Any, cast
@@ -44,7 +43,6 @@ from PySide6.QtWidgets import (
 
 from src.gui.runtime import (
     ROOT,
-    availability_test_script_path,
     client_icon_path,
     core_client_script_path,
     ensure_project_cwd,
@@ -1060,63 +1058,6 @@ class GUI(QMainWindow):
         else:
             self.append_colored_line("更新模型失败（请检查配置文件权限或格式）", "#ff5555")
 
-    def test_all_providers(self):
-        """Test all providers for availability using the same logic as tray menu."""
-        self.run_test_all_providers()
-
-    def _run_availability_test(self, test_audio_path: Path):
-        """Run availability test in a separate thread."""
-        try:
-            # Import and run the test
-            from src.provider.availability_test import run_availability_test
-
-            # Create a new event loop for this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-            try:
-                results = loop.run_until_complete(run_availability_test(test_audio_path))
-
-                # Format and display results
-                from src.provider.availability_test import ProviderAvailabilityTester
-                tester = ProviderAvailabilityTester(test_audio_path)
-                formatted_results = tester.format_results(results)
-
-                # Post results back to GUI thread
-                self._post_test_results(formatted_results)
-
-            finally:
-                loop.close()
-
-        except Exception as e:
-            error_message = f"测试过程中发生错误: {str(e)}"
-            self._post_test_results(error_message)
-
-    def _post_test_results(self, results: str):
-        """Post test results back to the GUI thread."""
-        # Use QTimer.singleShot to safely update GUI from another thread
-        from PySide6.QtCore import QTimer
-
-        def update_gui():
-            # Display results
-            for line in results.split('\n'):
-                if line.strip():
-                    if "✅" in line:
-                        self.log_message(line, "#008000")
-                    elif "❌" in line:
-                        self.log_message(line, "#ff0000")
-                    elif line.startswith("==="):
-                        self.log_message(line)
-                    else:
-                        self.log_message(line, "#000000")
-
-            if hasattr(self, "test_all_button"):
-                test_all_button = cast(QPushButton, getattr(self, "test_all_button"))
-                test_all_button.setEnabled(True)
-                test_all_button.setText("Test All")
-
-        QTimer.singleShot(0, update_gui)
-
     def scroll_to_bottom(self):
         """Pin the console view to the latest line after text changes."""
         try:
@@ -1274,40 +1215,6 @@ class GUI(QMainWindow):
             QTimer.singleShot(delay_ms, self._warm_up_tray_menu)
         except Exception:
             pass
-
-    def run_test_all_providers(self):
-        """Launch availability test script and stream its output to the GUI."""
-        try:
-            exe = resolve_pythonw_client()
-            if exe is None:
-                self.append_plain_line("无法启动测试：未找到可用的 Python 运行时。")
-                return
-            script = availability_test_script_path()
-            if not script.exists():
-                self.append_plain_line(f"找不到测试脚本：{script}")
-                return
-            self.append_colored_line("开始测试所有 OpenAI 类型服务商（每个最多 10 秒）…", QColor("#000000"))
-            p = subprocess.Popen(
-                [exe, str(script)],
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                cwd=str(ROOT),
-                env=os.environ.copy(),
-            )
-            # Stream output
-            threading.Thread(
-                target=self.enqueue_output,
-                args=(p.stdout, self.output_queue_client),
-                daemon=True,
-            ).start()
-        except Exception as e:
-            try:
-                self.append_plain_line(f"启动可用性测试失败: {e}")
-            except Exception:
-                pass
 
     def _warm_up_tray_menu(self):
         """Force-create and layout the tray menu to eliminate first-show stutter.

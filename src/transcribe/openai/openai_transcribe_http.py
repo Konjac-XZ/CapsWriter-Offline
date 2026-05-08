@@ -180,7 +180,7 @@ async def get_http_client() -> httpx.AsyncClient:
     http2 = should_use_http2()
     _HTTP2_ENABLED = http2
     limits = build_limits()
-    # Allow overriding request timeout via env for special operations (e.g., availability tests)
+    # Allow overriding request timeout via env for special operations.
     try:
         timeout_s = float(os.getenv("OPENAI_HTTP_TIMEOUT", "120"))
     except Exception:

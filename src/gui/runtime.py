@@ -55,10 +55,6 @@ def core_client_script_path() -> Path:
     return ROOT / "core_client.py"
 
 
-def availability_test_script_path() -> Path:
-    return ROOT / "src" / "provider" / "run_availability_test.py"
-
-
 def restart_script_path() -> Path:
     return ROOT / "src" / "system" / "restart.py"
 
