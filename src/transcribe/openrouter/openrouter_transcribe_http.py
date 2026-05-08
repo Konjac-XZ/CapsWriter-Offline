@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import json
 import random
 import time
 from typing import Any, Optional, Tuple
@@ -61,6 +62,88 @@ def get_site_name() -> str | None:
 
 def get_configured_audio_format() -> str | None:
     return ps_get_str("audio_format", env="OPENROUTER_AUDIO_FORMAT", default="auto")
+
+
+def get_prompt_provider_slug() -> str:
+    return ps_get_str(
+        "prompt_provider_slug",
+        env="OPENROUTER_PROMPT_PROVIDER_SLUG",
+        default="google-vertex",
+    ) or "google-vertex"
+
+
+def should_send_prompt() -> bool:
+    raw = ps_get_str("send_prompt", env="OPENROUTER_SEND_PROMPT", default="true")
+    return (raw or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def get_prompt_option_shape() -> str:
+    shape = ps_get_str(
+        "prompt_option_shape",
+        env="OPENROUTER_PROMPT_OPTION_SHAPE",
+        default="auto",
+    )
+    return (shape or "auto").strip().lower()
+
+
+def infer_prompt_option_shape(model: str | None = None, provider_slug: str | None = None) -> str:
+    shape = get_prompt_option_shape()
+    if shape != "auto":
+        return shape
+
+    model_name = (model or get_model()).strip().lower()
+    slug = (provider_slug or get_prompt_provider_slug()).strip().lower()
+    if model_name.startswith("openai/") or slug == "openai":
+        return "openai_transcription"
+    if model_name.startswith("google/") or slug == "google-vertex":
+        return "google_speech_v2"
+    return "flat"
+
+
+def _merge_nested_dict(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _merge_nested_dict(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def build_google_speech_v2_options(prompt: str | None = None) -> dict[str, Any]:
+    config: dict[str, Any] = {}
+    if prompt:
+        config["features"] = {
+            "customPromptConfig": {
+                "customPrompt": prompt,
+            }
+        }
+    return {"config": config} if config else {}
+
+
+def build_prompt_provider_options(prompt: str) -> dict[str, Any]:
+    shape = infer_prompt_option_shape()
+    if shape in {"prompt", "flat", "simple", "openai", "openai_transcription", "openai_transcriptions"}:
+        return {"prompt": prompt}
+    if shape in {"custom_prompt", "customprompt"}:
+        return {"customPrompt": prompt}
+    if shape in {"custom_prompt_config", "custompromptconfig"}:
+        return {"customPromptConfig": {"customPrompt": prompt}}
+
+    return build_google_speech_v2_options(prompt)
+
+
+def build_provider_options() -> dict[str, Any] | None:
+    shape = infer_prompt_option_shape()
+    options: dict[str, Any] = {}
+    if shape == "google_speech_v2":
+        options = build_google_speech_v2_options()
+
+    if should_send_prompt():
+        prompt = ps_get_prompt()
+        if prompt:
+            _merge_nested_dict(options, build_prompt_provider_options(prompt))
+
+    return options or None
 
 
 def build_headers(api_key: str) -> dict[str, str]:
@@ -142,12 +225,13 @@ def build_request_body(payload_mime: str, audio_b64: str) -> dict[str, Any]:
     if temperature is not None:
         body["temperature"] = float(temperature)
 
-    # Keep prompt support conservative: send it only when explicitly enabled because
-    # OpenRouter's transcription endpoint does not currently document a prompt field.
-    if (ps_get_str("send_prompt", env="OPENROUTER_SEND_PROMPT", default="") or "").lower() in {"1", "true", "yes"}:
-        prompt = ps_get_prompt()
-        if prompt:
-            body["prompt"] = prompt
+    provider_options = build_provider_options()
+    if provider_options:
+        body["provider"] = {
+            "options": {
+                get_prompt_provider_slug(): provider_options
+            }
+        }
 
     return body
 
@@ -169,6 +253,65 @@ def _error_text(resp: Optional[httpx.Response]) -> str:
     except Exception:
         pass
     return resp.text.strip()
+
+
+def _compact_json(value: Any, max_chars: int = 4000) -> str:
+    try:
+        text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        text = str(value)
+    if len(text) > max_chars:
+        return text[: max_chars - 3] + "..."
+    return text
+
+
+def _safe_request_summary(request_body: dict[str, Any]) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "model": request_body.get("model"),
+        "language": request_body.get("language"),
+    }
+    input_audio = request_body.get("input_audio")
+    if isinstance(input_audio, dict):
+        data = input_audio.get("data")
+        summary["input_audio"] = {
+            "format": input_audio.get("format"),
+            "data_b64_len": len(data) if isinstance(data, str) else None,
+        }
+    if "provider" in request_body:
+        summary["provider"] = request_body.get("provider")
+    if "temperature" in request_body:
+        summary["temperature"] = request_body.get("temperature")
+    return summary
+
+
+def _response_detail(resp: httpx.Response) -> str:
+    body = resp.text.strip()
+    try:
+        data = resp.json()
+    except Exception:
+        data = None
+
+    details: list[str] = []
+    try:
+        request_id = resp.headers.get("x-request-id") or resp.headers.get("cf-ray")
+        if request_id:
+            details.append(f"request_id={request_id}")
+    except Exception:
+        pass
+
+    if isinstance(data, dict):
+        details.append(f"json={_compact_json(data)}")
+        error = data.get("error")
+        if isinstance(error, dict):
+            metadata = error.get("metadata")
+            if isinstance(metadata, dict):
+                raw = metadata.get("raw") or metadata.get("provider_response") or metadata.get("body")
+                if raw:
+                    details.append(f"provider_raw={raw}")
+    elif body:
+        details.append(f"body={body[:4000]}")
+
+    return " | ".join(details)
 
 
 def _extract_text(resp: httpx.Response) -> str:
@@ -246,6 +389,14 @@ async def transcribe_with_retries(
             last_text = _error_text(resp)
             if not _should_retry(resp.status_code):
                 console.print(f"OpenRouter 服务响应错误：{resp.status_code} {last_text}", style="bright_red")
+                console.print(
+                    f"[openrouter:{request_id}] response_detail {_response_detail(resp)}",
+                    style="bright_red",
+                )
+                console.print(
+                    f"[openrouter:{request_id}] request_summary {_compact_json(_safe_request_summary(request_body))}",
+                    style="bright_yellow",
+                )
                 return last_text, resp.status_code, t_submit, t_complete, http2_flag
         except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.ConnectError, httpx.RemoteProtocolError, httpx.HTTPError, OSError) as exc:
             t_complete = time.time()
