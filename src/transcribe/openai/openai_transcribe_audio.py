@@ -19,6 +19,7 @@ _DEFAULT_SAMPLE_RATE: dict[str, int] = {
     "dashscope": 44100,
     "alibabacloud": 44100,
     "soniox": 44100,
+    "openrouter": 44100,
     # Keep Gemini distinct so users can opt into a different rate without affecting others
     "gemini": 16000,
 }
@@ -30,6 +31,8 @@ def _canonical_provider_type(provider: str | None) -> str:
         return "gemini"
     if p in ("soniox-rest", "soniox_http"):
         return "soniox"
+    if p in ("open-router",):
+        return "openrouter"
     return p or "openai"
 
 
@@ -57,6 +60,7 @@ def _get_target_sample_rate() -> int:
         "alibabacloud": ("ALIBABACLOUD_TRANSCRIBE_SAMPLE_RATE", "TRANSCRIBE_SAMPLE_RATE"),
         "soniox": ("SONIOX_TRANSCRIBE_SAMPLE_RATE", "TRANSCRIBE_SAMPLE_RATE"),
         "gemini": ("GEMINI_TRANSCRIBE_SAMPLE_RATE", "TRANSCRIBE_SAMPLE_RATE"),
+        "openrouter": ("OPENROUTER_TRANSCRIBE_SAMPLE_RATE", "TRANSCRIBE_SAMPLE_RATE"),
     }.get(provider_type, ("TRANSCRIBE_SAMPLE_RATE",))
 
     default_sr = _DEFAULT_SAMPLE_RATE.get(provider_type, 44100)

@@ -1,9 +1,10 @@
 """
 Provider availability testing module.
-Tests OpenAI-compatible providers by sending a test audio file and checking for successful HTTP responses.
+Tests supported HTTP transcription providers by sending a test audio file.
 """
 
 import asyncio
+import os
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -12,6 +13,17 @@ from dataclasses import dataclass
 
 from src.provider.provider_config import provider_manager
 from src.transcribe.api import transcribe_audio
+
+TESTABLE_PROVIDER_TYPES = {"openai", "openrouter"}
+
+
+def _set_env_if_literal(name: str, value: object) -> None:
+    if value is None:
+        return
+    text = str(value)
+    if "${" in text:
+        return
+    os.environ[name] = text
 
 
 @dataclass
@@ -28,7 +40,7 @@ class TestResult:
 
 
 class ProviderAvailabilityTester:
-    """Tests availability of OpenAI-compatible transcription providers."""
+    """Tests availability of supported transcription providers."""
 
     def __init__(self, test_audio_path: Path, progress_callback: Optional[Callable[[str], None]] = None):
         self.test_audio_path = test_audio_path
@@ -90,8 +102,8 @@ class ProviderAvailabilityTester:
                 error_message="Provider not found"
             )
 
-        # Skip non-OpenAI providers
-        if provider.type != "openai":
+        # Skip providers that do not share the simple request/response test path.
+        if provider.type not in TESTABLE_PROVIDER_TYPES:
             return TestResult(
                 provider_id=provider_id,
                 provider_name=provider.name,
@@ -100,18 +112,20 @@ class ProviderAvailabilityTester:
                 response_time_ms=0,
                 status_code=None,
                 transcription=None,
-                error_message="Skipped: Only OpenAI-compatible providers are tested"
+                error_message="Skipped: Provider type is not supported by availability test"
             )
 
         self._log_progress(f"正在测试 {provider.name}...")
 
         # Save original environment state to restore later
-        import os
         original_env = {}
         provider_env_keys = [
             "TRANSCRIBE_PROVIDER", "OPENAI_API_KEY", "OPENAI_BASE_URL", "TRANSCRIBE_MODEL",
             "TRANSCRIBE_TEMPERATURE", "OPENAI_TRANSCRIBE_STREAM", "OPENAI_TRANSCRIBE_LANGUAGE",
-            "OPENAI_TRANSCRIBE_FORMAT", "OPENAI_HTTP_TIMEOUT"
+            "OPENAI_TRANSCRIBE_FORMAT", "OPENAI_HTTP_TIMEOUT", "OPENROUTER_API_KEY",
+            "OPENROUTER_BASE_URL", "OPENROUTER_TRANSCRIBE_MODEL", "OPENROUTER_TRANSCRIBE_LANGUAGE",
+            "OPENROUTER_TRANSCRIBE_TEMPERATURE", "OPENROUTER_TIMEOUT_SECONDS", "OPENROUTER_AUDIO_FORMAT",
+            "OPENROUTER_SITE_URL", "OPENROUTER_SITE_NAME"
         ]
 
         for key in provider_env_keys:
@@ -123,15 +137,29 @@ class ProviderAvailabilityTester:
             with self._activate_provider(provider_id):
                 # Set environment variables for this provider
                 os.environ["TRANSCRIBE_PROVIDER"] = provider.type
-                os.environ["OPENAI_API_KEY"] = provider.settings.get("api_key", "")
-                os.environ["OPENAI_BASE_URL"] = provider.settings.get("base_url", "")
-                os.environ["TRANSCRIBE_MODEL"] = provider.settings.get("model", "")
-                os.environ["TRANSCRIBE_TEMPERATURE"] = str(provider.settings.get("temperature", 0.2))
+                _set_env_if_literal("OPENAI_API_KEY", provider.settings.get("api_key", ""))
+                _set_env_if_literal("OPENAI_BASE_URL", provider.settings.get("base_url", ""))
+                _set_env_if_literal("TRANSCRIBE_MODEL", provider.settings.get("model", ""))
+                _set_env_if_literal("TRANSCRIBE_TEMPERATURE", provider.settings.get("temperature", 0.2))
                 os.environ["OPENAI_TRANSCRIBE_STREAM"] = str(provider.settings.get("stream", False))
-                os.environ["OPENAI_TRANSCRIBE_LANGUAGE"] = provider.settings.get("language", "zh")
+                _set_env_if_literal("OPENAI_TRANSCRIBE_LANGUAGE", provider.settings.get("language", "zh"))
+
+                if provider.type == "openrouter":
+                    _set_env_if_literal("OPENROUTER_API_KEY", provider.settings.get("api_key", ""))
+                    _set_env_if_literal("OPENROUTER_BASE_URL", provider.settings.get("base_url", ""))
+                    _set_env_if_literal("OPENROUTER_TRANSCRIBE_MODEL", provider.settings.get("model", ""))
+                    _set_env_if_literal("OPENROUTER_TRANSCRIBE_LANGUAGE", provider.settings.get("language", ""))
+                    _set_env_if_literal("OPENROUTER_TRANSCRIBE_TEMPERATURE", provider.settings.get("temperature", ""))
+                    os.environ["OPENROUTER_TIMEOUT_SECONDS"] = "10"
+                    _set_env_if_literal("OPENROUTER_AUDIO_FORMAT", provider.settings.get("audio_format", "auto"))
+                    if provider.settings.get("site_url"):
+                        _set_env_if_literal("OPENROUTER_SITE_URL", provider.settings.get("site_url", ""))
+                    if provider.settings.get("site_name"):
+                        _set_env_if_literal("OPENROUTER_SITE_NAME", provider.settings.get("site_name", ""))
+
                 # Respect OpenAI-only flag to omit response_format
                 if not bool(provider.settings.get("openai_omit_response_format", False)):
-                    os.environ["OPENAI_TRANSCRIBE_FORMAT"] = provider.settings.get("response_format", "text")
+                    _set_env_if_literal("OPENAI_TRANSCRIBE_FORMAT", provider.settings.get("response_format", "text"))
                 else:
                     if "OPENAI_TRANSCRIBE_FORMAT" in os.environ:
                         del os.environ["OPENAI_TRANSCRIBE_FORMAT"]
@@ -143,6 +171,11 @@ class ProviderAvailabilityTester:
                     from src.transcribe.openai.openai_transcribe_http import close_http_client
                     # If there's an existing client, close it before the request
                     await close_http_client(reason="availability-test-prepare")
+                except Exception:
+                    pass
+                try:
+                    from src.transcribe.openrouter.openrouter_transcribe_http import close_http_client as close_openrouter_client
+                    await close_openrouter_client()
                 except Exception:
                     pass
 
@@ -234,21 +267,20 @@ class ProviderAvailabilityTester:
                     os.environ[key] = value
 
     async def test_all_providers(self) -> List[TestResult]:
-        """Test all OpenAI-compatible providers."""
+        """Test all supported transcription providers."""
         all_providers = provider_manager.list_providers()
 
-        # Filter to only OpenAI-compatible providers
-        openai_providers = [p for p in all_providers if p['type'] == 'openai']
+        testable_providers = [p for p in all_providers if p["type"] in TESTABLE_PROVIDER_TYPES]
 
-        if not openai_providers:
-            self._log_progress("未找到 OpenAI 兼容的转录服务商")
+        if not testable_providers:
+            self._log_progress("未找到可测试的转录服务商")
             return []
 
-        self._log_progress(f"找到 {len(openai_providers)} 个 OpenAI 兼容服务商，开始测试...")
+        self._log_progress(f"找到 {len(testable_providers)} 个可测试转录服务商，开始测试...")
 
         # Test providers one by one to avoid overwhelming servers
         results = []
-        for provider_info in openai_providers:
+        for provider_info in testable_providers:
             result = await self.test_provider(provider_info['id'])
             results.append(result)
 
@@ -257,15 +289,15 @@ class ProviderAvailabilityTester:
     def format_results(self, results: List[TestResult]) -> str:
         """Format test results for display."""
         if not results:
-            return "未找到可测试的 OpenAI 兼容转录服务商"
+            return "未找到可测试的转录服务商"
 
         lines = []
-        lines.append("=== OpenAI 兼容服务商可用性测试结果 ===")
+        lines.append("=== 转录服务商可用性测试结果 ===")
         lines.append("")
 
         successful = 0
         for result in results:
-            if result.error_message == "Skipped: Only OpenAI-compatible providers are tested":
+            if result.error_message == "Skipped: Provider type is not supported by availability test":
                 continue  # Don't show skipped providers in summary
 
             status = "✅ 成功" if result.success else "❌ 失败"
@@ -285,8 +317,8 @@ class ProviderAvailabilityTester:
                     lines.append(f"    错误: {result.error_message}")
             lines.append("")
 
-        tested_count = len([r for r in results if r.error_message != "Skipped: Only OpenAI-compatible providers are tested"])
-        lines.append(f"测试完成: {successful}/{tested_count} 个 OpenAI 兼容服务商可用")
+        tested_count = len([r for r in results if r.error_message != "Skipped: Provider type is not supported by availability test"])
+        lines.append(f"测试完成: {successful}/{tested_count} 个可测试转录服务商可用")
         return "\n".join(lines)
 
 

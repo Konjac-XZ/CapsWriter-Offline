@@ -88,6 +88,8 @@ async def transcribe_audio(
         "gemini",
         "google-gemini",
         "google",
+        "openrouter",
+        "open-router",
     ):
         prov = make_provider(provider)
         return await prov.transcribe(

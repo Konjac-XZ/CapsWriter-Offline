@@ -5,6 +5,7 @@ Handlers should import these functions instead of duplicating logic.
 from __future__ import annotations
 
 import os
+import re
 from typing import Any, Iterable, Optional
 
 try:
@@ -32,6 +33,19 @@ def _first_env(env_names: Optional[Iterable[str]]) -> Optional[str]:
     return None
 
 
+_ENV_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _expand_env_refs(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+
+    def repl(match: re.Match[str]) -> str:
+        return os.getenv(match.group(1), "")
+
+    return _ENV_REF_RE.sub(repl, value)
+
+
 def get_value(
     key: str,
     env: str | Iterable[str] | None = None,
@@ -45,6 +59,7 @@ def get_value(
     else:
         env_names = [env] if isinstance(env, str) else list(env or [])
         val = _first_env(env_names)
+    val = _expand_env_refs(val)
     if val is None:
         return default
     if cast is None:
