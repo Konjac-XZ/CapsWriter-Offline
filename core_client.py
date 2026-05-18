@@ -169,6 +169,7 @@ async def main_mic():
     abandon_watcher_task = asyncio.create_task(watch_abandon_requests())
     clear_history_watcher_task = asyncio.create_task(watch_clear_history_requests())
     level_publisher_task = asyncio.create_task(publish_overlay_levels())
+    console.print("已就绪", style="green")
 
     try:
         while True:
