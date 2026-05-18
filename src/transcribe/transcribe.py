@@ -84,7 +84,7 @@ async def transcribe_send(file: Path):
     time_start = time.time()
     console.print(f"\n任务开始：上传并转录 -> {file}")
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(600.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
             with open(file, "rb") as f:
                 files = {"file": (file.name, f, mime)}
                 resp = await client.post(url, headers=headers, data=data, files=files)

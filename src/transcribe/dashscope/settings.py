@@ -64,11 +64,11 @@ def get_api_key() -> str:
 
 
 def get_timeout_seconds() -> float:
-    raw = ps_get_str("timeout_seconds", env=["DASHSCOPE_TIMEOUT_SECONDS", "OPENAI_HTTP_TIMEOUT"], default="120")
+    raw = ps_get_str("timeout_seconds", env=["DASHSCOPE_TIMEOUT_SECONDS", "OPENAI_HTTP_TIMEOUT"], default="30")
     try:
-        return max(1.0, float(raw or "120"))
+        return min(30.0, max(1.0, float(raw or "30")))
     except Exception:
-        return 120.0
+        return 30.0
 
 
 def candidate_endpoints() -> List[str]:

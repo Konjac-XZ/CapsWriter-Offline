@@ -99,7 +99,7 @@ async def get_http_client() -> httpx.AsyncClient:
     http2 = os.getenv("SONIOX_HTTP2", "1").strip() not in ("0", "false", "False")
     _HTTP2_ENABLED = http2
     _HTTP_CLIENT = httpx.AsyncClient(
-        timeout=httpx.Timeout(120.0),
+        timeout=httpx.Timeout(30.0),
         headers=build_headers(),
         http2=http2,
         limits=build_limits(),

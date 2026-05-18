@@ -49,7 +49,11 @@ def get_temperature() -> float | None:
 
 
 def get_timeout_seconds() -> float:
-    return float(ps_get_float("timeout_seconds", env="OPENROUTER_TIMEOUT_SECONDS", default=120.0) or 120.0)
+    raw = ps_get_float("timeout_seconds", env="OPENROUTER_TIMEOUT_SECONDS", default=30.0)
+    try:
+        return min(30.0, max(1.0, float(raw or 30.0)))
+    except Exception:
+        return 30.0
 
 
 def get_site_url() -> str | None:

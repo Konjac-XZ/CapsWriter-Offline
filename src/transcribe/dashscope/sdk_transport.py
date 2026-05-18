@@ -14,6 +14,7 @@ from src.transcribe.dashscope.settings import (
     ext_for_mime,
     get_api_key,
     get_model,
+    get_timeout_seconds,
 )
 
 
@@ -65,9 +66,13 @@ async def send_with_sdk(
                 messages=messages,
                 result_format="message",
                 asr_options=asr_options,
+                request_timeout=get_timeout_seconds(),
             )
 
-        response = await asyncio.to_thread(call_sdk)
+        response = await asyncio.wait_for(
+            asyncio.to_thread(call_sdk),
+            timeout=get_timeout_seconds(),
+        )
         t_complete = time.time()
 
         payload_data: Any

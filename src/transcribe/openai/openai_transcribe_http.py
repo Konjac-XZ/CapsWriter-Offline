@@ -180,11 +180,11 @@ async def get_http_client() -> httpx.AsyncClient:
     http2 = should_use_http2()
     _HTTP2_ENABLED = http2
     limits = build_limits()
-    # Allow overriding request timeout via env for special operations.
+    # Allow overriding request timeout via env, capped to keep stuck requests bounded.
     try:
-        timeout_s = float(os.getenv("OPENAI_HTTP_TIMEOUT", "120"))
+        timeout_s = min(30.0, max(1.0, float(os.getenv("OPENAI_HTTP_TIMEOUT", "30"))))
     except Exception:
-        timeout_s = 120.0
+        timeout_s = 30.0
     client = httpx.AsyncClient(
         timeout=httpx.Timeout(timeout_s), headers=headers, http2=http2, limits=limits
     )
