@@ -1,6 +1,7 @@
 import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from threading import Event
 from typing import Any, cast
 
@@ -12,7 +13,7 @@ from src.keyboard.pause_other_audio import audio_playering_app_name
 from src.audio.send_audio import send_audio
 from src.audio.stream import stream_reopen
 from src.infra.config import ClientConfig as Config
-from src.infra.gui_output import gui_event
+from src.infra.gui_output import gui_event, gui_print
 from src.infra.my_status import Status
 from src.polish.context_settings import toggle_textbox_context_enabled
 
@@ -30,7 +31,36 @@ last_time_pressed = 0
 last_time_released = 0
 key_pressed = False
 textbox_context_toggle_pressed = False
+escape_abort_pressed = False
 sessions = []
+_debug_action_count = 0
+_DEBUG_SLOW_MS = 250.0
+
+
+def _debug_enabled(force: bool = False) -> bool:
+    return force
+
+
+def _debug_log(message: str, *, force: bool = False) -> None:
+    if not _debug_enabled(force):
+        return
+    try:
+        console.print(f"[timing][hotkey] {message}", style="dim")
+    except Exception:
+        pass
+
+
+@contextmanager
+def _timed_step(name: str):
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        _debug_log(
+            f"{name} {elapsed_ms:.1f}ms",
+            force=elapsed_ms >= _DEBUG_SLOW_MS,
+        )
 
 
 def _task_is_running(task_obj: Any) -> bool:
@@ -77,7 +107,7 @@ def _emit_status_overlay(action: str, state: str | None = None) -> None:
     if not Config.show_listening_overlay:
         return
     try:
-        payload = {"action": action}
+        payload = {"action": action, "emitted_at": time.time()}
         if state:
             payload["state"] = state
         gui_event("status_overlay", **payload)
@@ -104,7 +134,9 @@ def shortcut_correct(e: keyboard.KeyboardEvent):
 
 def mute_all_sessions():
     global sessions
-    sessions = AudioUtilities.GetAllSessions()
+    with _timed_step("mute:GetAllSessions"):
+        sessions = AudioUtilities.GetAllSessions()
+    muted_count = 0
     for session in sessions:
         process_name = _safe_session_process_name(session)
         # 排除 ffplay.exe
@@ -112,12 +144,15 @@ def mute_all_sessions():
             try:
                 volume = session.SimpleAudioVolume
                 volume.SetMute(1, None)
+                muted_count += 1
             except Exception:
                 continue
+    _debug_log(f"mute:sessions total={len(sessions)} muted={muted_count}")
 
 
 def unmute_all_sessions():
     global sessions
+    unmuted_count = 0
     for session in sessions:
         process_name = _safe_session_process_name(session)
         # 排除 ffplay.exe
@@ -125,21 +160,27 @@ def unmute_all_sessions():
             try:
                 volume = session.SimpleAudioVolume
                 volume.SetMute(0, None)
+                unmuted_count += 1
             except Exception:
                 continue
+    _debug_log(f"unmute:sessions total={len(sessions)} unmuted={unmuted_count}")
 
 
 def launch_task():
-    if _has_unfinished_nonrecording_task():
-        abandon_current_task()
+    action_start = time.perf_counter()
+    with _timed_step("launch:abandon_unfinished_check"):
+        if _has_unfinished_nonrecording_task():
+            abandon_current_task()
 
     Cosmic.abandon_requested = False
     Cosmic.active_task_id = None
     # 开始任务时播放提示音
     if Config.play_start_music:
-        from src.keyboard.play_music import play_music
+        with _timed_step("launch:play_start_music_import"):
+            from src.keyboard.play_music import play_music
 
-        play_music(Config.start_music_path, Config.start_music_volume)
+        with _timed_step("launch:play_start_music"):
+            play_music(Config.start_music_path, Config.start_music_volume)
 
     global hold_mode_first_time_cancel_task
     if (
@@ -147,9 +188,11 @@ def launch_task():
         and Config.only_enable_microphones_when_pressed_record_shortcut
     ):
         # 重启音频流; 在双击情况下, 只在第一次的时候启动(单击模式)
-        stream_reopen()
+        with _timed_step("launch:stream_reopen"):
+            stream_reopen()
         if Cosmic.stream is not None:
-            Cosmic.stream.start()
+            with _timed_step("launch:stream_start"):
+                Cosmic.stream.start()
 
     # 长按模式(hold_mode)双击功能 第二次重启不适用于上面的判断, 因此，需要下面来判断是否重启音频流
     # 长按模式(hold_mode)双击功能 確實需要第二次啓動音频流, 设计的时候就是如此, 因为会进行一次 start  cancel 的流程, 然后第二次啓動才是双击功能的录音
@@ -158,9 +201,11 @@ def launch_task():
         and double_clicked
         and Config.only_enable_microphones_when_pressed_record_shortcut
     ):
-        stream_reopen()
+        with _timed_step("launch:stream_reopen_double_click"):
+            stream_reopen()
         if Cosmic.stream is not None:
-            Cosmic.stream.start()
+            with _timed_step("launch:stream_start_double_click"):
+                Cosmic.stream.start()
         hold_mode_first_time_cancel_task = False
     # 记录开始时间
     t1 = time.time()
@@ -168,66 +213,86 @@ def launch_task():
     # 将开始标志放入队列
     if Cosmic.loop is None:
         return
-    asyncio.run_coroutine_threadsafe(
-        Cosmic.queue_in.put({"type": "begin", "time": t1, "data": None}), Cosmic.loop
-    )
+    with _timed_step("launch:queue_begin"):
+        asyncio.run_coroutine_threadsafe(
+            Cosmic.queue_in.put({"type": "begin", "time": t1, "data": None}), Cosmic.loop
+        )
 
     # 录音时静音其他音频播放
     if Config.mute_other_audio:
-        mute_all_sessions()
+        with _timed_step("launch:mute_all_sessions"):
+            mute_all_sessions()
 
     # 录音时暂停其他音频播放 且 有音频正在播放
     global unpause_needed
     if Config.pause_other_audio and not unpause_needed:
-        if process_name := audio_playering_app_name():
+        with _timed_step("launch:audio_playering_app_name"):
+            process_name = audio_playering_app_name()
+        if process_name:
             if process_name != "ffplay.exe":
-                keyboard.send("play/pause")
+                with _timed_step("launch:keyboard_play_pause"):
+                    keyboard.send("play/pause")
                 unpause_needed = True
 
     # 通知录音线程可以向队列放数据了
     Cosmic.on = t1
 
     # 打印动画：正在录音
-    status.start()
-    _emit_status_overlay("show", "listening")
+    with _timed_step("launch:status_start"):
+        status.start()
+    with _timed_step("launch:overlay_show_listening"):
+        _emit_status_overlay("show", "listening")
 
     # 启动识别任务
     global task
-    task = asyncio.run_coroutine_threadsafe(
-        send_audio(),
-        Cosmic.loop,
-    )
+    with _timed_step("launch:create_send_audio_task"):
+        task = asyncio.run_coroutine_threadsafe(
+            send_audio(),
+            Cosmic.loop,
+        )
+    total_ms = (time.perf_counter() - action_start) * 1000.0
+    _debug_log(f"launch end total={total_ms:.1f}ms", force=total_ms >= _DEBUG_SLOW_MS)
 
 
 def cancel_task():
+    action_start = time.perf_counter()
     # 通知停止录音，关掉滚动条
     Cosmic.on = False
-    status.stop()
-    _emit_status_overlay("hide")
+    with _timed_step("cancel:status_stop"):
+        status.stop()
+    with _timed_step("cancel:overlay_hide"):
+        _emit_status_overlay("hide")
 
     # 取消音频静音
     if Config.mute_other_audio:
-        unmute_all_sessions()
+        with _timed_step("cancel:unmute_all_sessions"):
+            unmute_all_sessions()
 
     # 取消音频暂停
     global unpause_needed
     if Config.pause_other_audio and unpause_needed:
-        keyboard.send("play/pause")
+        with _timed_step("cancel:keyboard_play_pause"):
+            keyboard.send("play/pause")
         unpause_needed = False
 
     # 发送取消任务的消息到队列
     if Cosmic.loop is None:
         return
-    asyncio.run_coroutine_threadsafe(
-        Cosmic.queue_in.put({"type": "cancel", "time": time.time(), "data": None}),
-        Cosmic.loop,
-    )
+    with _timed_step("cancel:queue_cancel"):
+        asyncio.run_coroutine_threadsafe(
+            Cosmic.queue_in.put({"type": "cancel", "time": time.time(), "data": None}),
+            Cosmic.loop,
+        )
 
     if Config.only_enable_microphones_when_pressed_record_shortcut:
         # 结束音频流
         if Cosmic.stream is not None:
-            Cosmic.stream.stop()
-            Cosmic.stream.close()
+            with _timed_step("cancel:stream_stop"):
+                Cosmic.stream.stop()
+            with _timed_step("cancel:stream_close"):
+                Cosmic.stream.close()
+    total_ms = (time.perf_counter() - action_start) * 1000.0
+    _debug_log(f"cancel end total={total_ms:.1f}ms", force=total_ms >= _DEBUG_SLOW_MS)
 
 
 def abandon_current_task() -> None:
@@ -268,43 +333,55 @@ def abandon_current_task() -> None:
 
 def finish_task():
     global task
+    action_start = time.perf_counter()
 
     # 通知停止录音，关掉滚动条
     Cosmic.on = False
-    status.stop()
+    with _timed_step("finish:status_stop"):
+        status.stop()
 
     # 通知结束任务
     if Cosmic.loop is None:
         _emit_status_overlay("hide")
         return
-    _emit_status_overlay("show", "transcribing")
-    asyncio.run_coroutine_threadsafe(
-        Cosmic.queue_in.put(
-            {"type": "finish", "time": time.time(), "data": None},
-        ),
-        Cosmic.loop,
-    )
+    with _timed_step("finish:overlay_show_transcribing"):
+        _emit_status_overlay("show", "transcribing")
+    with _timed_step("finish:queue_finish"):
+        asyncio.run_coroutine_threadsafe(
+            Cosmic.queue_in.put(
+                {"type": "finish", "time": time.time(), "data": None},
+            ),
+            Cosmic.loop,
+        )
 
     # 取消音频静音
     if Config.mute_other_audio:
-        unmute_all_sessions()
+        with _timed_step("finish:unmute_all_sessions"):
+            unmute_all_sessions()
 
     # 结束任务时播放提示音
     if Config.play_stop_music:
-        from src.keyboard.play_music import play_music
+        with _timed_step("finish:play_stop_music_import"):
+            from src.keyboard.play_music import play_music
 
-        play_music(Config.stop_music_path, Config.stop_music_volume)
+        with _timed_step("finish:play_stop_music"):
+            play_music(Config.stop_music_path, Config.stop_music_volume)
 
     # 取消音频暂停
     global unpause_needed
     if Config.pause_other_audio and unpause_needed:
-        keyboard.send("play/pause")
+        with _timed_step("finish:keyboard_play_pause"):
+            keyboard.send("play/pause")
         unpause_needed = False
     if Config.only_enable_microphones_when_pressed_record_shortcut:
         # 结束音频流
         if Cosmic.stream is not None:
-            Cosmic.stream.stop()
-            Cosmic.stream.close()
+            with _timed_step("finish:stream_stop"):
+                Cosmic.stream.stop()
+            with _timed_step("finish:stream_close"):
+                Cosmic.stream.close()
+    total_ms = (time.perf_counter() - action_start) * 1000.0
+    _debug_log(f"finish end total={total_ms:.1f}ms", force=total_ms >= _DEBUG_SLOW_MS)
 
 
 # =================单击模式======================
@@ -402,6 +479,10 @@ def hold_mode(e: keyboard.KeyboardEvent):
         hold_mode_first_time_cancel_task, \
         unpause_needed
 
+    if e.event_type == "up" and not Cosmic.on:
+        last_time_released = time.time()
+        return
+
     # 計算是否屬於短時間內按下`錄音鍵`
     is_short_duration = (
         True if time.time() - last_time_released < Config.threshold else False
@@ -460,6 +541,21 @@ def hold_handler(e: keyboard.KeyboardEvent) -> None:
 
 
 def click_handler(e: keyboard.KeyboardEvent) -> None:
+    global _debug_action_count
+    _debug_action_count += 1
+    event_time = getattr(e, "time", None)
+    event_lag_ms = (
+        max(0.0, (time.time() - float(event_time)) * 1000.0)
+        if event_time
+        else None
+    )
+    lag_text = f" lag={event_lag_ms:.1f}ms" if event_lag_ms is not None else ""
+    _debug_log(
+        f"event#{_debug_action_count} type={e.event_type} name={e.name}{lag_text} "
+        f"key_pressed={key_pressed} double_clicked={double_clicked} "
+        f"cosmic_on={bool(Cosmic.on)}",
+        force=(event_lag_ms is not None and event_lag_ms >= _DEBUG_SLOW_MS),
+    )
     # 验证按键名正确
     if not shortcut_correct(e):
         return
@@ -499,6 +595,21 @@ def textbox_context_toggle_handler(e: keyboard.KeyboardEvent) -> None:
     console.print(f"已{state_text}附加文本框上下文。", style="#888888")
 
 
+def escape_abort_handler(e: keyboard.KeyboardEvent) -> None:
+    global escape_abort_pressed
+
+    if e.event_type == keyboard.KEY_UP:
+        escape_abort_pressed = False
+        return
+    if e.event_type != keyboard.KEY_DOWN or escape_abort_pressed:
+        return
+
+    escape_abort_pressed = True
+    if Cosmic.on:
+        abandon_current_task()
+        gui_print("已请求放弃当前任务。", "#cc4444")
+
+
 def bond_shortcut():
     if Config.hold_mode:
         keyboard.hook_key(
@@ -510,6 +621,8 @@ def bond_shortcut():
         keyboard.hook_key(
             Config.speech_recognition_shortcut, click_handler, suppress=True
         )
+
+    keyboard.hook_key("esc", escape_abort_handler, suppress=False)
 
     toggle_shortcut = Config.toggle_textbox_context_shortcut.strip()
     if not toggle_shortcut:
