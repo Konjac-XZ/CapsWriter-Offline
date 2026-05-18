@@ -3,6 +3,7 @@ import io
 import asyncio
 import time
 import uuid
+import wave
 
 import numpy as np
 
@@ -25,7 +26,7 @@ def _emit_status_overlay(action: str, state: str | None = None) -> None:
     if not Config.show_listening_overlay:
         return
     try:
-        payload = {"action": action}
+        payload = {"action": action, "emitted_at": time.time()}
         if state:
             payload["state"] = state
         gui_event("status_overlay", **payload)
@@ -43,6 +44,53 @@ def _payload_bytes(payload_buf) -> bytes:
         payload_buf.seek(pos)
         return data
     return bytes(payload_buf)
+
+
+def _encode_retry_wav(audio_concat: np.ndarray) -> bytes:
+    if audio_concat.size == 0:
+        return b""
+    if audio_concat.ndim == 1:
+        audio_concat = audio_concat.reshape(-1, 1)
+
+    channels = int(audio_concat.shape[1]) if audio_concat.ndim == 2 else 1
+    audio_safe = np.nan_to_num(audio_concat, copy=True, nan=0.0, posinf=1.0, neginf=-1.0)
+    pcm = (np.clip(audio_safe, -1.0, 1.0) * (2**15 - 1)).astype(np.int16).tobytes()
+
+    wav_buf = io.BytesIO()
+    with wave.open(wav_buf, "wb") as wav_file:
+        wav_file.setnchannels(channels)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(48000)
+        wav_file.writeframes(pcm)
+    return wav_buf.getvalue()
+
+
+def _cache_recording_for_retry(
+    *,
+    audio_concat: np.ndarray,
+    task_id: str,
+    duration: float,
+    time_start: float,
+    record_stop: float,
+) -> None:
+    retry_audio = _encode_retry_wav(audio_concat)
+    if not retry_audio:
+        return
+
+    try:
+        write_retry_cache(
+            retry_audio,
+            "audio/wav",
+            {
+                "source_task_id": task_id,
+                "record_duration_s": float(duration),
+                "time_start": time_start,
+                "time_stop": record_stop,
+                "cache_stage": "recording_finished",
+            },
+        )
+    except Exception as exc:
+        console.print(f"保存重试录音缓存失败：{exc}", style="bright_red")
 
 
 async def _submit_payload(
@@ -218,6 +266,13 @@ async def send_audio():
 
         # Log identifiers
         console.print(f"录音时长：{duration:.2f}s")
+        _cache_recording_for_retry(
+            audio_concat=audio_concat,
+            task_id=task_id,
+            duration=duration,
+            time_start=time_start,
+            record_stop=record_stop,
+        )
 
         # Preprocess audio (mono/downsample)
         audio_proc, actual_sr = preprocess_audio(audio_concat)
