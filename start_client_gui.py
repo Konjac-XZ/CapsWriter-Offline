@@ -4,6 +4,8 @@ import re
 import subprocess
 import sys
 import threading
+import time
+import traceback
 from pathlib import Path
 from typing import Any, cast
 
@@ -96,6 +98,14 @@ GUI_COLOR_ALIASES = {
     "bright_white": "#000000",
 }
 
+GUI_TIMING_SLOW_MS = 100.0
+GUI_TIMER_GAP_MS = 500.0
+GUI_WATCHDOG_GAP_MS = 700.0
+
+
+def _elapsed_ms(start: float) -> float:
+    return (time.perf_counter() - start) * 1000.0
+
 
 class GUI(QMainWindow):
     def __init__(self):
@@ -106,6 +116,15 @@ class GUI(QMainWindow):
         # Ensure provider_manager attribute exists before UI uses it
         self.provider_manager: Any | None = None
         self._syncing_context_toggle_states = False
+        self._last_worker_timer_tick = 0.0
+        self._last_gui_heartbeat = time.monotonic()
+        self._gui_thread_id = threading.get_ident()
+        self._worker_timer_lag_reports = 0
+        self._gui_timing_reports = 0
+        self._suppress_scroll_timing = False
+        self._suppress_append_timing = False
+        self._watchdog_stop = threading.Event()
+        self._watchdog_reports = 0
         self.core_client_process: subprocess.Popen[str] | None = None
         self.text_box_wordCountLabel: QLabel | None = None
         self.old_pos = QPoint()
@@ -122,9 +141,13 @@ class GUI(QMainWindow):
         )
         self.status_overlay = StatusOverlayController()
         self.status_overlay.set_abandon_callback(self.abandon_current_task)
+        self.status_overlay.set_timing_callback(
+            lambda message: self._log_gui_timing(f"overlay {message}")
+        )
         self.edgeMargin = 5  # 侧边停靠残余像素值
         self.isBerthLeft = False
         self.isBerthRight = False
+        threading.Thread(target=self._gui_watchdog_loop, daemon=True).start()
 
         # Display early messages now that UI is ready
         for message, color in self.early_messages:
@@ -201,7 +224,7 @@ class GUI(QMainWindow):
         except Exception:
             # Don't block UI if startup info fails
             pass
-        self.append_plain_line("准备就绪。")
+        self.append_plain_line("界面已打开，正在启动监听进程...")
         # Defer heavy work to after first paint
         try:
             QTimer.singleShot(0, self._deferred_startup)
@@ -1068,6 +1091,7 @@ class GUI(QMainWindow):
 
     def scroll_to_bottom(self):
         """Pin the console view to the latest line after text changes."""
+        start = time.perf_counter()
         try:
             sb = self.text_box_client.verticalScrollBar()
             if sb is not None:
@@ -1080,6 +1104,10 @@ class GUI(QMainWindow):
                 self.text_box_client.ensureCursorVisible()
         except Exception:
             pass
+        finally:
+            elapsed = _elapsed_ms(start)
+            if not self._suppress_scroll_timing and elapsed >= GUI_TIMING_SLOW_MS:
+                self._log_gui_timing(f"scroll_to_bottom {elapsed:.1f}ms")
 
     def _resolve_gui_color(self, color: QColor | str | None) -> QColor:
         """Return a valid GUI QColor for Qt and Rich-style color names."""
@@ -1101,25 +1129,91 @@ class GUI(QMainWindow):
     def append_colored_lines(self, lines: list[str], color: QColor | str = "green") -> None:
         if not lines:
             return
-        self.append_colored_line("\n".join(str(line) for line in lines), color)
+        text = "\n".join(str(line) for line in lines)
+        self.append_colored_line(text, color, source=f"batch lines={len(lines)} chars={len(text)}")
 
-    def append_colored_line(self, text: str, color: QColor | str = "green"):
+    def append_colored_line(
+        self,
+        text: str,
+        color: QColor | str = "green",
+        *,
+        source: str = "single",
+    ):
         """Append a plain-text line with an explicit color.
 
         Use a detached cursor at the document end so user selection and current
         cursor formatting cannot recolor existing text or bleed into new lines.
         """
+        start = time.perf_counter()
+        block_count_before = 0
         try:
             fmt = QTextCharFormat()
             fmt.setForeground(self._resolve_gui_color(color))
 
-            cursor = QTextCursor(self.text_box_client.document())
+            document = self.text_box_client.document()
+            block_count_before = document.blockCount()
+            cursor = QTextCursor(document)
             cursor.movePosition(QTextCursor.MoveOperation.End)
-            if not self.text_box_client.document().isEmpty():
+            self._suppress_scroll_timing = True
+            if not document.isEmpty():
                 cursor.insertBlock()
             cursor.insertText(str(text).replace("\n", "\u2029"), fmt)
         except Exception:
             pass
+        finally:
+            self._suppress_scroll_timing = False
+            elapsed = _elapsed_ms(start)
+            if not self._suppress_append_timing and elapsed >= GUI_TIMING_SLOW_MS:
+                try:
+                    block_count_after = self.text_box_client.document().blockCount()
+                except Exception:
+                    block_count_after = block_count_before
+                self._log_gui_timing(
+                    f"append_colored_line {elapsed:.1f}ms {source} "
+                    f"blocks={block_count_before}->{block_count_after}"
+                )
+
+    def _log_gui_timing(self, message: str) -> None:
+        if self._gui_timing_reports >= 60:
+            return
+        self._gui_timing_reports += 1
+        self._suppress_append_timing = True
+        try:
+            self.append_colored_line(f"[timing][gui] {message}", "#888888")
+        finally:
+            self._suppress_append_timing = False
+
+    def _emit_watchdog_timing(self, message: str) -> None:
+        try:
+            print(f"[timing][watchdog] {message}", flush=True)
+        except Exception:
+            pass
+        if self._gui_timing_reports >= 60:
+            return
+        self._gui_timing_reports += 1
+        self._log_queue_from_thread(f"[timing][watchdog] {message}")
+
+    def _log_queue_from_thread(self, text: str) -> None:
+        try:
+            self.output_router.route_line(text)
+        except Exception:
+            pass
+
+    def _gui_watchdog_loop(self) -> None:
+        while not self._watchdog_stop.wait(0.1):
+            gap_ms = (time.monotonic() - self._last_gui_heartbeat) * 1000.0
+            if gap_ms < GUI_WATCHDOG_GAP_MS:
+                continue
+            if self._watchdog_reports >= 10:
+                continue
+            self._watchdog_reports += 1
+            frame = sys._current_frames().get(self._gui_thread_id)
+            if frame is None:
+                self._emit_watchdog_timing(f"gui heartbeat gap {gap_ms:.1f}ms; no gui frame")
+            else:
+                stack = "".join(traceback.format_stack(frame, limit=12)).strip()
+                self._emit_watchdog_timing(f"gui heartbeat gap {gap_ms:.1f}ms\n{stack}")
+            time.sleep(1.0)
 
     def retry_latest_request(self) -> None:
         try:
@@ -1219,13 +1313,13 @@ class GUI(QMainWindow):
         self.tray_icon.setContextMenu(self.tray_menu)
         self.tray_icon.show()
 
-        # Proactively warm up the tray menu to avoid first-use lag
+        # Optional tray menu warm-up. Disabled by default because Qt menu layout
+        # can block the GUI thread long enough to freeze the recording timer.
         try:
-            # Defer warm-up well past startup to avoid competing with initial work
-            delay_ms = int(os.getenv("CW_TRAY_WARMUP_DELAY_MS", "15000"))
-            if delay_ms < 0:
-                delay_ms = 0
-            QTimer.singleShot(delay_ms, self._warm_up_tray_menu)
+            warmup_text = os.getenv("CW_TRAY_WARMUP_DELAY_MS", "").strip()
+            if warmup_text:
+                delay_ms = max(0, int(warmup_text))
+                QTimer.singleShot(delay_ms, self._warm_up_tray_menu)
         except Exception:
             pass
 
@@ -1235,6 +1329,12 @@ class GUI(QMainWindow):
         Kept intentionally lightweight and deferred to avoid affecting startup.
         """
         try:
+            try:
+                if self.status_overlay.overlay.isVisible():
+                    self._log_gui_timing("tray warm-up skipped while overlay is visible")
+                    return
+            except Exception:
+                pass
             menu = getattr(self, "tray_menu", None)
             if not isinstance(menu, QMenu):
                 return
@@ -1356,6 +1456,10 @@ class GUI(QMainWindow):
 
     def quit_app(self):
         try:
+            self._watchdog_stop.set()
+        except Exception:
+            pass
+        try:
             self.status_overlay.hide_all()
         except Exception:
             pass
@@ -1402,13 +1506,30 @@ class GUI(QMainWindow):
             pass
 
     def update_worker_output(self):
+        total_start = time.perf_counter()
+        now = time.monotonic()
+        self._last_gui_heartbeat = now
+        if self._last_worker_timer_tick:
+            tick_gap_ms = (now - self._last_worker_timer_tick) * 1000.0
+            if tick_gap_ms >= GUI_TIMER_GAP_MS and self._worker_timer_lag_reports < 20:
+                self._worker_timer_lag_reports += 1
+                self._log_gui_timing(f"worker timer gap {tick_gap_ms:.1f}ms")
+        self._last_worker_timer_tick = now
+
+        level_start = time.perf_counter()
         latest_level = self.output_router.take_latest_overlay_level()
         if latest_level is not None:
             self.status_overlay.set_level(latest_level)
+        level_ms = _elapsed_ms(level_start)
 
+        drain_start = time.perf_counter()
         batch_texts: list[str] = []
         batch_color: str | None = None
+        line_count = 0
+        char_count = 0
         for line in self.output_router.take_log_lines_for(200, 0.004):
+            line_count += 1
+            char_count += len(line.text)
             color = line.color or "#000000"
             if batch_texts and color != batch_color:
                 self.append_colored_lines(batch_texts, batch_color or "#000000")
@@ -1417,11 +1538,29 @@ class GUI(QMainWindow):
             batch_texts.append(line.text)
         if batch_texts:
             self.append_colored_lines(batch_texts, batch_color or "#000000")
+        drain_ms = _elapsed_ms(drain_start)
+        total_ms = _elapsed_ms(total_start)
+        if total_ms >= GUI_TIMING_SLOW_MS or drain_ms >= GUI_TIMING_SLOW_MS:
+            self._log_gui_timing(
+                f"update_worker_output total={total_ms:.1f}ms "
+                f"level={level_ms:.1f}ms logs={drain_ms:.1f}ms "
+                f"lines={line_count} chars={char_count}"
+            )
 
     def _handle_status_overlay_event(self, payload: dict) -> None:
+        total_start = time.perf_counter()
         try:
+            received_at = payload.get("emitted_at")
+            if received_at is not None:
+                delay_ms = max(0.0, (time.time() - float(received_at)) * 1000.0)
+                if delay_ms >= GUI_TIMER_GAP_MS:
+                    self._log_gui_timing(
+                        f"overlay event delay {delay_ms:.1f}ms "
+                        f"action={payload.get('action')} state={payload.get('state')}"
+                    )
             action = payload.get("action")
             state = payload.get("state")
+            handling_start = time.perf_counter()
             if action == "level":
                 self.status_overlay.set_level(float(payload.get("level", 0.0)))
             elif action == "show" and state == "listening":
@@ -1432,6 +1571,13 @@ class GUI(QMainWindow):
                 self.status_overlay.show_listening()
             elif action == "hide":
                 self.status_overlay.hide_all()
+            handling_ms = _elapsed_ms(handling_start)
+            total_ms = _elapsed_ms(total_start)
+            if total_ms >= GUI_TIMING_SLOW_MS or handling_ms >= GUI_TIMING_SLOW_MS:
+                self._log_gui_timing(
+                    f"overlay handler total={total_ms:.1f}ms "
+                    f"handle={handling_ms:.1f}ms action={action} state={state}"
+                )
         except Exception:
             pass
 
