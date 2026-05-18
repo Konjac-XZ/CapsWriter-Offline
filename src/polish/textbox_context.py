@@ -51,6 +51,20 @@ class TextBoxContext:
     class_name: str | None = None
     process_id: int | None = None
     process_name: str | None = None
+    caret_offset: int | None = None
+    selection_start: int | None = None
+    selection_end: int | None = None
+    caret_source: str | None = None
+
+
+@dataclass(slots=True)
+class _UiaTextResult:
+    text: str
+    source: str
+    caret_offset: int | None = None
+    selection_start: int | None = None
+    selection_end: int | None = None
+    caret_source: str | None = None
 
 
 def get_active_textbox_context(
@@ -82,7 +96,7 @@ def get_active_textbox_context(
         )
         return None
 
-    text, source, hwnd, class_name, is_password = _read_text_via_uia(
+    result, hwnd, class_name, is_password = _read_text_via_uia(
         hwnd,
         class_name,
         debug=debug,
@@ -90,22 +104,26 @@ def get_active_textbox_context(
     if hwnd and (process_id is None or process_name is None):
         process_id = process_id or _get_window_process_id(hwnd)
         process_name = process_name or _safe_process_name(process_id)
-    if text and text.strip() and source:
+    if result and result.text.strip():
         _debug_log(
             debug,
             (
                 "[文本框解析] UIA 读取成功"
-                f" source={source} hwnd={_format_hwnd(hwnd)} class={class_name or '-'}"
-                f" len={len(text)}"
+                f" source={result.source} hwnd={_format_hwnd(hwnd)} class={class_name or '-'}"
+                f" len={len(result.text)} caret={result.caret_offset}"
             ),
         )
         return TextBoxContext(
-            text=text,
-            source=source,
+            text=result.text,
+            source=result.source,
             hwnd=hwnd,
             class_name=class_name,
             process_id=process_id,
             process_name=process_name,
+            caret_offset=result.caret_offset,
+            selection_start=result.selection_start,
+            selection_end=result.selection_end,
+            caret_source=result.caret_source,
         )
 
     if not is_password:
@@ -230,7 +248,7 @@ def _read_text_via_uia(
     class_name_hint: str | None,
     *,
     debug: bool = False,
-) -> tuple[str | None, str | None, int | None, str | None, bool]:
+) -> tuple[_UiaTextResult | None, int | None, str | None, bool]:
     hwnd = hwnd_hint
     class_name = class_name_hint
     is_password = _is_password_control(hwnd)
@@ -249,7 +267,7 @@ def _read_text_via_uia(
             element = automation.GetFocusedElement()
             if not element:
                 _debug_log(debug, "[文本框解析] GetFocusedElement 返回空。")
-                return None, None, hwnd, class_name, is_password
+                return None, hwnd, class_name, is_password
 
             hwnd = _safe_int_property(element, "CurrentNativeWindowHandle") or hwnd
             class_name = _safe_string_property(element, "CurrentClassName") or class_name
@@ -267,7 +285,7 @@ def _read_text_via_uia(
             is_password = _is_password_element(element) or _is_password_control(hwnd)
             if is_password:
                 _debug_log(debug, "[文本框解析] 焦点元素被识别为密码控件。")
-                return None, None, hwnd, class_name, True
+                return None, hwnd, class_name, True
 
             for source, reader in (
                 ("uia_text", _read_text_via_text_pattern),
@@ -275,9 +293,9 @@ def _read_text_via_uia(
                 ("uia_legacy", _read_text_via_legacy_pattern),
             ):
                 _debug_log(debug, f"[文本框解析] 尝试 {source}。")
-                text = reader(element, uiac, debug=debug)
-                if text and text.strip():
-                    return text, source, hwnd, class_name, False
+                result = reader(element, uiac, debug=debug)
+                if result and result.text.strip():
+                    return result, hwnd, class_name, False
 
             _debug_log(debug, "[文本框解析] 所有 UIA 模式均未返回可用文本。")
         finally:
@@ -288,12 +306,17 @@ def _read_text_via_uia(
             f"[文本框解析] UIA 读取异常：{type(exc).__name__}: {exc}",
             style="yellow",
         )
-        return None, None, hwnd, class_name, is_password
+        return None, hwnd, class_name, is_password
 
-    return None, None, hwnd, class_name, is_password
+    return None, hwnd, class_name, is_password
 
 
-def _read_text_via_text_pattern(element: Any, uiac: Any, *, debug: bool = False) -> str | None:
+def _read_text_via_text_pattern(
+    element: Any,
+    uiac: Any,
+    *,
+    debug: bool = False,
+) -> _UiaTextResult | None:
     pattern = _query_pattern(
         element,
         uiac.UIA_TextPatternId,
@@ -313,8 +336,27 @@ def _read_text_via_text_pattern(element: Any, uiac: Any, *, debug: bool = False)
         if not text or not text.strip():
             _debug_log(debug, "[文本框解析] TextPattern 返回空文本。")
             return None
-        _debug_log(debug, f"[文本框解析] TextPattern 成功 len={len(text)}")
-        return text
+        result = _UiaTextResult(text=text, source="uia_text")
+        _populate_caret_from_text_pattern2(
+            result,
+            element,
+            uiac,
+            text_range,
+            debug=debug,
+        )
+        if result.caret_offset is None:
+            _populate_selection_from_text_pattern(
+                result,
+                pattern,
+                uiac,
+                text_range,
+                debug=debug,
+            )
+        _debug_log(
+            debug,
+            f"[文本框解析] TextPattern 成功 len={len(text)} caret={result.caret_offset}",
+        )
+        return result
     except Exception as exc:
         _debug_log(
             debug,
@@ -324,7 +366,12 @@ def _read_text_via_text_pattern(element: Any, uiac: Any, *, debug: bool = False)
         return None
 
 
-def _read_text_via_value_pattern(element: Any, uiac: Any, *, debug: bool = False) -> str | None:
+def _read_text_via_value_pattern(
+    element: Any,
+    uiac: Any,
+    *,
+    debug: bool = False,
+) -> _UiaTextResult | None:
     pattern = _query_pattern(
         element,
         uiac.UIA_ValuePatternId,
@@ -341,7 +388,7 @@ def _read_text_via_value_pattern(element: Any, uiac: Any, *, debug: bool = False
             _debug_log(debug, "[文本框解析] ValuePattern 返回空文本。")
             return None
         _debug_log(debug, f"[文本框解析] ValuePattern 成功 len={len(text)}")
-        return text
+        return _UiaTextResult(text=text, source="uia_value")
     except Exception as exc:
         _debug_log(
             debug,
@@ -351,7 +398,12 @@ def _read_text_via_value_pattern(element: Any, uiac: Any, *, debug: bool = False
         return None
 
 
-def _read_text_via_legacy_pattern(element: Any, uiac: Any, *, debug: bool = False) -> str | None:
+def _read_text_via_legacy_pattern(
+    element: Any,
+    uiac: Any,
+    *,
+    debug: bool = False,
+) -> _UiaTextResult | None:
     pattern = _query_pattern(
         element,
         uiac.UIA_LegacyIAccessiblePatternId,
@@ -368,7 +420,7 @@ def _read_text_via_legacy_pattern(element: Any, uiac: Any, *, debug: bool = Fals
             _debug_log(debug, "[文本框解析] LegacyIAccessible 返回空文本。")
             return None
         _debug_log(debug, f"[文本框解析] LegacyIAccessible 成功 len={len(text)}")
-        return text
+        return _UiaTextResult(text=text, source="uia_legacy")
     except Exception as exc:
         _debug_log(
             debug,
@@ -376,6 +428,128 @@ def _read_text_via_legacy_pattern(element: Any, uiac: Any, *, debug: bool = Fals
             style="yellow",
         )
         return None
+
+
+def _populate_caret_from_text_pattern2(
+    result: _UiaTextResult,
+    element: Any,
+    uiac: Any,
+    document_range: Any,
+    *,
+    debug: bool = False,
+) -> None:
+    pattern = _query_pattern(
+        element,
+        uiac.UIA_TextPattern2Id,
+        uiac.IUIAutomationTextPattern2,
+        pattern_name="TextPattern2",
+        debug=debug,
+    )
+    if not pattern:
+        return
+
+    try:
+        caret_result = pattern.GetCaretRange()
+        if isinstance(caret_result, tuple):
+            is_active = bool(caret_result[0]) if caret_result else False
+            caret_range = caret_result[-1] if caret_result else None
+        else:
+            is_active = True
+            caret_range = caret_result
+
+        if not is_active or not caret_range:
+            _debug_log(debug, "[文本框解析] TextPattern2 未返回活动 caret range。")
+            return
+
+        offset = _get_range_endpoint_offset(
+            document_range,
+            caret_range,
+            uiac.TextPatternRangeEndpoint_Start,
+        )
+        if offset is None:
+            return
+        offset = _clamp_offset(offset, result.text)
+        result.caret_offset = offset
+        result.selection_start = offset
+        result.selection_end = offset
+        result.caret_source = "uia_text_pattern2"
+    except Exception as exc:
+        _debug_log(
+            debug,
+            f"[文本框解析] TextPattern2 caret 读取失败：{type(exc).__name__}: {exc}",
+            style="yellow",
+        )
+
+
+def _populate_selection_from_text_pattern(
+    result: _UiaTextResult,
+    pattern: Any,
+    uiac: Any,
+    document_range: Any,
+    *,
+    debug: bool = False,
+) -> None:
+    try:
+        ranges = pattern.GetSelection()
+        if not ranges:
+            return
+        length = int(getattr(ranges, "Length", 0) or 0)
+        if length <= 0:
+            return
+        selected_range = ranges.GetElement(length - 1)
+        if not selected_range:
+            return
+
+        start = _get_range_endpoint_offset(
+            document_range,
+            selected_range,
+            uiac.TextPatternRangeEndpoint_Start,
+        )
+        end = _get_range_endpoint_offset(
+            document_range,
+            selected_range,
+            uiac.TextPatternRangeEndpoint_End,
+        )
+        if start is None or end is None:
+            return
+
+        start = _clamp_offset(start, result.text)
+        end = _clamp_offset(end, result.text)
+        if end < start:
+            start, end = end, start
+        result.selection_start = start
+        result.selection_end = end
+        result.caret_offset = end
+        result.caret_source = "uia_selection_fallback"
+    except Exception as exc:
+        _debug_log(
+            debug,
+            f"[文本框解析] TextPattern selection 读取失败：{type(exc).__name__}: {exc}",
+            style="yellow",
+        )
+
+
+def _get_range_endpoint_offset(
+    document_range: Any,
+    target_range: Any,
+    target_endpoint: int,
+) -> int | None:
+    try:
+        prefix_range = document_range.Clone()
+        prefix_range.MoveEndpointByRange(
+            1,  # TextPatternRangeEndpoint_End
+            target_range,
+            target_endpoint,
+        )
+        prefix_text = _normalize_text(prefix_range.GetText(_MAX_DIRECT_TEXT_CHARS))
+    except Exception:
+        return None
+
+    return len(prefix_text or "")
+
+
+def _clamp_offset(offset: int, text: str) -> int:
+    return max(0, min(int(offset), len(text)))
 
 
 def _query_pattern(
