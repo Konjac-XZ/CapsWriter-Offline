@@ -15,6 +15,7 @@ dependencies = [
     "typer==0.12.5",
     "srt==3.5.3",
     "httpx[http2]==0.27.2",
+    "httpx-sse>=0.4.0,<0.5",
     "pyside6>=6.8,<6.9",
     "qt-material==2.14",
     "comtypes==1.4.13",
@@ -60,4 +61,3 @@ unresolved-attribute = "ignore"
 unresolved-import = "ignore"
 invalid-assignment = "ignore"
 invalid-argument-type = "ignore"
-

@@ -1,6 +1,8 @@
 import json
 import time
 import hashlib
+import shutil
+import subprocess as sp
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +13,7 @@ RETRY_AUDIO_DIR = TMP_DIR / "retry_audio"
 RETRY_CLAIM_DIR = TMP_DIR / "retry_claims"
 RETRY_REQUEST_PATH = TMP_DIR / "retry_latest_request.json"
 RETRY_METADATA_PATH = RETRY_AUDIO_DIR / "latest.json"
+RETRY_MP3_BITRATE = "64k"
 
 _MIME_TO_SUFFIX = {
     "audio/mpeg": ".mp3",
@@ -38,6 +41,66 @@ def latest_audio_path_for_mime(mime: str) -> Path:
     return RETRY_AUDIO_DIR / f"latest{suffix_for_mime(mime)}"
 
 
+def _atomic_write(path: Path, data: bytes) -> Path:
+    tmp = path.with_name(f".{path.name}.{time.time_ns()}.tmp")
+    tmp.write_bytes(data)
+    tmp.replace(path)
+    return path
+
+
+def _remove_file(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _transcode_latest_wav_to_mp3(wav_path: Path) -> Path | None:
+    ffmpeg = shutil.which("ffmpeg")
+    mp3_path = latest_audio_path_for_mime("audio/mpeg")
+
+    # A stale MP3 is worse than falling back to the fresh WAV.
+    _remove_file(mp3_path)
+    if not ffmpeg:
+        return None
+
+    tmp = mp3_path.with_name(f".{mp3_path.name}.{time.time_ns()}.tmp")
+    flags = getattr(sp, "CREATE_NO_WINDOW", 0)
+    try:
+        result = sp.run(
+            [
+                ffmpeg,
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(wav_path),
+                "-vn",
+                "-c:a",
+                "libmp3lame",
+                "-b:a",
+                RETRY_MP3_BITRATE,
+                "-f",
+                "mp3",
+                str(tmp),
+            ],
+            stdin=sp.DEVNULL,
+            stdout=sp.DEVNULL,
+            stderr=sp.DEVNULL,
+            creationflags=flags,
+            check=False,
+        )
+        if result.returncode == 0 and tmp.exists() and tmp.stat().st_size > 0:
+            tmp.replace(mp3_path)
+            return mp3_path
+    except Exception:
+        pass
+    finally:
+        _remove_file(tmp)
+    return None
+
+
 def get_latest_audio_path() -> Path | None:
     for suffix in (".mp3", ".wav"):
         path = RETRY_AUDIO_DIR / f"latest{suffix}"
@@ -54,24 +117,32 @@ def write_retry_cache(audio_bytes: bytes, mime: str, metadata: dict[str, Any] | 
     RETRY_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
     target = latest_audio_path_for_mime(mime)
-    tmp = target.with_name(f".{target.name}.{time.time_ns()}.tmp")
-    tmp.write_bytes(audio_bytes)
-    tmp.replace(target)
+    target = _atomic_write(target, audio_bytes)
 
-    # Keep exactly one latest audio file even if the payload format changes.
-    for suffix in (".mp3", ".wav"):
-        other = RETRY_AUDIO_DIR / f"latest{suffix}"
-        if other != target:
-            try:
-                other.unlink()
-            except FileNotFoundError:
-                pass
+    source_wav_path: Path | None = None
+    if target.suffix.lower() == ".wav":
+        source_wav_path = target
+        mp3_target = _transcode_latest_wav_to_mp3(target)
+        if mp3_target is not None:
+            target = mp3_target
+    else:
+        # Direct MP3 writes have no matching high-quality WAV source, so avoid
+        # keeping a stale WAV next to the current retry audio.
+        _remove_file(latest_audio_path_for_mime("audio/wav"))
 
     metadata_payload = {
         "audio_path": str(target),
-        "mime": mime,
+        "mime": mime_for_path(target),
         "created_at": time.time(),
     }
+    if source_wav_path is not None:
+        metadata_payload.update(
+            {
+                "source_wav_path": str(source_wav_path),
+                "source_wav_mime": "audio/wav",
+                "mp3_bitrate": RETRY_MP3_BITRATE if target.suffix.lower() == ".mp3" else None,
+            }
+        )
     if metadata:
         metadata_payload.update(metadata)
     tmp_meta = RETRY_METADATA_PATH.with_name(f".{RETRY_METADATA_PATH.name}.{time.time_ns()}.tmp")

@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -36,6 +37,7 @@ class RetryCacheTest(unittest.TestCase):
             with (
                 mock.patch.object(retry_cache, "RETRY_AUDIO_DIR", retry_dir),
                 mock.patch.object(retry_cache, "RETRY_METADATA_PATH", metadata_path),
+                mock.patch.object(retry_cache.shutil, "which", return_value=None),
             ):
                 retry_cache.write_retry_cache(old_audio, "audio/mpeg", {"source_task_id": "c1"})
                 self.assertEqual(retry_cache.get_latest_audio_path(), retry_dir / "latest.mp3")
@@ -54,6 +56,35 @@ class RetryCacheTest(unittest.TestCase):
                 self.assertNotEqual(latest_path.read_bytes(), old_audio)
                 self.assertFalse((retry_dir / "latest.mp3").exists())
                 self.assertIn('"source_task_id": "c2"', metadata_path.read_text(encoding="utf-8"))
+
+    def test_wav_retry_cache_keeps_wav_and_creates_64k_mp3_when_ffmpeg_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            retry_dir = Path(temp_dir) / "retry_audio"
+            metadata_path = retry_dir / "latest.json"
+            audio = b"wav audio"
+
+            def fake_run(args, **kwargs):
+                self.assertIn("-b:a", args)
+                self.assertEqual(args[args.index("-b:a") + 1], "64k")
+                Path(args[-1]).write_bytes(b"mp3 audio")
+                return SimpleNamespace(returncode=0)
+
+            with (
+                mock.patch.object(retry_cache, "RETRY_AUDIO_DIR", retry_dir),
+                mock.patch.object(retry_cache, "RETRY_METADATA_PATH", metadata_path),
+                mock.patch.object(retry_cache.shutil, "which", return_value="ffmpeg"),
+                mock.patch.object(retry_cache.sp, "run", side_effect=fake_run),
+            ):
+                target = retry_cache.write_retry_cache(audio, "audio/wav", {"source_task_id": "c3"})
+
+                self.assertEqual(target, retry_dir / "latest.mp3")
+                self.assertEqual(retry_cache.get_latest_audio_path(), retry_dir / "latest.mp3")
+                self.assertEqual((retry_dir / "latest.wav").read_bytes(), audio)
+                self.assertEqual((retry_dir / "latest.mp3").read_bytes(), b"mp3 audio")
+                metadata_text = metadata_path.read_text(encoding="utf-8")
+                self.assertIn('"mime": "audio/mpeg"', metadata_text)
+                self.assertIn('"source_wav_path"', metadata_text)
+                self.assertIn('"mp3_bitrate": "64k"', metadata_text)
 
 
 class ControlRequestsTest(unittest.TestCase):

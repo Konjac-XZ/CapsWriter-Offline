@@ -1,20 +1,26 @@
 from __future__ import annotations
 
 import json
+import inspect
 import os
 import sys
 import threading
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
 import httpx
+from httpx_sse import aconnect_sse
 import yaml
 
 from src.polish.smart_quotes import normalize_zh_cn_smart_quotes
 from src.polish.textbox_context import TextBoxContext, get_active_textbox_context
 from src.polish.vision_context import get_recent_vision_context_summary
 from src.infra.response_parse import extract_text_from_body
+
+
+PolishStreamCallback = Callable[[str], None | Awaitable[None]]
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +230,133 @@ def _extract_error_message(payload: Any) -> str | None:
     if isinstance(err, str) and err.strip():
         return err.strip()
     return None
+
+
+async def _call_polish_stream_callback(
+    callback: PolishStreamCallback | None,
+    value: str,
+) -> None:
+    if callback is None:
+        return
+    try:
+        result = callback(value)
+        if inspect.isawaitable(result):
+            await result
+    except Exception:
+        pass
+
+
+def _extract_stream_text_from_obj(obj: Any) -> tuple[str | None, bool]:
+    if isinstance(obj, str):
+        return obj, True
+    if not isinstance(obj, dict):
+        return None, False
+
+    if isinstance(obj.get("delta"), str):
+        return obj["delta"], True
+
+    if isinstance(obj.get("text"), str):
+        return obj["text"], False
+
+    try:
+        delta = obj["choices"][0]["delta"].get("content")
+        if isinstance(delta, str):
+            return delta, True
+    except Exception:
+        pass
+
+    if isinstance(obj.get("choices"), list):
+        return None, False
+
+    if obj.get("object") == "chat.completion.chunk":
+        return None, False
+
+    txt = extract_text_from_body(json.dumps(obj, ensure_ascii=False))
+    if isinstance(txt, str) and txt:
+        return txt, False
+    return None, False
+
+
+async def _stream_polish_request(
+    client: httpx.AsyncClient,
+    url: str,
+    headers: dict[str, str],
+    body: dict[str, Any],
+    *,
+    on_delta: PolishStreamCallback | None = None,
+    on_text: PolishStreamCallback | None = None,
+) -> tuple[str | None, int]:
+    streamed_body = dict(body)
+    streamed_body["stream"] = True
+    status_code = 0
+    current_text = ""
+
+    async with aconnect_sse(
+        client,
+        "POST",
+        url,
+        headers=headers,
+        json=streamed_body,
+    ) as event_source:
+        status_code = event_source.response.status_code
+        if status_code >= 400:
+            return None, status_code
+
+        async for event in event_source.aiter_sse():
+            s = event.data.strip()
+            if s in ("[DONE]", "DONE"):
+                break
+
+            try:
+                obj = json.loads(s)
+            except Exception:
+                txt = extract_text_from_body(s)
+                if isinstance(txt, str) and txt:
+                    current_text += txt
+                    await _call_polish_stream_callback(on_delta, txt)
+                    await _call_polish_stream_callback(on_text, current_text)
+                continue
+
+            text_part, is_delta = _extract_stream_text_from_obj(obj)
+            if not isinstance(text_part, str) or not text_part:
+                continue
+
+            if is_delta:
+                current_text += text_part
+                delta = text_part
+            else:
+                delta = text_part[len(current_text):] if text_part.startswith(current_text) else text_part
+                current_text = text_part
+
+            await _call_polish_stream_callback(on_delta, delta)
+            await _call_polish_stream_callback(on_text, current_text)
+
+    return current_text if current_text.strip() else None, status_code
+
+
+async def _nonstream_polish_request(
+    client: httpx.AsyncClient,
+    url: str,
+    headers: dict[str, str],
+    body: dict[str, Any],
+) -> tuple[str | None, int]:
+    nonstream_body = dict(body)
+    nonstream_body["stream"] = False
+    response = await client.post(url, headers=headers, json=nonstream_body)
+    status_code = response.status_code
+    if status_code >= 400:
+        return None, status_code
+
+    try:
+        payload = response.json()
+        body_text = json.dumps(payload, ensure_ascii=False)
+    except Exception:
+        body_text = response.text
+
+    polished = extract_text_from_body(body_text)
+    if isinstance(polished, str) and polished.strip():
+        return polished, status_code
+    return None, status_code
 
 
 def _truncate_textbox_context(
@@ -594,7 +727,12 @@ def _build_messages(
     return messages
 
 
-async def polish_text(text: str) -> str:
+async def polish_text(
+    text: str,
+    *,
+    on_delta: PolishStreamCallback | None = None,
+    on_text: PolishStreamCallback | None = None,
+) -> str:
     global _missing_config_warned, _feature_state_logged
 
     # Log once whether the feature is on or off
@@ -695,7 +833,7 @@ async def polish_text(text: str) -> str:
 
     body: dict[str, Any] = {
         "model": model,
-        "stream": False,
+        "stream": True,
         "thinking": {"type": "disabled"},
         "messages": _build_messages(
             prompt,
@@ -728,30 +866,29 @@ async def polish_text(text: str) -> str:
     try:
         _t_http = time.monotonic()
         async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_s)) as client:
-            response = await client.post(url, headers=headers, json=body)
+            try:
+                polished, status_code = await _stream_polish_request(
+                    client,
+                    url,
+                    headers,
+                    body,
+                    on_delta=on_delta,
+                    on_text=on_text,
+                )
+            except Exception:
+                polished, status_code = None, 0
+            if polished is None:
+                polished, status_code = await _nonstream_polish_request(
+                    client,
+                    url,
+                    headers,
+                    body,
+                )
         _http_elapsed = time.monotonic() - _t_http
         # console.print(
-        #     f"[LLM 润色] 响应状态：{response.status_code}  耗时={_http_elapsed:.2f}s",
+        #     f"[LLM 润色] 响应状态：{status_code}  耗时={_http_elapsed:.2f}s",
         #     style="dim",
         # )
-        if response.status_code >= 400:
-            try:
-                _extract_error_message(response.json())
-            except Exception:
-                response.text.strip()
-            # console.print(
-            #     f"[LLM 润色] 润色请求失败：{response.status_code} {detail or ''}".rstrip(),
-            #     style="yellow",
-            # )
-            return text
-
-        try:
-            payload = response.json()
-            body_text = json.dumps(payload, ensure_ascii=False)
-        except Exception:
-            body_text = response.text
-
-        polished = extract_text_from_body(body_text)
         if isinstance(polished, str) and polished.strip():
             polished_text = polished.strip()
             if is_smart_quotes_enabled():
@@ -763,7 +900,7 @@ async def polish_text(text: str) -> str:
             return polished_text
 
         # console.print(
-        #     f"[LLM 润色] 润色响应未提取到文本，原始正文（前 400 字符）：{body_text[:400]}",
+        #     "[LLM 润色] 润色响应未提取到文本",
         #     style="yellow",
         # )
         return text

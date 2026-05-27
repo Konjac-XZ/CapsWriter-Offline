@@ -292,7 +292,7 @@ async def send_audio():
             payload_ch=payload_ch,
             duration=duration,
             source="mic",
-            cache_retry_audio=True,
+            cache_retry_audio=False,
         )
     except Exception as e:
         _emit_status_overlay("hide")

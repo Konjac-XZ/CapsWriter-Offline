@@ -1,6 +1,7 @@
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -11,7 +12,7 @@ from typing import Any, cast
 
 import yaml
 
-from PySide6.QtCore import QPoint, Qt, QTimer
+from PySide6.QtCore import QPoint, QSize, Qt, QTimer
 from PySide6.QtGui import (
     QAction,
     QIcon,
@@ -35,6 +36,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QSizePolicy,
+    QStyle,
     QSystemTrayIcon,
     QTextEdit,
     QVBoxLayout,
@@ -59,7 +61,7 @@ load_startup_env()
 
 from src.infra.config import ClientConfig as Config
 from src.audio.control_requests import write_abandon_request, write_clear_history_request
-from src.audio.retry_cache import has_retry_audio, write_retry_request
+from src.audio.retry_cache import has_retry_audio, latest_audio_path_for_mime, write_retry_request
 from src.gui.app_startup import apply_theme_later, configure_app_locale_and_font, print_screen_scale
 from src.gui.listening_overlay import StatusOverlayController
 from src.gui.prompt_editor import PromptEditDialog
@@ -107,6 +109,17 @@ def _elapsed_ms(start: float) -> float:
     return (time.perf_counter() - start) * 1000.0
 
 
+def _resolve_ffplay_exe() -> str | None:
+    if ffplay := shutil.which("ffplay"):
+        return ffplay
+
+    for candidate in (ROOT / "ffplay.exe", ROOT / "bin" / "ffplay.exe"):
+        if candidate.exists():
+            return str(candidate)
+
+    return None
+
+
 class GUI(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -125,6 +138,10 @@ class GUI(QMainWindow):
         self._suppress_append_timing = False
         self._watchdog_stop = threading.Event()
         self._watchdog_reports = 0
+        self._worker_restart_lock = threading.Lock()
+        self._worker_restart_running = False
+        self._worker_restart_pending = False
+        self._latest_wav_player: subprocess.Popen[str] | None = None
         self.core_client_process: subprocess.Popen[str] | None = None
         self.text_box_wordCountLabel: QLabel | None = None
         self.old_pos = QPoint()
@@ -549,6 +566,19 @@ class GUI(QMainWindow):
         self.clear_screen_button.clicked.connect(self.clear_text_box)
         self.clear_screen_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         action_row.addWidget(self.clear_screen_button)
+
+        self.play_latest_wav_button = QPushButton()
+        self.play_latest_wav_button.setToolTip("播放最近一次录音 WAV")
+        self.play_latest_wav_button.clicked.connect(self.toggle_latest_wav_playback)
+        self.play_latest_wav_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.play_latest_wav_button.setFixedSize(28, 28)
+        self.play_latest_wav_button.setIconSize(QSize(16, 16))
+        action_row.addWidget(self.play_latest_wav_button)
+
+        self.latest_wav_playback_timer = QTimer(self)
+        self.latest_wav_playback_timer.timeout.connect(self._refresh_latest_wav_playback_state)
+        self.latest_wav_playback_timer.start(250)
+        self._update_latest_wav_playback_button(False)
 
         context_toggle_row = QHBoxLayout()
         context_toggle_row.setSpacing(10)
@@ -1191,7 +1221,8 @@ class GUI(QMainWindow):
         if self._gui_timing_reports >= 60:
             return
         self._gui_timing_reports += 1
-        self._log_queue_from_thread(f"[timing][watchdog] {message}")
+        first_line = message.splitlines()[0]
+        self._log_queue_from_thread(f"[timing][watchdog] {first_line}")
 
     def _log_queue_from_thread(self, text: str) -> None:
         try:
@@ -1224,6 +1255,83 @@ class GUI(QMainWindow):
             self.append_colored_line("已请求重试最近一次录音。", "#008000")
         except Exception as exc:
             self.append_colored_line(f"请求重试失败：{exc}", "#ff5555")
+
+    def _latest_wav_path(self) -> Path:
+        return latest_audio_path_for_mime("audio/wav")
+
+    def _is_latest_wav_playing(self) -> bool:
+        player = self._latest_wav_player
+        return player is not None and player.poll() is None
+
+    def _update_latest_wav_playback_button(self, playing: bool) -> None:
+        style = self.style()
+        icon = style.standardIcon(
+            QStyle.StandardPixmap.SP_MediaStop if playing else QStyle.StandardPixmap.SP_MediaVolume
+        )
+        self.play_latest_wav_button.setIcon(icon)
+        self.play_latest_wav_button.setToolTip("停止播放最近一次录音 WAV" if playing else "播放最近一次录音 WAV")
+        self.play_latest_wav_button.setAccessibleName("停止播放最近录音" if playing else "播放最近录音")
+
+    def _refresh_latest_wav_playback_state(self) -> None:
+        if self._latest_wav_player is not None and self._latest_wav_player.poll() is not None:
+            self._latest_wav_player = None
+        self._update_latest_wav_playback_button(self._is_latest_wav_playing())
+
+    def _stop_latest_wav_playback(self) -> None:
+        player = self._latest_wav_player
+        self._latest_wav_player = None
+        if player is not None and player.poll() is None:
+            try:
+                player.terminate()
+                try:
+                    player.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    player.kill()
+            except Exception:
+                pass
+        self._update_latest_wav_playback_button(False)
+
+    def toggle_latest_wav_playback(self) -> None:
+        if self._is_latest_wav_playing():
+            self._stop_latest_wav_playback()
+            return
+
+        wav_path = self._latest_wav_path()
+        if not wav_path.exists() or not wav_path.is_file() or wav_path.stat().st_size <= 0:
+            self.append_colored_line("没有可播放的 latest.wav。", "#ff8800")
+            self._update_latest_wav_playback_button(False)
+            return
+
+        ffplay = _resolve_ffplay_exe()
+        if ffplay is None:
+            self.append_colored_line("未找到 ffplay，无法播放 latest.wav。", "#ff5555")
+            self._update_latest_wav_playback_button(False)
+            return
+
+        self._stop_latest_wav_playback()
+
+        command = [
+            ffplay,
+            "-nodisp",
+            "-v",
+            "quiet",
+            "-autoexit",
+            str(wav_path),
+        ]
+        try:
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+            self._latest_wav_player = subprocess.Popen(
+                command,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                startupinfo=startupinfo,
+            )
+            self._update_latest_wav_playback_button(True)
+        except Exception as exc:
+            self._latest_wav_player = None
+            self._update_latest_wav_playback_button(False)
+            self.append_colored_line(f"播放 latest.wav 失败：{exc}", "#ff5555")
 
     def abandon_current_task(self) -> None:
         try:
@@ -1451,6 +1559,7 @@ class GUI(QMainWindow):
 
     def closeEvent(self, event):
         # Minimize to system tray instead of closing the window when the user clicks the close button
+        self._stop_latest_wav_playback()
         self.hide()  # Hide the window
         event.ignore()  # Ignore the close event
 
@@ -1463,6 +1572,7 @@ class GUI(QMainWindow):
             self.status_overlay.hide_all()
         except Exception:
             pass
+        self._stop_latest_wav_playback()
         # Terminate core_client.py and any launcher-spawned child processes from this checkout.
         self._stop_core_client_processes()
 
@@ -1633,11 +1743,12 @@ class GUI(QMainWindow):
         except Exception:
             pass
 
-    def _start_worker(self, script_rel_path: str, attr_name: str) -> None:
+    def _start_worker(self, script_rel_path: str, attr_name: str, *, log_errors: bool = True) -> bool:
         exe = resolve_pythonw_client()
         if exe is None:
-            self.append_plain_line("未找到可用的 Python 运行时。无法重启子进程。")
-            return
+            if log_errors:
+                self.append_plain_line("未找到可用的 Python 运行时。无法重启子进程。")
+            return False
         try:
             p = subprocess.Popen(
                 [exe, str(ROOT / script_rel_path)],
@@ -1655,20 +1766,52 @@ class GUI(QMainWindow):
                 args=(p.stdout,),
                 daemon=True,
             ).start()
+            return True
         except Exception as e:
-            self.append_plain_line(f"启动子进程失败({script_rel_path}): {e}")
+            if log_errors:
+                self.append_plain_line(f"启动子进程失败({script_rel_path}): {e}")
+            return False
 
     def restart_children_with_env(self) -> None:
-        """Restart only worker subprocesses to pick up new environment, keep GUI alive."""
+        """Restart worker subprocesses without blocking the Qt event loop."""
         try:
             self.status_overlay.hide_all()
         except Exception:
             pass
-        # Stop existing workers
-        self._stop_core_client_processes()
+        with self._worker_restart_lock:
+            if self._worker_restart_running:
+                self._worker_restart_pending = True
+                self._log_queue_from_thread("录音进程正在重启，已合并新的重启请求。")
+                return
+            self._worker_restart_running = True
 
-        # Core client last
-        self._start_worker("core_client.py", "core_client_process")
+        threading.Thread(
+            target=self._restart_children_with_env_worker,
+            name="capswriter-worker-restart",
+            daemon=True,
+        ).start()
+
+    def _restart_children_with_env_worker(self) -> None:
+        try:
+            while True:
+                self._stop_core_client_processes()
+                if not self._start_worker("core_client.py", "core_client_process", log_errors=False):
+                    self._log_queue_from_thread("启动子进程失败(core_client.py)。")
+                    with self._worker_restart_lock:
+                        self._worker_restart_running = False
+                        self._worker_restart_pending = False
+                    return
+                with self._worker_restart_lock:
+                    if self._worker_restart_pending:
+                        self._worker_restart_pending = False
+                        continue
+                    self._worker_restart_running = False
+                    return
+        except Exception as exc:
+            self._log_queue_from_thread(f"重启录音进程失败: {exc}")
+            with self._worker_restart_lock:
+                self._worker_restart_running = False
+                self._worker_restart_pending = False
 
 
 
@@ -1736,6 +1879,8 @@ class GUI(QMainWindow):
             widgets.append(self.retry_latest_button)
         if hasattr(self, 'clear_screen_button'):
             widgets.append(self.clear_screen_button)
+        if hasattr(self, 'play_latest_wav_button'):
+            widgets.append(self.play_latest_wav_button)
         if hasattr(self, 'model_combo'):
             widgets.append(self.model_combo)
         if hasattr(self, 'model_label'):
