@@ -281,6 +281,36 @@ class OpenRouterProvider(TranscriptionProvider):
         return text_result, status_code, t_submit, t_complete, {"http2": http2_flag}
 
 
+class XiaomiProvider(TranscriptionProvider):
+    def name(self) -> str:
+        return "xiaomi"
+
+    async def transcribe(
+        self,
+        payload_buf: io.BytesIO,
+        payload_mime: str,
+        task_id: str,
+        time_start: float,
+        record_stop: float,
+        max_retries: int,
+        base_delay: float,
+    ) -> Tuple[str, int, float, float, Dict[str, Any]]:
+        from src.transcribe.xiaomi.xiaomi_transcribe_http import (
+            transcribe_with_retries as xiaomi_transcribe,
+        )
+
+        text_result, status_code, t_submit, t_complete, http2_flag = await xiaomi_transcribe(
+            payload_buf,
+            payload_mime,
+            task_id,
+            time_start,
+            record_stop,
+            max_retries,
+            base_delay,
+        )
+        return text_result, status_code, t_submit, t_complete, {"http2": http2_flag}
+
+
 def make_provider(kind: str) -> TranscriptionProvider:
     kind = (kind or "").strip().lower()
     if kind in ("openai", "oai"):
@@ -297,5 +327,7 @@ def make_provider(kind: str) -> TranscriptionProvider:
         return GeminiProvider()
     if kind in ("openrouter", "open-router"):
         return OpenRouterProvider()
+    if kind in ("xiaomi", "mimo", "xiaomi-mimo"):
+        return XiaomiProvider()
     # Default
     return OpenAIProvider()

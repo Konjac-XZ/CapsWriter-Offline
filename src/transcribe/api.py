@@ -90,6 +90,9 @@ async def transcribe_audio(
         "google",
         "openrouter",
         "open-router",
+        "xiaomi",
+        "mimo",
+        "xiaomi-mimo",
     ):
         prov = make_provider(provider)
         return await prov.transcribe(
