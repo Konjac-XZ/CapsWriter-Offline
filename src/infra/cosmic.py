@@ -93,7 +93,6 @@ class Cosmic:
     audio_files = {}
     stream: Union[None, sd.InputStream] = None
     transcribe_subtitles = False
-    opposite_state = False
     # Whether we've already shown the non-USB-device warning during this run
     usb_warning_shown = False
     vision_context: dict[str, Any] = {}

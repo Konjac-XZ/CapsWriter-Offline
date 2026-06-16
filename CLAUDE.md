@@ -31,7 +31,7 @@ Guidance for Claude Code (claude.ai/code) when working inside this fork of CapsW
 
 - **Audio capture:** Global hotkeys (CapsLock by default) trigger recordings via `src/client_shortcut_handler.py`. Drag-and-drop in the GUI or passing a file to `core_client.py` uploads audio files instead of live mic input.
 - **Cloud transcription:** Audio is converted with `src/openai_transcribe_audio.py` and submitted through `src/transcribe/api.py`, which routes to OpenAI-compatible, Replicate, ElevenLabs, Soniox, or Alibaba Cloud endpoints depending on the active provider.
-- **Text output:** Streaming updates appear in-console/GUI; final results are spaced with `pangu`, optional simplified↔traditional conversion happens in `src/client_recv_result.py`, and clipboard/cloud clipboard helpers live under `src/cloud_clipboard*.py`.
+- **Text output:** Streaming updates appear in-console/GUI; final results are spaced with `pangu`, and clipboard/cloud clipboard helpers live under `src/cloud_clipboard*.py`.
 - **Logging:** Optional audio file persistence and markdown journaling (`src/client_write_md.py`) remain available, though keyword diary logic was removed with hotwords.
 
 ## Configuration System

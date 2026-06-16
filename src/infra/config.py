@@ -6,7 +6,7 @@ import tomllib
 
 # 加载TOML配置文件
 # When running from PyInstaller, look for config.toml next to the executable
-if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
     # Running in PyInstaller bundle - config.toml is in the same directory as the .exe
     config_toml_path = Path(sys.executable).parent / "config.toml"
 else:
@@ -55,13 +55,12 @@ class ServerConfig:
 class ClientConfig:
     addr: str = str(client_cfg.get("addr", ""))
     speech_recognition_port: str = str(client_cfg.get("speech_recognition_port", ""))
-    speech_recognition_shortcut: str = str(client_cfg.get("speech_recognition_shortcut", ""))
+    speech_recognition_shortcut: str = str(
+        client_cfg.get("speech_recognition_shortcut", "")
+    )
     toggle_textbox_context_shortcut: str = str(
         client_cfg.get("toggle_textbox_context_shortcut", "")
     )
-    hold_mode: bool = bool(client_cfg.get("hold_mode", False))
-    suppress: bool = bool(client_cfg.get("suppress", False))
-    restore_key: bool = bool(client_cfg.get("restore_key", False))
     threshold: float = float(client_cfg.get("threshold", 0.0))
     paste: bool = bool(client_cfg.get("paste", False))
     restore_clipboard_after_paste: bool = bool(
@@ -97,21 +96,22 @@ class ClientConfig:
     )
     show_listening_overlay: bool = bool(client_cfg.get("show_listening_overlay", True))
 
-    check_microphone_usage_by: str = str(client_cfg.get("check_microphone_usage_by", ""))
-    enable_double_click_opposite_state: bool = bool(
-        client_cfg.get("enable_double_click_opposite_state", False)
+    check_microphone_usage_by: str = str(
+        client_cfg.get("check_microphone_usage_by", "")
     )
-    convert_to_traditional_chinese_main: str = str(
-        client_cfg.get("convert_to_traditional_chinese_main", "")
-    )
-    opencc_converter: str = str(client_cfg.get("opencc_converter", ""))
+
+
 # 模型路径配置
 class ModelPaths:
     model_dir: Path = Path(str(model_paths_cfg.get("model_dir", "")))
     sensevoice_path: Path = Path(str(model_paths_cfg.get("sensevoice_path", "")))
-    sensevoice_tokens_path: Path = Path(str(model_paths_cfg.get("sensevoice_tokens_path", "")))
+    sensevoice_tokens_path: Path = Path(
+        str(model_paths_cfg.get("sensevoice_tokens_path", ""))
+    )
     paraformer_path: Path = Path(str(model_paths_cfg.get("paraformer_path", "")))
-    paraformer_tokens_path: Path = Path(str(model_paths_cfg.get("paraformer_tokens_path", "")))
+    paraformer_tokens_path: Path = Path(
+        str(model_paths_cfg.get("paraformer_tokens_path", ""))
+    )
     punc_model_dir: Path = Path(str(model_paths_cfg.get("punc_model_dir", "")))
 
 

@@ -1,7 +1,6 @@
 import asyncio
 import os
 import time
-import opencc
 import pangu
 from src.infra.cosmic import Cosmic, console
 from src.polish.llm_polish import polish_text, record_finalized_text
@@ -36,7 +35,6 @@ def _clear_abandoned_task(task_id: str | None) -> None:
         if getattr(Cosmic, "active_task_id", None) == task_id:
             Cosmic.active_task_id = None
     Cosmic.abandon_requested = False
-    Cosmic.opposite_state = False
 
 
 def _clear_active_task(task_id: str | None) -> None:
@@ -115,26 +113,11 @@ async def recv_result():
                 _clear_active_task(current_tid)
                 continue
 
-            # 正则替换（在 strip_punc 之后、pangu / opencc 之前执行）
+            # 正则替换（在 strip_punc 之后、pangu 之前执行）
             text = regex_replace(text)
 
             # # 中文数字 ITN（在正则替换之后、空白格式化之前执行）
             # text = chinese_to_num(text)
-
-            # 简繁转换
-            convert_to_traditional_chinese_done = False
-            traditional_text = None
-            if is_final:
-                converter = opencc.OpenCC(Config.opencc_converter)
-                traditional_text = converter.convert(text)
-                convert_to_traditional_chinese_done = True
-
-            if _is_abandoned(current_tid):
-                _clear_abandoned_task(current_tid)
-                if hide_status_overlay_when_done:
-                    _emit_status_overlay("hide")
-                _clear_active_task(current_tid)
-                continue
 
             # 仅在最终结果时进行音频重命名与 Markdown 写入
             file_audio = None
@@ -146,11 +129,7 @@ async def recv_result():
                     )
                 if Config.save_markdown:
                     # 记录写入 md 文件
-                    match Config.convert_to_traditional_chinese_main:
-                        case "繁":
-                            write_md(traditional_text or text, message.get("time_start"), file_audio)
-                        case _:
-                            write_md(text, message.get("time_start"), file_audio)
+                    write_md(text, message.get("time_start"), file_audio)
 
             # 控制台输出
             if is_final:
@@ -218,10 +197,10 @@ async def recv_result():
                 Cosmic._stream_had_increments = False
 
             if is_stream and not is_final:
-                # 增量：不做简繁转换，直接键入原文增量
+                # 增量：直接键入原文增量
                 await type_incremental(text)
             else:
-                # 最终：按原逻辑输出（含简繁转换），但走剪贴板粘贴
+                # 最终：按原逻辑输出，但走剪贴板粘贴
                 # 若此前已有流式增量输出，则不再进行最终粘贴，避免重复
                 if is_stream and getattr(Cosmic, "_stream_had_increments", False):
                     # 完结时重置计数与标记
@@ -230,26 +209,8 @@ async def recv_result():
                     Cosmic._stream_had_increments = False
                     # 不进行任何粘贴输出
                     pass
-                elif convert_to_traditional_chinese_done:
-                    match Config.convert_to_traditional_chinese_main:
-                        case "繁":
-                            if Cosmic.opposite_state:
-                                # text 已在上方做过 pangu 与标点补全
-                                await type_final(text)
-                            else:
-                                traditional_text = pangu.spacing_text(traditional_text)
-                                await type_final(traditional_text)
-                        case _:
-                            if Cosmic.opposite_state:
-                                traditional_text = pangu.spacing_text(traditional_text)
-                                await type_final(traditional_text)
-                            else:
-                                # text 已在上方做过 pangu 与标点补全
-                                await type_final(text)
-                    convert_to_traditional_chinese_done = False
                 else:
                     await type_final(text)
-            Cosmic.opposite_state = False
             _clear_active_task(current_tid)
             if hide_status_overlay_when_done:
                 _emit_status_overlay("hide")
