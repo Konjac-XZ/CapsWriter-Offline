@@ -200,6 +200,46 @@ def should_polish_text(text: str) -> bool:
     return is_llm_polish_enabled() and bool((text or "").strip())
 
 
+def remove_textbox_duplicate_prefix(text: str, captured: TextBoxContext | None) -> str:
+    """Remove text already present before the active textbox insertion point."""
+    if not text or captured is None or not captured.text:
+        return text
+
+    existing = _get_text_before_insertion_point(captured)
+    if not existing:
+        return text
+
+    overlap = _longest_suffix_prefix_overlap(existing, text)
+    if overlap <= 0:
+        return text
+    return text[overlap:].lstrip()
+
+
+def _get_text_before_insertion_point(captured: TextBoxContext) -> str:
+    if captured.selection_start is not None and captured.selection_end is not None:
+        insertion_offset = min(captured.selection_start, captured.selection_end)
+    elif captured.caret_offset is not None:
+        insertion_offset = captured.caret_offset
+    else:
+        return ""
+    insertion_offset = _clamp_text_offset(insertion_offset, captured.text)
+    return captured.text[:insertion_offset]
+
+
+def _longest_suffix_prefix_overlap(existing: str, incoming: str) -> int:
+    max_overlap = min(len(existing), len(incoming))
+    for overlap in range(max_overlap, 0, -1):
+        if existing[-overlap:] != incoming[:overlap]:
+            continue
+        if _is_meaningful_duplicate_overlap(incoming[:overlap]):
+            return overlap
+    return 0
+
+
+def _is_meaningful_duplicate_overlap(text: str) -> bool:
+    return sum(1 for char in text if not char.isspace()) >= 2
+
+
 def is_smart_quotes_enabled() -> bool:
     smart_quotes_cfg = _cfg().get("smart_quotes", {})
     if not isinstance(smart_quotes_cfg, dict):
@@ -784,6 +824,7 @@ async def polish_text(
 
     _missing_config_warned = False
 
+    captured_textbox_context: TextBoxContext | None = None
     textbox_context: str | None = None
     textbox_context_has_position = False
     vision_context: str | None = None
@@ -794,6 +835,7 @@ async def polish_text(
         )
 
         if captured and captured.text.strip():
+            captured_textbox_context = captured
             textbox_context_has_position = _has_usable_caret_offset(captured)
             textbox_context, was_truncated = _format_textbox_context(
                 captured,
@@ -893,6 +935,10 @@ async def polish_text(
             polished_text = polished.strip()
             if is_smart_quotes_enabled():
                 polished_text = normalize_zh_cn_smart_quotes(polished_text)
+            polished_text = remove_textbox_duplicate_prefix(
+                polished_text,
+                captured_textbox_context,
+            )
             # console.print(
             #     f"[LLM 润色] 润色完成，HTTP 耗时={_http_elapsed:.2f}s  输入长度={len(text)}  输出长度={len(polished.strip())}",
             #     style="dim",

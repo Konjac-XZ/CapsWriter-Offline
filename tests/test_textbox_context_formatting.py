@@ -8,6 +8,7 @@ from src.polish.llm_polish import (
     _estimate_context_tokens,
     _format_textbox_context,
     _insert_textbox_position_markers,
+    remove_textbox_duplicate_prefix,
     _truncate_textbox_context,
 )
 from src.polish.textbox_context import TextBoxContext
@@ -79,6 +80,35 @@ class _MockStreamResponse:
 
 
 class TextboxContextFormattingTest(unittest.TestCase):
+    def test_remove_textbox_duplicate_prefix_strips_repeated_context_prefix(self) -> None:
+        captured = TextBoxContext(
+            text="这比我们一开始讨论的那锅稀汤",
+            source="uia_text",
+            caret_offset=4,
+            selection_start=4,
+            selection_end=4,
+        )
+
+        result = remove_textbox_duplicate_prefix(
+            "这比我们一开始讨论的那锅稀汤好太多了。",
+            captured,
+        )
+
+        self.assertEqual(result, "一开始讨论的那锅稀汤好太多了。")
+
+    def test_remove_textbox_duplicate_prefix_leaves_non_overlapping_text(self) -> None:
+        captured = TextBoxContext(
+            text="这比我们",
+            source="uia_text",
+            caret_offset=4,
+            selection_start=4,
+            selection_end=4,
+        )
+
+        result = remove_textbox_duplicate_prefix("完全不同的回答", captured)
+
+        self.assertEqual(result, "完全不同的回答")
+
     def test_inserts_caret_marker_at_offset(self) -> None:
         text, marker_offset = _insert_textbox_position_markers(
             "abcdef",
@@ -244,6 +274,54 @@ class TextboxContextFormattingTest(unittest.TestCase):
             _MockAsyncClient.sent_stream_json.get("thinking"),
             {"type": "disabled"},
         )
+
+    def test_polish_text_strips_duplicate_prefix_from_textbox_context(self) -> None:
+        import asyncio
+
+        from src.polish.llm_polish import polish_text
+
+        _MockAsyncClient.sent_json = None
+        _MockAsyncClient.sent_stream_json = None
+        _MockAsyncClient.stream_lines = [
+            'data: {"choices":[{"delta":{"content":"这比我们"}}]}',
+            'data: {"choices":[{"delta":{"content":"一开始讨论的那锅稀汤好太多了。"}}]}',
+            "data: [DONE]",
+        ]
+        _MockAsyncClient.stream_status_code = 200
+        _MockAsyncClient.stream_error = None
+        cfg = {
+            "enabled": True,
+            "model": "test-model",
+            "timeout": 1,
+            "prompt": "",
+            "textbox_context": {"enabled": True, "max_chars": 200, "max_tokens": 200},
+            "smart_quotes": {"enabled": False},
+        }
+        captured = TextBoxContext(
+            text="这比我们",
+            source="uia_text",
+            caret_offset=4,
+            selection_start=4,
+            selection_end=4,
+        )
+
+        with (
+            patch("src.polish.llm_polish._cfg", return_value=cfg),
+            patch("src.polish.llm_polish._get_env") as get_env,
+            patch("src.polish.llm_polish.httpx.AsyncClient", _MockAsyncClient),
+            patch("src.polish.llm_polish.get_recent_vision_context_summary", return_value=None),
+            patch("src.polish.llm_polish.get_finalized_history", return_value=[]),
+            patch("src.polish.llm_polish.get_active_textbox_context", return_value=captured),
+            patch("src.infra.user_lexicon.get_lexicon_user_message", return_value=None),
+        ):
+            get_env.side_effect = lambda name, default=None: {
+                "LLM_POLISH_BASE_URL": "https://example.test",
+                "LLM_POLISH_API_KEY": "test-key",
+            }.get(name, default)
+
+            result = asyncio.run(polish_text("一开始讨论的那锅稀汤好太多了。"))
+
+        self.assertEqual(result, "一开始讨论的那锅稀汤好太多了。")
 
     def test_polish_stream_callbacks_receive_delta_and_accumulated_text(self) -> None:
         import asyncio
