@@ -221,10 +221,6 @@ def build_request_body(payload_mime: str, audio_b64: str) -> dict[str, Any]:
         },
     }
 
-    language = get_language()
-    if language:
-        body["language"] = language
-
     temperature = get_temperature()
     if temperature is not None:
         body["temperature"] = float(temperature)
