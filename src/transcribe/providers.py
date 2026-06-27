@@ -51,7 +51,7 @@ class OpenAIProvider(TranscriptionProvider):
             get_prompt as _get_prompt,
             get_language as _get_language,
             get_temperature as _get_temperature,
-            is_streaming_enabled as _get_stream_flag,
+            is_incremental_results_enabled as _get_incremental_results_flag,
             transcribe_with_retries as _openai_transcribe_with_retries,
         )
 
@@ -71,14 +71,14 @@ class OpenAIProvider(TranscriptionProvider):
         _temp = _get_temperature()
         if _temp is not None:
             data_form_base["temperature"] = _temp
-        enable_stream_pref = _get_stream_flag()
+        enable_incremental_results = _get_incremental_results_flag()
 
         text_result, status_code, t_submit, t_complete, http2_flag = await _openai_transcribe_with_retries(
             payload_buf,
             payload_mime,
             data_form_base,
             url,
-            enable_stream_pref,
+            enable_incremental_results,
             task_id,
             time_start,
             record_stop,
@@ -103,9 +103,11 @@ class ReplicateProvider(TranscriptionProvider):
         base_delay: float,
     ) -> Tuple[str, int, float, float, Dict[str, Any]]:
         from src.transcribe.replicate.replicate_transcribe_http import transcribe_with_retries as rep_transcribe
-        from src.transcribe.openai.openai_transcribe_http import is_streaming_enabled as _get_stream_flag
+        from src.transcribe.openai.openai_transcribe_http import (
+            is_incremental_results_enabled as _get_incremental_results_flag,
+        )
 
-        enable_stream_pref = _get_stream_flag()
+        enable_incremental_results = _get_incremental_results_flag()
         language = ps_get_str("language", env="OPENAI_TRANSCRIBE_LANGUAGE", default="zh") or "zh"
         prompt = ps_get_str("prompt", env="TRANSCRIBE_PROMPT", default="") or ""
         # Parse numeric temperature
@@ -119,7 +121,7 @@ class ReplicateProvider(TranscriptionProvider):
             payload_buf,
             payload_mime,
             language,
-            enable_stream_pref,
+            enable_incremental_results,
             task_id,
             time_start,
             record_stop,

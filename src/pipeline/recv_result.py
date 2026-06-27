@@ -63,7 +63,10 @@ async def recv_result():
 
             # 基本标记
             is_final = bool(message.get("is_final"))
-            is_stream = bool(message.get("stream"))
+            is_transcript_delta = bool(message.get("is_transcript_delta", False))
+            has_incremental_transcript = bool(
+                message.get("has_incremental_transcript", message.get("stream", False))
+            )
             hide_status_overlay_when_done = is_final
             current_tid = message.get("task_id")
             if current_tid is not None:
@@ -78,8 +81,8 @@ async def recv_result():
                 _clear_active_task(current_tid)
                 continue
 
-            # 流式时：对中间增量不做末尾标点剥离，避免抖动
-            if not (is_stream and not is_final):
+            # 增量转录结果：对中间增量不做末尾标点剥离，避免抖动
+            if not is_transcript_delta:
                 text = strip_punc(text)
 
             # 最终结果可选走一次 LLM 润色；保持在正则替换与空白格式化之前
@@ -160,53 +163,53 @@ async def recv_result():
                     )
                 console.line()
             else:
-                # 轻量日志：帮助定位流式过程中是否有数据
+                # 轻量日志：帮助定位增量转录结果过程中是否有数据
                 try:
-                    last_len_dbg = getattr(Cosmic, "_last_stream_len", 0)
+                    last_len_dbg = getattr(Cosmic, "_last_transcript_delta_len", 0)
                     inc_dbg = text[last_len_dbg:]
                     if inc_dbg:
-                        console.print(f"[stream] +{inc_dbg}", style="dim")
+                        console.print(f"[transcript-delta] +{inc_dbg}", style="dim")
                 except Exception:
                     pass
 
-            # 打字：流式增量用"模拟键入"，最终结果才使用剪贴板粘贴（以减少光标跳动）
-            async def type_incremental(s: str):
+            # 打字：增量转录结果用"模拟键入"，最终结果才使用剪贴板粘贴（以减少光标跳动）
+            async def type_transcript_delta(s: str):
                 import keyboard as _kb
                 # 仅增量字符，避免重复：比较上次输出长度
-                last_len = getattr(Cosmic, "_last_stream_len", 0)
+                last_len = getattr(Cosmic, "_last_transcript_delta_len", 0)
                 inc = s[last_len:]
                 if inc:
                     _kb.write(inc)
-                    Cosmic._last_stream_len = last_len + len(inc)
-                    # 标记本 task 曾有流式增量输出
-                    Cosmic._stream_had_increments = True
+                    Cosmic._last_transcript_delta_len = last_len + len(inc)
+                    # 标记本 task 曾有增量转录结果输出
+                    Cosmic._transcript_had_deltas = True
 
             async def type_final(s: str):
                 # 重置流长度计数器
-                if hasattr(Cosmic, "_last_stream_len"):
-                    Cosmic._last_stream_len = 0
+                if hasattr(Cosmic, "_last_transcript_delta_len"):
+                    Cosmic._last_transcript_delta_len = 0
                 await type_result(s)
 
-            # 每个 task 流式独立计数，切换 task 时重置（避免跨任务污染）
-            last_tid = getattr(Cosmic, "_last_stream_task", None)
+            # 每个 task 的增量转录结果独立计数，切换 task 时重置（避免跨任务污染）
+            last_tid = getattr(Cosmic, "_last_transcript_delta_task", None)
             if current_tid != last_tid:
-                Cosmic._last_stream_task = current_tid
-                if hasattr(Cosmic, "_last_stream_len"):
-                    Cosmic._last_stream_len = 0
-                # 新任务开始时，清理流式标记
-                Cosmic._stream_had_increments = False
+                Cosmic._last_transcript_delta_task = current_tid
+                if hasattr(Cosmic, "_last_transcript_delta_len"):
+                    Cosmic._last_transcript_delta_len = 0
+                # 新任务开始时，清理增量输出标记
+                Cosmic._transcript_had_deltas = False
 
-            if is_stream and not is_final:
+            if is_transcript_delta:
                 # 增量：直接键入原文增量
-                await type_incremental(text)
+                await type_transcript_delta(text)
             else:
                 # 最终：按原逻辑输出，但走剪贴板粘贴
-                # 若此前已有流式增量输出，则不再进行最终粘贴，避免重复
-                if is_stream and getattr(Cosmic, "_stream_had_increments", False):
+                # 若此前已有增量转录结果输出，则不再进行最终粘贴，避免重复
+                if has_incremental_transcript and getattr(Cosmic, "_transcript_had_deltas", False):
                     # 完结时重置计数与标记
-                    if hasattr(Cosmic, "_last_stream_len"):
-                        Cosmic._last_stream_len = 0
-                    Cosmic._stream_had_increments = False
+                    if hasattr(Cosmic, "_last_transcript_delta_len"):
+                        Cosmic._last_transcript_delta_len = 0
+                    Cosmic._transcript_had_deltas = False
                     # 不进行任何粘贴输出
                     pass
                 else:

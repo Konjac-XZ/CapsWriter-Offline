@@ -41,7 +41,7 @@ async def type_result(text):
         keyboard.write(text)
 
 
-# 直打（用于流式增量输出）。不改动 Config.paste，以调用方控制"键入"与"粘贴"。
+# 直打（用于增量转录结果输出）。不改动 Config.paste，以调用方控制"键入"与"粘贴"。
 async def type_keys(text: str):
     keyboard.write(text)
 

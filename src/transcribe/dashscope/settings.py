@@ -144,10 +144,15 @@ def get_context_text() -> str | None:
     return None
 
 
-def get_stream_enabled() -> bool:
+def get_incremental_results_enabled() -> bool:
     if ps_get_str("stream", env="DASHSCOPE_STREAM", default=None) is not None:
         return ps_get_bool("stream", env="DASHSCOPE_STREAM", default=False)
     return ps_get_bool("stream", env="OPENAI_TRANSCRIBE_STREAM", default=False)
+
+
+def get_stream_enabled() -> bool:
+    """Backward-compatible alias for incremental transcript responses."""
+    return get_incremental_results_enabled()
 
 
 def get_enable_itn() -> bool:
@@ -225,10 +230,13 @@ def build_request_body(audio_payload: str, audio_format: str) -> Dict[str, Any]:
         body["asr_options"] = asr_options
 
     global _STREAM_WARNED
-    if get_stream_enabled():
+    if get_incremental_results_enabled():
         if not _STREAM_WARNED:
             try:
-                console.print("DashScope streaming not yet supported; falling back to non-streaming", style="bright_yellow")
+                console.print(
+                    "DashScope incremental results not yet supported; falling back to final-only results",
+                    style="bright_yellow",
+                )
             except Exception:
                 pass
             _STREAM_WARNED = True

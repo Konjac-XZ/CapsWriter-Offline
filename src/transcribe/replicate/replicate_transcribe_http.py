@@ -6,7 +6,7 @@ import random
 from typing import Tuple
 
 from src.infra.cosmic import console
-from src.transcribe.openai.openai_transcribe_http import emit_partial_update
+from src.transcribe.openai.openai_transcribe_http import emit_transcript_delta
 from src.provider.provider_settings import (
     get_bool as ps_get_bool,
     get_str as ps_get_str,
@@ -128,7 +128,7 @@ def _make_audio_input_data_uri(payload_bytes: bytes, payload_mime: str) -> str:
     return f"data:{mime};base64,{encoded}"
 
 
-async def _streaming_run(
+async def _incremental_results_run(
     audio_input,
     language: str,
     task_id: str,
@@ -165,11 +165,10 @@ async def _streaming_run(
             now = time.time()
             if now - last_emit >= 0.05:
                 last_emit = now
-                # Reuse existing partial emitter to keep outbound schema stable
-                await emit_partial_update(task_id, current, time_start, record_stop, t_submit)
+                await emit_transcript_delta(task_id, current, time_start, record_stop, t_submit)
     except Exception as e:
-        console.print(f"Replicate 流式转录异常：{e}", style="bright_yellow")
-        # Treat as failure; caller may retry non-streaming
+        console.print(f"Replicate 增量转录结果异常：{e}", style="bright_yellow")
+        # Treat as failure; caller may retry without incremental result delivery.
         t_complete = time.time()
         return current, 503, t_submit, t_complete
 
@@ -210,7 +209,7 @@ async def _nonstream_run(
         return text, 200, t_submit, t_complete
     except Exception as e:
         t_complete = time.time()
-        console.print(f"Replicate 非流式转录异常：{e}", style="bright_yellow")
+        console.print(f"Replicate 转录异常：{e}", style="bright_yellow")
         return "", 503, t_submit, t_complete
 
 
@@ -218,7 +217,7 @@ async def transcribe_with_retries(
     payload_buf: io.BytesIO,
     payload_mime: str,
     language: str,
-    enable_stream_pref: bool,
+    enable_incremental_results: bool,
     task_id: str,
     time_start: float,
     record_stop: float,
@@ -227,7 +226,7 @@ async def transcribe_with_retries(
     prompt: str | None = None,
     temperature: float | None = None,
 ) -> Tuple[str, int, float, float]:
-    """Replicate retry wrapper. Tries streaming first if enabled, then falls back with backoff."""
+    """Replicate retry wrapper. Tries incremental results first, then falls back with backoff."""
     _ensure_token()
     payload_bytes = _payload_bytes(payload_buf)
 
@@ -249,13 +248,14 @@ async def transcribe_with_retries(
             return data_uri_cache
         return _make_audio_input_file(payload_bytes, payload_mime)
 
-    # Send audio directly to Replicate. Streaming is attempted once; fall back to sync with retries.
+    # Send audio directly to Replicate. Incremental result delivery is attempted once;
+    # fall back to sync with retries.
     for attempt in range(max_retries):
         try:
-            if enable_stream_pref and attempt == 0:
-                stream_input = _build_audio_input()
-                text_result, status_code, t_submit, t_complete = await _streaming_run(
-                    stream_input,
+            if enable_incremental_results and attempt == 0:
+                incremental_input = _build_audio_input()
+                text_result, status_code, t_submit, t_complete = await _incremental_results_run(
+                    incremental_input,
                     language,
                     task_id,
                     time_start,
@@ -265,7 +265,7 @@ async def transcribe_with_retries(
                 )
                 if status_code == 200:
                     break
-            # Non-streaming path or retry after streaming failure
+            # Non-incremental path or retry after incremental result delivery failure
             run_input = _build_audio_input()
             text_result, status_code, t_submit, t_complete = await _nonstream_run(
                 run_input, language, prompt, temperature

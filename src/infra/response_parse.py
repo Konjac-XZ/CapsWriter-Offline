@@ -8,7 +8,8 @@ _NOISE_PREFIXES = (
     "录音时长",  # local duration log
     "持久连接已建立",  # local connection log
     "持久连接已关闭",  # local connection log
-    "流式转录",  # local streaming flag
+    "流式转录",  # legacy local incremental-results flag
+    "增量转录结果",  # local incremental-results flag
     "转录时延",  # local latency log
 )
 

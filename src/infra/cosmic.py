@@ -104,6 +104,6 @@ class Cosmic:
     active_send_task: Task[Any] | None = None
     active_polish_task: Task[Any] | None = None
     abandoned_task_ids: set[str] = set()
-    _last_stream_len = 0
-    _stream_had_increments = False
-    _last_stream_task: str | None = None
+    _last_transcript_delta_len = 0
+    _transcript_had_deltas = False
+    _last_transcript_delta_task: str | None = None

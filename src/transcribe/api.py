@@ -3,7 +3,7 @@ import io
 from typing import Tuple, Dict, Any
 
 from src.transcribe.openai.openai_transcribe_http import (
-    is_streaming_enabled as _get_stream_flag,
+    is_incremental_results_enabled as _get_incremental_results_flag,
 )
 from src.transcribe.providers import make_provider
 
@@ -16,9 +16,14 @@ except ImportError:
     PROVIDER_MANAGER_AVAILABLE = False
 
 
+def get_incremental_results_flag() -> bool:
+    """Whether providers should request incremental transcript responses."""
+    return _get_incremental_results_flag()
+
+
 def get_stream_flag() -> bool:
-    """Provider-agnostic accessor for the streaming flag (keeps current env compatibility)."""
-    return _get_stream_flag()
+    """Backward-compatible alias for incremental transcript responses."""
+    return get_incremental_results_flag()
 
 
 def initialize_providers() -> None:

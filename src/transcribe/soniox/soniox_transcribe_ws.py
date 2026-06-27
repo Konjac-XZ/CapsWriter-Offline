@@ -6,7 +6,7 @@ import time
 from typing import Tuple
 
 from src.infra.cosmic import console
-from src.transcribe.openai.openai_transcribe_http import emit_partial_update
+from src.transcribe.openai.openai_transcribe_http import emit_transcript_delta
 from src.provider.provider_config import provider_manager
 
 
@@ -52,11 +52,11 @@ def _get_context() -> str | None:
     return None
 
 
-def _get_enable_non_final_tokens(enable_stream_pref: bool) -> bool:
-    # Expose override but default to following the app streaming preference
+def _get_enable_non_final_tokens(enable_incremental_results: bool) -> bool:
+    # Expose override but default to following the app incremental-result preference.
     raw = os.getenv("SONIOX_ENABLE_NON_FINAL_TOKENS")
     if raw is None:
-        return bool(enable_stream_pref)
+        return bool(enable_incremental_results)
     return raw.strip() not in ("0", "false", "False")
 
 
@@ -70,7 +70,7 @@ def _get_enable_diarization() -> bool:
 
 async def _ws_transcribe(
     payload_buf: io.BytesIO,
-    enable_stream_pref: bool,
+    enable_incremental_results: bool,
     task_id: str,
     time_start: float,
     record_stop: float,
@@ -82,7 +82,7 @@ async def _ws_transcribe(
     model = _get_model()
     lang_hints = _get_language_hints()
     context = _get_context()
-    non_final = _get_enable_non_final_tokens(enable_stream_pref)
+    non_final = _get_enable_non_final_tokens(enable_incremental_results)
     endpoint_det = _get_enable_endpoint_detection()
     diar = _get_enable_diarization()
 
@@ -190,11 +190,11 @@ async def _ws_transcribe(
                                     parts.append(t["text"])
                             current_text = "".join(parts)
 
-                        if enable_stream_pref and current_text:
+                        if enable_incremental_results and current_text:
                             now = time.time()
                             if now - last_emit >= 0.05:
                                 last_emit = now
-                                await emit_partial_update(task_id, current_text, time_start, record_stop, t_submit)
+                                await emit_transcript_delta(task_id, current_text, time_start, record_stop, t_submit)
 
                     if obj.get("finished") is True:
                         break
@@ -214,14 +214,14 @@ async def _ws_transcribe(
 async def transcribe_with_retries(
     payload_buf: io.BytesIO,
     payload_mime: str,
-    enable_stream_pref: bool,
+    enable_incremental_results: bool,
     task_id: str,
     time_start: float,
     record_stop: float,
     max_retries: int,
     base_delay: float,
 ) -> Tuple[str, int, float, float]:
-    """Retry wrapper for Soniox WebSocket streaming transcription.
+    """Retry wrapper for Soniox WebSocket transcription with optional incremental results.
 
     Returns (text_result, status_code, t_submit, t_complete).
     """
@@ -240,7 +240,7 @@ async def transcribe_with_retries(
         try:
             t_submit = time.time()
             text_result, status_code, _, t_complete = await _ws_transcribe(
-                payload_buf, enable_stream_pref, task_id, time_start, record_stop
+                payload_buf, enable_incremental_results, task_id, time_start, record_stop
             )
             # If success or client error, stop retrying
             if status_code < 500 and status_code not in (408, 429):

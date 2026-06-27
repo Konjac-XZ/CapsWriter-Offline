@@ -15,6 +15,8 @@ from src.polish.textbox_context import TextBoxContext
 
 
 class _MockAsyncClient:
+    created_count = 0
+    closed_count = 0
     sent_json = None
     sent_stream_json = None
     stream_lines = [
@@ -30,13 +32,16 @@ class _MockAsyncClient:
     )
 
     def __init__(self, *args, **kwargs) -> None:
-        pass
+        _MockAsyncClient.created_count += 1
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
         return None
+
+    async def aclose(self) -> None:
+        _MockAsyncClient.closed_count += 1
 
     async def post(self, url, headers=None, json=None):
         _MockAsyncClient.sent_json = json
@@ -499,6 +504,58 @@ class TextboxContextFormattingTest(unittest.TestCase):
             result = asyncio.run(polish_text("原文"))
 
         self.assertEqual(result, "润色后文本")
+
+    def test_polish_reuses_http_client_between_requests(self) -> None:
+        import asyncio
+
+        from src.polish.llm_polish import close_polish_http_client, polish_text
+
+        asyncio.run(close_polish_http_client())
+
+        async def run_case() -> tuple[str, str]:
+            first = await polish_text("原文一")
+            second = await polish_text("原文二")
+            await close_polish_http_client()
+            return first, second
+
+        _MockAsyncClient.created_count = 0
+        _MockAsyncClient.closed_count = 0
+        _MockAsyncClient.sent_json = None
+        _MockAsyncClient.sent_stream_json = None
+        _MockAsyncClient.stream_lines = [
+            'data: {"choices":[{"delta":{"content":"润色后文本"}}]}',
+            "data: [DONE]",
+        ]
+        _MockAsyncClient.stream_status_code = 200
+        _MockAsyncClient.stream_error = None
+        cfg = {
+            "enabled": True,
+            "model": "test-model",
+            "timeout": 1,
+            "prompt": "",
+            "textbox_context": {"enabled": False},
+            "smart_quotes": {"enabled": False},
+        }
+
+        with (
+            patch("src.polish.llm_polish._cfg", return_value=cfg),
+            patch("src.polish.llm_polish._get_env") as get_env,
+            patch("src.polish.llm_polish.httpx.AsyncClient", _MockAsyncClient),
+            patch("src.polish.llm_polish.get_recent_vision_context_summary", return_value=None),
+            patch("src.polish.llm_polish.get_finalized_history", return_value=[]),
+            patch("src.infra.user_lexicon.get_lexicon_user_message", return_value=None),
+        ):
+            get_env.side_effect = lambda name, default=None: {
+                "LLM_POLISH_BASE_URL": "https://example.test",
+                "LLM_POLISH_API_KEY": "test-key",
+            }.get(name, default)
+
+            first, second = asyncio.run(run_case())
+
+        self.assertEqual(first, "润色后文本")
+        self.assertEqual(second, "润色后文本")
+        self.assertEqual(_MockAsyncClient.created_count, 1)
+        self.assertEqual(_MockAsyncClient.closed_count, 1)
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@ from src.infra.gui_output import gui_event
 from src.transcribe.openai.openai_transcribe_audio import preprocess_audio
 from src.transcribe.openai.openai_transcribe_audio import make_audio_payload
 from src.transcribe.openai.openai_transcribe_audio import get_mp3_bitrate
-from src.transcribe.api import transcribe_audio, get_stream_flag
+from src.transcribe.api import transcribe_audio, get_incremental_results_flag
 
 
 def _emit_status_overlay(action: str, state: str | None = None) -> None:
@@ -160,7 +160,9 @@ async def _submit_payload(
         "time_submit": t_submit,
         "time_complete": t_complete,
         "source": source,
-        "stream": get_stream_flag(),
+        "has_incremental_transcript": get_incremental_results_flag(),
+        # Backward compatibility for older result consumers.
+        "stream": get_incremental_results_flag(),
         "debug_timing": {
             "queue_delay_ms": max(0.0, (t_finish_entry - record_stop) * 1000.0),
             "wav_ms": max(0.0, encode_ms),

@@ -48,6 +48,7 @@ get_language = settings.get_language
 get_model = settings.get_model
 get_response_format = settings.get_response_format
 get_result_format = settings.get_result_format
+get_incremental_results_enabled = settings.get_incremental_results_enabled
 get_stream_enabled = settings.get_stream_enabled
 
 _bool_from_env = bool_from_env

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import atexit
+import asyncio
 import json
 import inspect
 import os
@@ -109,6 +111,113 @@ _missing_config_warned = False
 _feature_state_logged = False
 _finalized_history: list[str] = []
 _history_lock = threading.Lock()
+_HTTP_CLIENT: httpx.AsyncClient | None = None
+_HTTP_CLIENT_KEY: tuple[Any, ...] | None = None
+_HTTP_CLIENT_LOOP_ID: int | None = None
+
+
+def _get_bool_env(name: str, default: bool) -> bool:
+    value = _get_env(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _should_reuse_http_client() -> bool:
+    return _get_bool_env("LLM_POLISH_REUSE_HTTP_CLIENT", True)
+
+
+def _should_use_http2() -> bool:
+    return _get_bool_env("LLM_POLISH_HTTP2", True)
+
+
+def _build_http_limits() -> httpx.Limits:
+    keepalive_expiry = float(_get_env("LLM_POLISH_KEEPALIVE_EXPIRY", "90") or "90")
+    return httpx.Limits(
+        max_keepalive_connections=5,
+        max_connections=10,
+        keepalive_expiry=keepalive_expiry,
+    )
+
+
+async def close_polish_http_client(reason: str = "manual") -> None:
+    del reason
+    global _HTTP_CLIENT, _HTTP_CLIENT_KEY, _HTTP_CLIENT_LOOP_ID
+
+    client = _HTTP_CLIENT
+    _HTTP_CLIENT = None
+    _HTTP_CLIENT_KEY = None
+    _HTTP_CLIENT_LOOP_ID = None
+    if client is None:
+        return
+
+    close = getattr(client, "aclose", None)
+    if close is None:
+        return
+    try:
+        result = close()
+        if inspect.isawaitable(result):
+            await result
+    except Exception:
+        pass
+
+
+async def get_polish_http_client(
+    *,
+    base_url: str,
+    api_key: str,
+    timeout_s: float,
+) -> tuple[httpx.AsyncClient, bool]:
+    """Return a polish HTTP client and whether the caller should close it."""
+    global _HTTP_CLIENT, _HTTP_CLIENT_KEY, _HTTP_CLIENT_LOOP_ID
+
+    reuse_client = _should_reuse_http_client()
+    http2 = _should_use_http2()
+    try:
+        loop_id = id(asyncio.get_running_loop())
+    except RuntimeError:
+        loop_id = None
+    client_key = (base_url.rstrip("/"), api_key, float(timeout_s), http2)
+
+    if reuse_client and _HTTP_CLIENT is not None:
+        if _HTTP_CLIENT_KEY == client_key and _HTTP_CLIENT_LOOP_ID == loop_id:
+            return _HTTP_CLIENT, False
+        await close_polish_http_client(reason="config-changed")
+
+    client = httpx.AsyncClient(
+        timeout=httpx.Timeout(timeout_s),
+        http2=http2,
+        limits=_build_http_limits(),
+    )
+    if reuse_client:
+        _HTTP_CLIENT = client
+        _HTTP_CLIENT_KEY = client_key
+        _HTTP_CLIENT_LOOP_ID = loop_id
+        return client, False
+    return client, True
+
+
+def _atexit_close_http_client() -> None:
+    try:
+        client = globals().get("_HTTP_CLIENT")
+        if client is None:
+            return
+        close = getattr(client, "aclose", None)
+        if close is None:
+            return
+        try:
+            loop = asyncio.get_event_loop()
+        except Exception:
+            loop = None
+        if loop and loop.is_running():
+            loop.create_task(close())
+        elif loop and not loop.is_closed():
+            loop.run_until_complete(close())
+    except Exception:
+        pass
+
+
+atexit.register(_atexit_close_http_client)
 
 
 # ---------------------------------------------------------------------------
@@ -907,7 +1016,12 @@ async def polish_text(
 
     try:
         _t_http = time.monotonic()
-        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_s)) as client:
+        client, close_after_request = await get_polish_http_client(
+            base_url=base_url,
+            api_key=api_key,
+            timeout_s=timeout_s,
+        )
+        try:
             try:
                 polished, status_code = await _stream_polish_request(
                     client,
@@ -926,6 +1040,16 @@ async def polish_text(
                     headers,
                     body,
                 )
+        finally:
+            if close_after_request:
+                close = getattr(client, "aclose", None)
+                if close is not None:
+                    try:
+                        result = close()
+                        if inspect.isawaitable(result):
+                            await result
+                    except Exception:
+                        pass
         _http_elapsed = time.monotonic() - _t_http
         # console.print(
         #     f"[LLM 润色] 响应状态：{status_code}  耗时={_http_elapsed:.2f}s",
