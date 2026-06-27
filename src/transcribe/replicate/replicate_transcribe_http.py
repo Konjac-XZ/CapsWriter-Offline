@@ -26,9 +26,9 @@ def _get_input_key() -> str:
 
 
 def _ensure_token():
-    token = ps_get_str("api_token", default=None)
+    token = ps_get_str("api_token", env="REPLICATE_API_TOKEN", default=None)
     if not token:
-        raise RuntimeError("Replicate API token must be set in config/providers/replicate.yaml")
+        raise RuntimeError("REPLICATE_API_TOKEN environment variable is required for provider=replicate")
     # Replicate SDK expects REPLICATE_API_TOKEN in the process environment.
     os.environ["REPLICATE_API_TOKEN"] = token
 

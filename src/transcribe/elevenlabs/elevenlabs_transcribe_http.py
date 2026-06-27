@@ -26,10 +26,9 @@ def get_api_base() -> str:
 
 
 def get_api_key() -> str:
-    api_key = ps_get_str("api_key", default=None)
-    console.print(f"ElevenLabs API Key: {api_key}")
+    api_key = ps_get_str("api_key", env="ELEVENLABS_API_KEY", default=None)
     if not api_key:
-        raise RuntimeError("ElevenLabs API key must be set in config/providers/elevenlabs.yaml")
+        raise RuntimeError("ELEVENLABS_API_KEY environment variable is required for provider=elevenlabs")
     return api_key
 
 

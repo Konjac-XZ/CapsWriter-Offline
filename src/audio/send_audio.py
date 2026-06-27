@@ -20,6 +20,8 @@ from src.transcribe.openai.openai_transcribe_audio import preprocess_audio
 from src.transcribe.openai.openai_transcribe_audio import make_audio_payload
 from src.transcribe.openai.openai_transcribe_audio import get_mp3_bitrate
 from src.transcribe.api import transcribe_audio, get_incremental_results_flag
+from src.transcribe.providers import make_provider
+from src.transcribe.streaming import StreamingTranscriptionSession
 
 
 def _emit_status_overlay(action: str, state: str | None = None) -> None:
@@ -184,7 +186,44 @@ async def _submit_payload(
     return True
 
 
-async def _gather_audio_once(task_id: str) -> tuple[np.ndarray, float, float, float, float, str | None]:
+def _active_provider_kind() -> str:
+    try:
+        from src.provider.provider_config import provider_manager
+
+        provider = provider_manager.get_active_provider_type()
+        if provider:
+            return str(provider).strip().lower()
+    except Exception:
+        pass
+    return os.getenv("TRANSCRIBE_PROVIDER", "openai").strip().lower()
+
+
+def _create_streaming_session(task_id: str, time_start: float) -> StreamingTranscriptionSession | None:
+    provider_kind = _active_provider_kind()
+    provider = make_provider(provider_kind)
+    if not provider.supports_streaming_input():
+        return None
+    try:
+        from src.transcribe.dashscope.settings import should_show_realtime_logs
+
+        if should_show_realtime_logs():
+            console.print(f"启用实时转写链路：provider={provider.name()} task_id={task_id}", style="bright_black")
+    except Exception:
+        pass
+    return provider.create_streaming_session(task_id, time_start)
+
+
+async def _gather_audio_once(
+    task_id: str,
+) -> tuple[
+    np.ndarray,
+    float,
+    float,
+    float,
+    float,
+    str | None,
+    StreamingTranscriptionSession | None,
+]:
     """Read from queue until finish or cancel, write file if enabled, and assemble audio.
 
     Returns (audio_concat, duration, time_start, record_stop, t_finish_entry, cancel_reason). If canceled, audio is empty and
@@ -195,12 +234,21 @@ async def _gather_audio_once(task_id: str) -> tuple[np.ndarray, float, float, fl
     all_data: list[np.ndarray] = []
     duration = 0.0
     file_path, file = "", None
+    streaming_session: StreamingTranscriptionSession | None = None
+    streamed_chunks = 0
 
     while task := await Cosmic.queue_in.get():
         Cosmic.queue_in.task_done()
         ttype = task.get("type")
         if ttype == "begin":
             time_start = task["time"]
+            try:
+                streaming_session = _create_streaming_session(task_id, time_start)
+                if streaming_session is not None:
+                    await streaming_session.start()
+            except Exception as exc:
+                streaming_session = None
+                console.print(f"实时转写启动失败，回退到录完上传：{exc}", style="bright_yellow")
         elif ttype == "data":
             if task["time"] - time_start < Config.threshold:
                 cache.append(task["data"])
@@ -215,6 +263,27 @@ async def _gather_audio_once(task_id: str) -> tuple[np.ndarray, float, float, fl
                 data = task["data"]
             all_data.append(data.copy())
             duration += len(data) / 48000
+            if streaming_session is not None:
+                try:
+                    await streaming_session.send_audio(data)
+                    streamed_chunks += 1
+                    try:
+                        from src.transcribe.dashscope.settings import should_show_realtime_logs
+
+                        if should_show_realtime_logs() and (streamed_chunks == 1 or streamed_chunks % 20 == 0):
+                            console.print(
+                                f"实时转写已发送音频块：chunks={streamed_chunks} duration={duration:.2f}s",
+                                style="bright_black",
+                            )
+                    except Exception:
+                        pass
+                except Exception as exc:
+                    console.print(f"实时转写发送失败，回退到录完上传：{exc}", style="bright_yellow")
+                    try:
+                        await streaming_session.cancel()
+                    except Exception:
+                        pass
+                    streaming_session = None
             if Config.save_audio and file is not None:
                 write_file(file, data)
         elif ttype == "finish":
@@ -226,15 +295,25 @@ async def _gather_audio_once(task_id: str) -> tuple[np.ndarray, float, float, fl
                 audio_concat = np.concatenate(all_data)
             else:
                 audio_concat = np.zeros((0, 1), dtype=np.float32)
-            return audio_concat, duration, time_start, record_stop, t_finish_entry, None
+            return audio_concat, duration, time_start, record_stop, t_finish_entry, None, streaming_session
         elif ttype == "cancel":
             # no audio to upload; caller will emit blank result
             now = time.time()
-            return np.zeros((0, 1), dtype=np.float32), duration, time_start, now, now, "cancel"
+            if streaming_session is not None:
+                try:
+                    await streaming_session.cancel()
+                except Exception:
+                    pass
+            return np.zeros((0, 1), dtype=np.float32), duration, time_start, now, now, "cancel", None
 
     # Shouldn't reach here normally
     now = time.time()
-    return np.zeros((0, 1), dtype=np.float32), duration, time_start, now, now, "cancel"
+    if streaming_session is not None:
+        try:
+            await streaming_session.cancel()
+        except Exception:
+            pass
+    return np.zeros((0, 1), dtype=np.float32), duration, time_start, now, now, "cancel", None
 
 
 async def send_audio():
@@ -247,7 +326,15 @@ async def send_audio():
         if current_task is not None:
             Cosmic.active_send_task = current_task
         # Gather audio once (until finish or cancel)
-        audio_concat, duration, time_start, record_stop, t_finish_entry, cancel_reason = await _gather_audio_once(task_id)
+        (
+            audio_concat,
+            duration,
+            time_start,
+            record_stop,
+            t_finish_entry,
+            cancel_reason,
+            streaming_session,
+        ) = await _gather_audio_once(task_id)
 
         if cancel_reason is not None:
             if Cosmic.abandon_requested or task_id in Cosmic.abandoned_task_ids:
@@ -275,6 +362,54 @@ async def send_audio():
             time_start=time_start,
             record_stop=record_stop,
         )
+
+        if streaming_session is not None:
+            try:
+                text_result, status_code, t_submit, t_complete, transport_info = await streaming_session.finish()
+            except Exception as exc:
+                console.print(f"实时转写结束失败，回退到录完上传：{exc}", style="bright_yellow")
+            else:
+                if Cosmic.abandon_requested or task_id in Cosmic.abandoned_task_ids:
+                    return
+                if text_result:
+                    emitted_deltas = bool((transport_info or {}).get("emitted_deltas"))
+                    message = {
+                        "task_id": task_id,
+                        "is_final": True,
+                        "text": text_result,
+                        "time_start": time_start,
+                        "time_stop": record_stop,
+                        "time_submit": t_submit,
+                        "time_complete": t_complete,
+                        "source": "mic",
+                        "has_incremental_transcript": emitted_deltas,
+                        "stream": emitted_deltas,
+                        "debug_timing": {
+                            "queue_delay_ms": max(0.0, (t_finish_entry - record_stop) * 1000.0),
+                            "wav_ms": 0.0,
+                            "pre_submit_ms": 0.0,
+                            "upload_s": max(0.0, (t_complete - t_submit)),
+                            "total_since_keyup_s": max(0.0, (t_complete - record_stop)),
+                            "wav_bytes": 0,
+                            "sr": int((transport_info or {}).get("sample_rate") or 0),
+                            "channels": 1,
+                            "record_duration_s": float(duration),
+                            "record_duration_by_key_s": max(0.0, record_stop - time_start),
+                            "http_status": int(status_code),
+                            "mime": "audio/pcm",
+                            "bitrate": None,
+                            "http2": False,
+                            "streaming_input": True,
+                        },
+                    }
+                    await Cosmic.queue_out.put(message)
+                    message_queued = True
+                    return
+                console.print(
+                    "实时转写返回为空，回退到录完上传。"
+                    f" events={(transport_info or {}).get('event_types')}",
+                    style="bright_yellow",
+                )
 
         # Preprocess audio (mono/downsample)
         audio_proc, actual_sr = preprocess_audio(audio_concat)

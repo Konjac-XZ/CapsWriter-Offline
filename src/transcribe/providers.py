@@ -8,6 +8,7 @@ from src.provider.provider_settings import (
     get_str as ps_get_str,
     get_bool as ps_get_bool,
 )
+from src.transcribe.streaming import StreamingTranscriptionSession
 
 
 class TranscriptionProvider(ABC):
@@ -29,6 +30,16 @@ class TranscriptionProvider(ABC):
         base_delay: float,
     ) -> Tuple[str, int, float, float, Dict[str, Any]]:
         """Return (text, status_code, t_submit, t_complete, transport_meta)."""
+
+    def supports_streaming_input(self) -> bool:
+        return False
+
+    def create_streaming_session(
+        self,
+        task_id: str,
+        time_start: float,
+    ) -> StreamingTranscriptionSession:
+        raise NotImplementedError(f"{self.name()} does not support streaming input")
 
 
 class OpenAIProvider(TranscriptionProvider):
@@ -166,6 +177,20 @@ class ElevenLabsProvider(TranscriptionProvider):
 class DashScopeProvider(TranscriptionProvider):
     def name(self) -> str:
         return "dashscope"
+
+    def supports_streaming_input(self) -> bool:
+        from src.transcribe.dashscope.settings import should_use_realtime
+
+        return should_use_realtime()
+
+    def create_streaming_session(
+        self,
+        task_id: str,
+        time_start: float,
+    ) -> StreamingTranscriptionSession:
+        from src.transcribe.dashscope.dashscope_transcribe_ws import DashScopeRealtimeSession
+
+        return DashScopeRealtimeSession(task_id, time_start)
 
     async def transcribe(
         self,

@@ -49,6 +49,16 @@ def should_show_debug_logs() -> bool:
     return ps_get_bool("debug", env="DASHSCOPE_DEBUG", default=False)
 
 
+def should_show_realtime_logs() -> bool:
+    if ps_get_str("realtime_debug", env="DASHSCOPE_REALTIME_DEBUG", default=None) is not None:
+        return ps_get_bool("realtime_debug", env="DASHSCOPE_REALTIME_DEBUG", default=False)
+    return False
+
+
+def should_emit_realtime_deltas() -> bool:
+    return ps_get_bool("realtime_emit_deltas", env="DASHSCOPE_REALTIME_EMIT_DELTAS", default=False)
+
+
 def get_api_base() -> str:
     base = clean_str(ps_get_str("base_url", env="DASHSCOPE_BASE_URL", default=None))
     if not base:
@@ -112,6 +122,83 @@ def get_model() -> str:
     return "qwen3-asr-flash"
 
 
+def get_realtime_model() -> str:
+    model = clean_str(ps_get_str("realtime_model", env="DASHSCOPE_REALTIME_MODEL", default=None))
+    if model:
+        return model
+    base_model = get_model()
+    if base_model.endswith("-realtime"):
+        return base_model
+    if base_model.startswith("qwen3-asr-flash"):
+        return "qwen3-asr-flash-realtime"
+    return base_model
+
+
+def get_realtime_url() -> str:
+    url = clean_str(ps_get_str("realtime_url", env="DASHSCOPE_REALTIME_URL", default=None))
+    if url:
+        return url
+    return "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+
+
+def get_realtime_format() -> str:
+    return clean_str(ps_get_str("realtime_format", env="DASHSCOPE_REALTIME_FORMAT", default="pcm")) or "pcm"
+
+
+def get_realtime_sample_rate() -> int:
+    raw = ps_get_str("realtime_sample_rate", env="DASHSCOPE_REALTIME_SAMPLE_RATE", default="16000")
+    try:
+        return int(raw or "16000")
+    except Exception:
+        return 16000
+
+
+def get_realtime_channels() -> int:
+    raw = ps_get_str("realtime_channels", env="DASHSCOPE_REALTIME_CHANNELS", default="1")
+    try:
+        return max(1, int(raw or "1"))
+    except Exception:
+        return 1
+
+
+def get_realtime_enable_vad() -> bool:
+    return ps_get_bool("realtime_enable_vad", env="DASHSCOPE_REALTIME_ENABLE_VAD", default=False)
+
+
+def get_realtime_vad_threshold() -> float:
+    raw = ps_get_str("realtime_vad_threshold", env="DASHSCOPE_REALTIME_VAD_THRESHOLD", default="0.0")
+    try:
+        return max(-1.0, min(1.0, float(raw or "0.0")))
+    except Exception:
+        return 0.0
+
+
+def get_realtime_vad_silence_ms() -> int:
+    raw = ps_get_str("realtime_vad_silence_ms", env="DASHSCOPE_REALTIME_VAD_SILENCE_MS", default="400")
+    try:
+        return max(200, min(6000, int(raw or "400")))
+    except Exception:
+        return 400
+
+
+def get_realtime_timeout_seconds() -> float:
+    raw = ps_get_str(
+        "realtime_timeout_seconds",
+        env=["DASHSCOPE_REALTIME_TIMEOUT_SECONDS", "DASHSCOPE_TIMEOUT_SECONDS", "OPENAI_HTTP_TIMEOUT"],
+        default="30",
+    )
+    try:
+        return min(60.0, max(1.0, float(raw or "30")))
+    except Exception:
+        return 30.0
+
+
+def should_use_realtime() -> bool:
+    if ps_get_str("realtime", env="DASHSCOPE_REALTIME", default=None) is not None:
+        return ps_get_bool("realtime", env="DASHSCOPE_REALTIME", default=False)
+    return False
+
+
 def get_language() -> str | None:
     return clean_str(ps_get_str("language", env=["DASHSCOPE_LANGUAGE", "OPENAI_TRANSCRIBE_LANGUAGE"], default=None))
 
@@ -173,6 +260,55 @@ def build_asr_options() -> Dict[str, Any]:
     if get_enable_itn():
         asr_options["enable_itn"] = True
     return asr_options
+
+
+def build_realtime_parameters() -> Dict[str, Any]:
+    parameters: Dict[str, Any] = {
+        "format": get_realtime_format(),
+        "sample_rate": get_realtime_sample_rate(),
+    }
+    channels = get_realtime_channels()
+    if channels > 1:
+        parameters["channels"] = channels
+    language = get_language()
+    if language:
+        parameters["language"] = language
+    if get_enable_lid():
+        parameters["enable_lid"] = True
+    if get_enable_itn():
+        parameters["enable_itn"] = True
+    context = get_context_text()
+    if context:
+        parameters["context"] = context
+    return parameters
+
+
+def build_realtime_session_update() -> Dict[str, Any]:
+    transcription: Dict[str, Any] = {}
+    language = get_language()
+    if language:
+        transcription["language"] = language
+    context = get_context_text()
+    if context:
+        transcription["corpus"] = {"text": context}
+
+    session: Dict[str, Any] = {
+        "input_audio_format": get_realtime_format(),
+        "sample_rate": get_realtime_sample_rate(),
+        "input_audio_transcription": transcription or {},
+        "turn_detection": None,
+    }
+    if get_realtime_enable_vad():
+        session["turn_detection"] = {
+            "type": "server_vad",
+            "threshold": get_realtime_vad_threshold(),
+            "silence_duration_ms": get_realtime_vad_silence_ms(),
+        }
+    return {
+        "event_id": "event_session_update",
+        "type": "session.update",
+        "session": session,
+    }
 
 
 def build_messages(audio_payload: str, audio_format: str | None = None) -> List[Dict[str, Any]]:
