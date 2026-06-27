@@ -27,7 +27,14 @@ _DEBUG_SLOW_MS = 250.0
 
 
 def _debug_enabled(force: bool = False) -> bool:
-    return force
+    if force:
+        return True
+    try:
+        from src.transcribe.dashscope.settings import should_show_realtime_logs
+
+        return should_show_realtime_logs()
+    except Exception:
+        return False
 
 
 def _debug_log(message: str, *, force: bool = False) -> None:
@@ -102,6 +109,19 @@ def _emit_status_overlay(action: str, state: str | None = None) -> None:
         gui_event("status_overlay", **payload)
     except Exception:
         pass
+
+
+def _active_provider_uses_streaming_input() -> bool:
+    try:
+        from src.provider.provider_config import provider_manager
+        from src.transcribe.providers import make_provider
+
+        provider_kind = provider_manager.get_active_provider_type()
+        if not provider_kind:
+            return False
+        return make_provider(str(provider_kind).strip().lower()).supports_streaming_input()
+    except Exception:
+        return False
 
 
 def shortcut_correct(e: keyboard.KeyboardEvent):
@@ -313,8 +333,9 @@ def finish_task():
     if Cosmic.loop is None:
         _emit_status_overlay("hide")
         return
-    with _timed_step("finish:overlay_show_transcribing"):
-        _emit_status_overlay("show", "transcribing")
+    if not _active_provider_uses_streaming_input():
+        with _timed_step("finish:overlay_show_transcribing"):
+            _emit_status_overlay("show", "transcribing")
     with _timed_step("finish:queue_finish"):
         asyncio.run_coroutine_threadsafe(
             Cosmic.queue_in.put(

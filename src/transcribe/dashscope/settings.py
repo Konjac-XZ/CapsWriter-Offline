@@ -193,6 +193,14 @@ def get_realtime_timeout_seconds() -> float:
         return 30.0
 
 
+def get_realtime_close_timeout_seconds() -> float:
+    raw = ps_get_str("realtime_close_timeout_seconds", env="DASHSCOPE_REALTIME_CLOSE_TIMEOUT_SECONDS", default="0.2")
+    try:
+        return min(5.0, max(0.0, float(raw or "0.2")))
+    except Exception:
+        return 0.2
+
+
 def should_use_realtime() -> bool:
     if ps_get_str("realtime", env="DASHSCOPE_REALTIME", default=None) is not None:
         return ps_get_bool("realtime", env="DASHSCOPE_REALTIME", default=False)

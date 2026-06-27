@@ -7,6 +7,7 @@ import contextlib
 import json
 import time
 import uuid
+from contextlib import contextmanager
 from typing import Any, Dict, Tuple
 from urllib.parse import urlencode
 
@@ -25,6 +26,15 @@ def _rt_log(message: str, style: str = "bright_black") -> None:
         console.print(f"[dashscope-realtime] {message}", style=style)
     except Exception:
         pass
+
+
+@contextmanager
+def _rt_timed_step(name: str):
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        _rt_log(f"{name} {(time.perf_counter() - start) * 1000.0:.1f}ms")
 
 
 def _event_type(message: Dict[str, Any]) -> str:
@@ -158,6 +168,7 @@ class DashScopeRealtimeSession(StreamingTranscriptionSession):
         self.status_code = 0
         self._ws = None
         self._reader_task: asyncio.Task[None] | None = None
+        self._cleanup_task: asyncio.Task[None] | None = None
         self._session_ready = asyncio.Event()
         self._done = asyncio.Event()
         self._started = False
@@ -170,6 +181,15 @@ class DashScopeRealtimeSession(StreamingTranscriptionSession):
         self._emitted_deltas = False
         self._event_types: list[str] = []
         self._last_messages: list[Dict[str, Any]] = []
+
+    def _schedule_close(self) -> None:
+        if self._cleanup_task is not None and not self._cleanup_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            self._cleanup_task = loop.create_task(self._close())
+        except Exception:
+            pass
 
     def _event_id(self, prefix: str) -> str:
         return f"{prefix}_{uuid.uuid4().hex}"
@@ -193,7 +213,7 @@ class DashScopeRealtimeSession(StreamingTranscriptionSession):
             extra_headers=headers,
             ping_interval=20,
             ping_timeout=20,
-            close_timeout=5,
+            close_timeout=settings.get_realtime_close_timeout_seconds(),
             max_size=8 * 1024 * 1024,
         )
         self._reader_task = asyncio.create_task(self._read_loop())
@@ -232,30 +252,34 @@ class DashScopeRealtimeSession(StreamingTranscriptionSession):
             self.t_complete = self.t_submit
             return "", 204, self.t_submit, self.t_complete, {"streaming": True, "provider": "dashscope"}
 
+        t_finish_submit = time.time()
         if not settings.get_realtime_enable_vad():
             _rt_log("send input_audio_buffer.commit")
+            with _rt_timed_step("finish:send_commit"):
+                await self._send_json(
+                    {
+                        "event_id": self._event_id("event_commit"),
+                        "type": "input_audio_buffer.commit",
+                    }
+                )
+        _rt_log("send session.finish")
+        with _rt_timed_step("finish:send_session_finish"):
             await self._send_json(
                 {
-                    "event_id": self._event_id("event_commit"),
-                    "type": "input_audio_buffer.commit",
+                    "event_id": self._event_id("event_finish"),
+                    "type": "session.finish",
                 }
             )
-        _rt_log("send session.finish")
-        await self._send_json(
-            {
-                "event_id": self._event_id("event_finish"),
-                "type": "session.finish",
-            }
-        )
         timeout = settings.get_realtime_timeout_seconds()
         try:
-            await asyncio.wait_for(self._done.wait(), timeout=timeout)
+            with _rt_timed_step("finish:wait_done"):
+                await asyncio.wait_for(self._done.wait(), timeout=timeout)
         except asyncio.TimeoutError:
             self._error = f"DashScope realtime finish timed out after {timeout:.1f}s"
             console.print(self._error, style="bright_yellow")
-        await self._close()
         text = self._final_text or self._last_text
         self.t_complete = time.time()
+        self.t_submit = t_finish_submit
         self.status_code = 200 if text else (502 if self._error else 204)
         meta = {
             "streaming": True,
@@ -282,10 +306,17 @@ class DashScopeRealtimeSession(StreamingTranscriptionSession):
         if not text:
             for i, message in enumerate(self._last_messages, 1):
                 _rt_log(f"recent_message[{i}]={_message_preview(message)}", style="bright_yellow")
+            with _rt_timed_step("finish:close_ws_empty"):
+                await self._close()
+        else:
+            _rt_log("finish:schedule_close_ws")
+            self._schedule_close()
         return text, self.status_code, self.t_submit, self.t_complete, meta
 
     async def cancel(self) -> None:
         self._closed = True
+        if self._cleanup_task is not None and not self._cleanup_task.done():
+            self._cleanup_task.cancel()
         await self._close()
 
     async def _send_json(self, payload: Dict[str, Any]) -> None:

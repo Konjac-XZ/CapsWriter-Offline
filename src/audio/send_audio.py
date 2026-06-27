@@ -4,6 +4,7 @@ import asyncio
 import time
 import uuid
 import wave
+from contextlib import contextmanager
 
 import numpy as np
 
@@ -34,6 +35,30 @@ def _emit_status_overlay(action: str, state: str | None = None) -> None:
         gui_event("status_overlay", **payload)
     except Exception:
         pass
+
+
+def _realtime_debug_enabled() -> bool:
+    try:
+        from src.transcribe.dashscope.settings import should_show_realtime_logs
+
+        return should_show_realtime_logs()
+    except Exception:
+        return False
+
+
+def _realtime_debug_log(message: str) -> None:
+    if not _realtime_debug_enabled():
+        return
+    console.print(f"[timing][realtime-send] {message}", style="bright_black")
+
+
+@contextmanager
+def _timed_realtime_step(name: str):
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        _realtime_debug_log(f"{name} {(time.perf_counter() - start) * 1000.0:.1f}ms")
 
 
 def _payload_bytes(payload_buf) -> bytes:
@@ -365,7 +390,8 @@ async def send_audio():
 
         if streaming_session is not None:
             try:
-                text_result, status_code, t_submit, t_complete, transport_info = await streaming_session.finish()
+                with _timed_realtime_step("streaming_session.finish"):
+                    text_result, status_code, t_submit, t_complete, transport_info = await streaming_session.finish()
             except Exception as exc:
                 console.print(f"实时转写结束失败，回退到录完上传：{exc}", style="bright_yellow")
             else:
@@ -400,9 +426,11 @@ async def send_audio():
                             "bitrate": None,
                             "http2": False,
                             "streaming_input": True,
+                            "realtime_finish_wait_s": max(0.0, (t_complete - t_submit)),
                         },
                     }
-                    await Cosmic.queue_out.put(message)
+                    with _timed_realtime_step("queue_final_result"):
+                        await Cosmic.queue_out.put(message)
                     message_queued = True
                     return
                 console.print(

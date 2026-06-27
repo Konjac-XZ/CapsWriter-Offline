@@ -140,6 +140,48 @@ def test_realtime_finish_sends_commit_and_session_finish(monkeypatch):
     assert '"event_id": "event_finish_' in sent[1]
 
 
+def test_realtime_finish_with_text_schedules_close_without_waiting(monkeypatch):
+    import asyncio
+    import contextlib
+
+    sent = []
+    closed = False
+
+    class FakeWebSocket:
+        async def send(self, payload):
+            sent.append(payload)
+
+        async def close(self):
+            nonlocal closed
+            await asyncio.sleep(10)
+            closed = True
+
+    monkeypatch.setattr(settings, "get_realtime_enable_vad", lambda: False)
+    monkeypatch.setattr(settings, "get_realtime_timeout_seconds", lambda: 1)
+    monkeypatch.setattr(settings, "get_realtime_model", lambda: "qwen3-asr-flash-realtime")
+    monkeypatch.setattr(settings, "should_show_debug_logs", lambda: False)
+
+    async def run_case():
+        session = realtime.DashScopeRealtimeSession("task", 1.0)
+        session._ws = FakeWebSocket()
+        session._started = True
+        session._done.set()
+        session._final_text = "最终文本"
+
+        result = await asyncio.wait_for(session.finish(), timeout=0.5)
+        assert session._cleanup_task is not None
+        session._cleanup_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await session._cleanup_task
+        return result
+
+    text, status, *_ = asyncio.run(run_case())
+
+    assert text == "最终文本"
+    assert status == 200
+    assert closed is False
+
+
 def test_realtime_finish_empty_text_uses_204_status(monkeypatch):
     import asyncio
 
