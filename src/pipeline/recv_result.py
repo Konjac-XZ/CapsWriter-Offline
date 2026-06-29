@@ -71,10 +71,13 @@ async def recv_result():
             current_tid = message.get("task_id")
             if current_tid is not None:
                 current_tid = str(current_tid)
+            polish_prefetch_task = message.get("polish_prefetch_task")
 
             if current_tid is not None:
                 Cosmic.active_task_id = current_tid
             if _is_abandoned(current_tid):
+                if isinstance(polish_prefetch_task, asyncio.Task) and not polish_prefetch_task.done():
+                    polish_prefetch_task.cancel()
                 _clear_abandoned_task(current_tid)
                 if hide_status_overlay_when_done:
                     _emit_status_overlay("hide")
@@ -91,7 +94,9 @@ async def recv_result():
                 _t_polish = time.monotonic()
                 if should_polish_text(text):
                     _emit_status_overlay("show", "polishing")
-                polish_task = asyncio.create_task(polish_text(text))
+                polish_task = asyncio.create_task(
+                    polish_text(text, prepared_context=polish_prefetch_task)
+                )
                 Cosmic.active_polish_task = polish_task
                 try:
                     text = await polish_task

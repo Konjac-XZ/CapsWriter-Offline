@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,26 @@ from src.infra.response_parse import extract_text_from_body
 
 
 PolishStreamCallback = Callable[[str], None | Awaitable[None]]
+
+
+@dataclass(slots=True)
+class PolishRequestContext:
+    cfg: dict[str, Any]
+    base_url: str | None
+    api_key: str | None
+    model: str | None
+    timeout_s: float
+    temperature: Any
+    max_output_tokens: Any
+    prompt: str
+    captured_textbox_context: TextBoxContext | None
+    textbox_context: str | None
+    textbox_context_has_position: bool
+    vision_context: str | None
+    history: list[str]
+    lexicon_message: str | None
+    prepared_at: float
+    timing: dict[str, float]
 
 
 # ---------------------------------------------------------------------------
@@ -795,6 +816,97 @@ def _coerce_optional_positive_int(value: object, default: int | None = None) -> 
     return number if number > 0 else None
 
 
+def _prepare_polish_request_context() -> PolishRequestContext:
+    cfg = _cfg()
+    tc_cfg = cfg.get("textbox_context", {})
+    timings: dict[str, float] = {}
+
+    t0 = time.perf_counter()
+    base_url = _get_env("LLM_POLISH_BASE_URL")
+    api_key = _get_env("LLM_POLISH_API_KEY")
+    model: str | None = cfg.get("model") or None
+    timeout_s: float = float(cfg.get("timeout", 30.0))
+    temperature = cfg.get("temperature")
+    max_output_tokens = cfg.get("max_output_tokens")
+    prompt: str = cfg.get("prompt", "")
+    timings["config_env_ms"] = (time.perf_counter() - t0) * 1000.0
+
+    textbox_context_enabled: bool = bool(tc_cfg.get("enabled", False))
+    textbox_context_max_chars: int = max(1, int(tc_cfg.get("max_chars", 4096)))
+    textbox_context_max_tokens: int | None = _coerce_optional_positive_int(
+        tc_cfg.get("max_tokens"),
+        default=600,
+    )
+    textbox_context_debug: bool = bool(tc_cfg.get("debug", False))
+    textbox_context_excluded_process_names = _get_excluded_process_names(
+        tc_cfg.get("excluded_process_names")
+    )
+
+    captured_textbox_context: TextBoxContext | None = None
+    textbox_context: str | None = None
+    textbox_context_has_position = False
+    if textbox_context_enabled:
+        t0 = time.perf_counter()
+        captured = get_active_textbox_context(
+            debug=textbox_context_debug,
+            excluded_process_names=textbox_context_excluded_process_names,
+        )
+        timings["textbox_capture_ms"] = (time.perf_counter() - t0) * 1000.0
+
+        if captured and captured.text.strip():
+            captured_textbox_context = captured
+            textbox_context_has_position = _has_usable_caret_offset(captured)
+            t0 = time.perf_counter()
+            textbox_context, _was_truncated = _format_textbox_context(
+                captured,
+                textbox_context_max_chars,
+                textbox_context_max_tokens,
+            )
+            timings["textbox_format_ms"] = (time.perf_counter() - t0) * 1000.0
+
+    t0 = time.perf_counter()
+    vision_context = get_recent_vision_context_summary()
+    timings["vision_context_ms"] = (time.perf_counter() - t0) * 1000.0
+
+    t0 = time.perf_counter()
+    history = get_finalized_history()
+    timings["history_ms"] = (time.perf_counter() - t0) * 1000.0
+
+    t0 = time.perf_counter()
+    from src.infra.user_lexicon import get_lexicon_user_message  # local import
+
+    lexicon_message = get_lexicon_user_message()
+    timings["lexicon_ms"] = (time.perf_counter() - t0) * 1000.0
+
+    return PolishRequestContext(
+        cfg=cfg,
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        timeout_s=timeout_s,
+        temperature=temperature,
+        max_output_tokens=max_output_tokens,
+        prompt=prompt,
+        captured_textbox_context=captured_textbox_context,
+        textbox_context=textbox_context,
+        textbox_context_has_position=textbox_context_has_position,
+        vision_context=vision_context,
+        history=history,
+        lexicon_message=lexicon_message,
+        prepared_at=time.time(),
+        timing=timings,
+    )
+
+
+async def prefetch_polish_request_context() -> PolishRequestContext | None:
+    if not is_llm_polish_enabled():
+        return None
+    try:
+        return await asyncio.to_thread(_prepare_polish_request_context)
+    except Exception:
+        return None
+
+
 def _build_messages(
     prompt: str,
     asr_text: str,
@@ -802,9 +914,8 @@ def _build_messages(
     vision_context: str | None,
     history: list[str] | None = None,
     textbox_context_has_position: bool = False,
+    lexicon_message: str | None = None,
 ) -> list[dict[str, str]]:
-    from src.infra.user_lexicon import get_lexicon_user_message  # local import
-
     messages: list[dict[str, str]] = []
     if prompt:
         messages.append(
@@ -824,12 +935,11 @@ def _build_messages(
                 ),
             }
         )
-    lexicon_msg = get_lexicon_user_message()
-    if lexicon_msg:
+    if lexicon_message:
         messages.append(
             {
                 "role": "user",
-                "content": lexicon_msg,
+                "content": lexicon_message,
             }
         )
     if history:
@@ -881,6 +991,7 @@ async def polish_text(
     *,
     on_delta: PolishStreamCallback | None = None,
     on_text: PolishStreamCallback | None = None,
+    prepared_context: PolishRequestContext | Awaitable[PolishRequestContext | None] | None = None,
 ) -> str:
     global _missing_config_warned, _feature_state_logged
 
@@ -898,31 +1009,23 @@ async def polish_text(
     if not should_polish_text(text):
         return text
 
-    cfg = _cfg()
-    tc_cfg = cfg.get("textbox_context", {})
+    context: PolishRequestContext | None = None
+    if prepared_context is not None:
+        try:
+            if inspect.isawaitable(prepared_context):
+                context = await prepared_context
+            elif isinstance(prepared_context, PolishRequestContext):
+                context = prepared_context
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            context = None
+    if context is None:
+        context = await prefetch_polish_request_context()
+    if context is None:
+        return text
 
-    base_url = _get_env("LLM_POLISH_BASE_URL")
-    api_key = _get_env("LLM_POLISH_API_KEY")
-
-    model: str | None = cfg.get("model") or None
-    timeout_s: float = float(cfg.get("timeout", 30.0))
-    temperature = cfg.get("temperature")
-    max_output_tokens = cfg.get("max_output_tokens")
-
-    textbox_context_enabled: bool = bool(tc_cfg.get("enabled", False))
-    textbox_context_max_chars: int = max(1, int(tc_cfg.get("max_chars", 4096)))
-    textbox_context_max_tokens: int | None = _coerce_optional_positive_int(
-        tc_cfg.get("max_tokens"),
-        default=600,
-    )
-    textbox_context_debug: bool = bool(tc_cfg.get("debug", False))
-    textbox_context_excluded_process_names = _get_excluded_process_names(
-        tc_cfg.get("excluded_process_names")
-    )
-
-    prompt: str = cfg.get("prompt", "")
-
-    if not base_url or not api_key or not model:
+    if not context.base_url or not context.api_key or not context.model:
         if not _missing_config_warned:
             # console.print(
             #     f"[LLM 润色] 配置不完整，跳过润色。缺少：{', '.join(missing)}",
@@ -933,79 +1036,31 @@ async def polish_text(
 
     _missing_config_warned = False
 
-    captured_textbox_context: TextBoxContext | None = None
-    textbox_context: str | None = None
-    textbox_context_has_position = False
-    vision_context: str | None = None
-    if textbox_context_enabled:
-        captured = get_active_textbox_context(
-            debug=textbox_context_debug,
-            excluded_process_names=textbox_context_excluded_process_names,
-        )
-
-        if captured and captured.text.strip():
-            captured_textbox_context = captured
-            textbox_context_has_position = _has_usable_caret_offset(captured)
-            textbox_context, was_truncated = _format_textbox_context(
-                captured,
-                textbox_context_max_chars,
-                textbox_context_max_tokens,
-            )
-            # console.print(
-            #     f"[LLM 润色] 已附加文本框上下文 source={captured.source}",
-            #     style="dim",
-            # )
-        else:
-            pass
-            # console.print(
-            #     (
-            #         "[LLM 润色] 未能读取当前文本框上下文，继续仅使用 ASR 原文。"
-            #         if textbox_context_debug
-            #         else "[LLM 润色] 未能读取当前文本框上下文，继续仅使用 ASR 原文。可设置 textbox_context.debug=true 查看详细诊断。"
-            #     ),
-            #     style="dim",
-            # )
-
-    vision_context = get_recent_vision_context_summary()
-    if vision_context:
-        pass
-        # console.print(
-        #     f"[LLM 润色] 已附加视觉上下文 len={len(vision_context)}",
-        #     style="dim",
-        # )
-
-    history = get_finalized_history()
-    if history:
-        pass
-        # console.print(
-        #     f"[LLM 润色] 已附加历史上下文 条数={len(history)}",
-        #     style="dim",
-        # )
-
     body: dict[str, Any] = {
-        "model": model,
+        "model": context.model,
         "stream": True,
         "thinking": {"type": "disabled"},
         "messages": _build_messages(
-            prompt,
+            context.prompt,
             text,
-            textbox_context,
-            vision_context,
-            history,
-            textbox_context_has_position,
+            context.textbox_context,
+            context.vision_context,
+            context.history,
+            context.textbox_context_has_position,
+            context.lexicon_message,
         ),
     }
-    if temperature is not None:
-        body["temperature"] = float(temperature)
-    if max_output_tokens is not None:
-        body["max_tokens"] = int(max_output_tokens)
+    if context.temperature is not None:
+        body["temperature"] = float(context.temperature)
+    if context.max_output_tokens is not None:
+        body["max_tokens"] = int(context.max_output_tokens)
 
     headers = {
         "Accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
+        "Authorization": f"Bearer {context.api_key}",
         "Content-Type": "application/json",
     }
-    url = _build_url(base_url)
+    url = _build_url(context.base_url)
     # console.print(
     #     (
     #         f"[LLM 润色] 发送润色请求"
@@ -1017,9 +1072,9 @@ async def polish_text(
     try:
         _t_http = time.monotonic()
         client, close_after_request = await get_polish_http_client(
-            base_url=base_url,
-            api_key=api_key,
-            timeout_s=timeout_s,
+            base_url=context.base_url,
+            api_key=context.api_key,
+            timeout_s=context.timeout_s,
         )
         try:
             try:
@@ -1061,7 +1116,7 @@ async def polish_text(
                 polished_text = normalize_zh_cn_smart_quotes(polished_text)
             polished_text = remove_textbox_duplicate_prefix(
                 polished_text,
-                captured_textbox_context,
+                context.captured_textbox_context,
             )
             # console.print(
             #     f"[LLM 润色] 润色完成，HTTP 耗时={_http_elapsed:.2f}s  输入长度={len(text)}  输出长度={len(polished.strip())}",
@@ -1076,7 +1131,7 @@ async def polish_text(
         return text
     except httpx.TimeoutException:
         # console.print(
-        #     f"[LLM 润色] 润色请求超时（timeout={timeout_s}s）：{exc}",
+        #     f"[LLM 润色] 润色请求超时（timeout={context.timeout_s}s）：{exc}",
         #     style="yellow",
         # )
         return text

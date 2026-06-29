@@ -23,6 +23,7 @@ from src.transcribe.openai.openai_transcribe_audio import get_mp3_bitrate
 from src.transcribe.api import transcribe_audio, get_incremental_results_flag
 from src.transcribe.providers import make_provider
 from src.transcribe.streaming import StreamingTranscriptionSession
+from src.polish.llm_polish import prefetch_polish_request_context, should_polish_text
 
 
 def _emit_status_overlay(action: str, state: str | None = None) -> None:
@@ -134,6 +135,7 @@ async def _submit_payload(
     duration: float,
     source: str,
     cache_retry_audio: bool,
+    polish_prefetch_task: asyncio.Task | None = None,
 ) -> bool:
     if hasattr(payload_buf, "seek"):
         payload_buf.seek(0)
@@ -207,6 +209,8 @@ async def _submit_payload(
             "http2": (transport_info.get("http2") if isinstance(transport_info, dict) else None),
         },
     }
+    if should_polish_text(text_result):
+        message["polish_prefetch_task"] = polish_prefetch_task
     await Cosmic.queue_out.put(message)
     return True
 
@@ -344,6 +348,7 @@ async def _gather_audio_once(
 async def send_audio():
     task_id = str(uuid.uuid1())
     message_queued = False
+    polish_prefetch_task: asyncio.Task | None = None
     try:
         Cosmic.transcribe_busy = True
         Cosmic.active_task_id = task_id
@@ -387,6 +392,10 @@ async def send_audio():
             time_start=time_start,
             record_stop=record_stop,
         )
+        polish_prefetch_task = asyncio.create_task(
+            prefetch_polish_request_context(),
+            name=f"polish_prefetch:{task_id}",
+        )
 
         if streaming_session is not None:
             try:
@@ -429,6 +438,9 @@ async def send_audio():
                             "realtime_finish_wait_s": max(0.0, (t_complete - t_submit)),
                         },
                     }
+                    if should_polish_text(text_result):
+                        message["polish_prefetch_task"] = polish_prefetch_task
+                        polish_prefetch_task = None
                     with _timed_realtime_step("queue_final_result"):
                         await Cosmic.queue_out.put(message)
                     message_queued = True
@@ -458,11 +470,16 @@ async def send_audio():
             duration=duration,
             source="mic",
             cache_retry_audio=False,
+            polish_prefetch_task=polish_prefetch_task,
         )
+        if message_queued:
+            polish_prefetch_task = None
     except Exception as e:
         _emit_status_overlay("hide")
         console.print(e)
     finally:
+        if polish_prefetch_task is not None and not polish_prefetch_task.done():
+            polish_prefetch_task.cancel()
         if getattr(Cosmic, "active_task_id", None) == task_id and not message_queued:
             Cosmic.active_task_id = None
         if getattr(Cosmic, "active_send_task", None) is asyncio.current_task():
