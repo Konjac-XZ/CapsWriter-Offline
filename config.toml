@@ -64,8 +64,9 @@ threshold = 0.3
 paste = true
 # 是否以写入剪切板然后模拟 Ctrl-V 粘贴的方式输出结果
 
-restore_clipboard_after_paste = true
+restore_clipboard_after_paste = false
 # 模拟粘贴后是否恢复剪贴板
+# 设为 false 时，识别结果会保留在剪贴板中，Ditto 可捕捉，之后 Ctrl+V 也能继续粘贴
 
 save_audio = false
 # 是否保存录音文件

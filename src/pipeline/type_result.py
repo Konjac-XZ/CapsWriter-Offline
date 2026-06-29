@@ -10,13 +10,16 @@ from src.infra.config import ClientConfig as Config
 async def type_result(text):
     # 模拟粘贴
     if Config.paste:
+        saved_clipboard = None
+        can_restore_clipboard = False
+
         # 保存剪切板
         try:
             # 初始化剪贴板模块
             clipman.init()
-            temp = clipman.get()
+            saved_clipboard = clipman.get()
+            can_restore_clipboard = True
         except clipman.exceptions.ClipmanBaseException as e:
-            temp = e
             print(e)
 
         # 复制结果
@@ -32,9 +35,9 @@ async def type_result(text):
             keyboard.send("ctrl + v")
 
         # 还原剪贴板
-        if Config.restore_clipboard_after_paste:
-            await asyncio.sleep(0.1)
-            clipman.set(temp)
+        if Config.restore_clipboard_after_paste and can_restore_clipboard:
+            await asyncio.sleep(0.3)
+            clipman.set(saved_clipboard)
 
     # 模拟打印
     else:
