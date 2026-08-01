@@ -55,7 +55,7 @@ speech_recognition_port = "6016"
 speech_recognition_shortcut = "f15"
 # 控制录音的快捷键，默认是 "caps lock"
 
-toggle_textbox_context_shortcut = "f16"
+toggle_textbox_context_shortcut = "f14"
 # 快速切换 LLM 润色时是否附加当前文本框上下文；设为空字符串可禁用
 
 threshold = 0.3
@@ -67,6 +67,9 @@ paste = true
 restore_clipboard_after_paste = false
 # 模拟粘贴后是否恢复剪贴板
 # 设为 false 时，识别结果会保留在剪贴板中，Ditto 可捕捉，之后 Ctrl+V 也能继续粘贴
+
+daily_input_log_interval = 1000
+# 今日累计上屏字符数每达到此值时写入一条诊断日志；最小值为 1
 
 save_audio = false
 # 是否保存录音文件

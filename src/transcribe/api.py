@@ -62,6 +62,7 @@ async def transcribe_audio(
     record_stop: float,
     max_retries: int,
     base_delay: float,
+    request_context: Any = None,
 ) -> Tuple[str, int, float, float, Dict[str, Any]]:
     """Provider-agnostic transcription entry point.
 
@@ -87,6 +88,10 @@ async def transcribe_audio(
         "elevenlabs",
         "dashscope",
         "alibabacloud",
+        "qwen_audio_3",
+        "qwen-audio-3",
+        "qwen_audio",
+        "alibaba_qwen_audio_3",
         "soniox",
         "soniox-rest",
         "soniox_http",
@@ -100,6 +105,22 @@ async def transcribe_audio(
         "xiaomi-mimo",
     ):
         prov = make_provider(provider)
+        if provider in (
+            "qwen_audio_3",
+            "qwen-audio-3",
+            "qwen_audio",
+            "alibaba_qwen_audio_3",
+        ):
+            return await prov.transcribe(
+                payload_buf,
+                payload_mime,
+                task_id,
+                time_start,
+                record_stop,
+                max_retries,
+                base_delay,
+                request_context=request_context,
+            )
         return await prov.transcribe(
             payload_buf, payload_mime, task_id, time_start, record_stop, max_retries, base_delay
         )

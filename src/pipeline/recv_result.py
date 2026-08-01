@@ -11,6 +11,7 @@ from src.pipeline.type_result import type_result
 from src.pipeline.write_md import write_md
 from src.infra.config import ClientConfig as Config
 from src.infra.gui_output import gui_event
+from src.infra.daily_input_stats import record_input_characters
 from src.polish.llm_polish import should_polish_text
 import warnings
 
@@ -185,6 +186,9 @@ async def recv_result():
                 inc = s[last_len:]
                 if inc:
                     _kb.write(inc)
+                    record_input_characters(
+                        inc, log_interval=Config.daily_input_log_interval
+                    )
                     Cosmic._last_transcript_delta_len = last_len + len(inc)
                     # 标记本 task 曾有增量转录结果输出
                     Cosmic._transcript_had_deltas = True
@@ -194,6 +198,7 @@ async def recv_result():
                 if hasattr(Cosmic, "_last_transcript_delta_len"):
                     Cosmic._last_transcript_delta_len = 0
                 await type_result(s)
+                record_input_characters(s, log_interval=Config.daily_input_log_interval)
 
             # 每个 task 的增量转录结果独立计数，切换 task 时重置（避免跨任务污染）
             last_tid = getattr(Cosmic, "_last_transcript_delta_task", None)

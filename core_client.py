@@ -11,6 +11,9 @@ import colorama
 
 from src.infra.env_loader import load_dotenv_files
 from src.infra.cosmic import Cosmic, console
+from src.infra.runtime_logging import configure_runtime_logging
+
+configure_runtime_logging("core_client")
 
 try:
     load_dotenv_files()

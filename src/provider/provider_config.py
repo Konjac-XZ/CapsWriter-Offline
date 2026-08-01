@@ -425,6 +425,43 @@ class ProviderManager:
 
         return False
 
+    def update_provider_setting(self, provider_id: str, key: str, value: Any) -> bool:
+        """Update one provider setting and persist it to the provider YAML."""
+        if provider_id not in self.providers:
+            return False
+
+        key = str(key or "").strip()
+        if not key:
+            return False
+
+        provider = self.providers[provider_id]
+        if provider.settings is None:
+            provider.settings = {}
+        provider.settings[key] = value
+
+        yaml_file = self.config_dir / f"{provider_id}.yaml"
+        if yaml_file.exists():
+            try:
+                with open(yaml_file, 'r', encoding='utf-8') as f:
+                    data = yaml.safe_load(f) or {}
+
+                settings = data.setdefault('settings', {})
+                if not isinstance(settings, dict):
+                    settings = {}
+                    data['settings'] = settings
+                settings[key] = value
+
+                with open(yaml_file, 'w', encoding='utf-8') as f:
+                    yaml.safe_dump(data, f, default_flow_style=False, allow_unicode=True)
+
+                return True
+
+            except Exception as e:
+                print(f"Error updating provider setting {yaml_file}: {e}")
+                return False
+
+        return False
+
     def update_prompt_preset_text(self, preset_name: str, text: str) -> bool:
         """Update the text for a named prompt preset in prompts.yaml."""
         return prompt_manager.update_preset_text(preset_name, text)

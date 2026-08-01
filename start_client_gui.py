@@ -60,6 +60,8 @@ ensure_project_cwd()
 load_startup_env()
 
 from src.infra.config import ClientConfig as Config
+from src.infra.runtime_logging import configure_runtime_logging, record_console_message
+from src.infra.daily_input_stats import get_today_input_count
 from src.audio.control_requests import write_abandon_request, write_clear_history_request
 from src.audio.retry_cache import has_retry_audio, latest_audio_path_for_mime, write_retry_request
 from src.gui.app_startup import apply_theme_later, configure_app_locale_and_font, print_screen_scale
@@ -74,6 +76,8 @@ from src.system.process_cleanup import (
     terminate_python_script_processes,
 )
 from src.system.startup_replacement import prepare_replacement_startup, release_startup_slot
+
+configure_runtime_logging("client_gui")
 
 
 # AHK hint tooltip removed for leaner startup
@@ -103,6 +107,10 @@ GUI_COLOR_ALIASES = {
 GUI_TIMING_SLOW_MS = 100.0
 GUI_TIMER_GAP_MS = 500.0
 GUI_WATCHDOG_GAP_MS = 700.0
+LEXICON_EDITOR_WARMUP_DELAY_MS = 8000
+LEXICON_EDITOR_BUSY_RETRY_MS = 3000
+LEXICON_EDITOR_FAILURE_RETRY_MS = 10000
+LEXICON_EDITOR_MAX_WARMUP_FAILURES = 3
 
 
 def _elapsed_ms(start: float) -> float:
@@ -145,6 +153,11 @@ class GUI(QMainWindow):
         self.core_client_process: subprocess.Popen[str] | None = None
         self.text_box_wordCountLabel: QLabel | None = None
         self.old_pos = QPoint()
+        self._lexicon_dialog: Any | None = None
+        self._lexicon_warmup_failures = 0
+        self._lexicon_warmup_timer = QTimer(self)
+        self._lexicon_warmup_timer.setSingleShot(True)
+        self._lexicon_warmup_timer.timeout.connect(self._warm_up_lexicon_editor)
 
         self.init_ui()
         self.output_router = WorkerOutputRouter()
@@ -173,6 +186,7 @@ class GUI(QMainWindow):
 
     def log_message(self, message: str, color: str = "#000000"):
         """Log a message - stores early messages in queue if UI not ready."""
+        record_console_message(message, style=color)
         if hasattr(self, 'text_box_client'):
             self.append_colored_line(message, color)
         else:
@@ -224,7 +238,9 @@ class GUI(QMainWindow):
         self.main_layout = QVBoxLayout()
         self.main_layout.setSpacing(0)
         self.main_layout.setContentsMargins(3, 3, 3, 3)
-        self.main_layout.addWidget(self.text_box_client)
+        self.main_layout.addWidget(self.text_box_client, 1)
+        self.create_daily_input_count_label()
+        self.main_layout.addWidget(self.daily_input_count_label)
         self.main_layout.addLayout(self.provider_layout)
 
         # Central widget
@@ -273,7 +289,7 @@ class GUI(QMainWindow):
         try:
             self.populate_provider_combo()
             self.populate_model_combo()
-            self.populate_prompt_combo()
+            self.sync_dashscope_realtime_control()
         except Exception:
             pass
         # Start background workers (core first, helpers staggered)
@@ -281,6 +297,7 @@ class GUI(QMainWindow):
             self.start_script()
         except Exception:
             pass
+        self._schedule_lexicon_editor_warmup(LEXICON_EDITOR_WARMUP_DELAY_MS)
 
 
     # Removed custom title bar and its buttons; using native frame instead
@@ -309,6 +326,25 @@ class GUI(QMainWindow):
         except Exception:
             pass
 
+    def create_daily_input_count_label(self) -> None:
+        """Create the compact daily character counter below the output pane."""
+        self.daily_input_count_label = QLabel()
+        self.daily_input_count_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.daily_input_count_label.setStyleSheet("color: #666666; padding: 2px 4px;")
+        self._refresh_daily_input_count()
+        self.daily_input_count_timer = QTimer(self)
+        self.daily_input_count_timer.timeout.connect(self._refresh_daily_input_count)
+        self.daily_input_count_timer.start(1000)
+
+    def _refresh_daily_input_count(self) -> None:
+        try:
+            count = get_today_input_count()
+        except Exception:
+            count = 0
+        self.daily_input_count_label.setText(f"今日已输入 {count} 字")
+
     def _configure_collapsible_combo(self, combo: QComboBox, *, editable: bool = False) -> None:
         """Apply a unified style and sizing policy to combo boxes."""
         combo.setEditable(editable)
@@ -317,14 +353,6 @@ class GUI(QMainWindow):
         combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         combo.setMinimumContentsLength(0)
         combo.setStyleSheet("QComboBox { min-width: 0px; }")
-
-    def _inline_prompt_label(self, prompt_text: str) -> str:
-        """Create a compact label for inline prompts using the first non-empty snippet."""
-        snippet_parts = [line.strip() for line in prompt_text.splitlines() if line.strip()]
-        snippet = " ".join(snippet_parts)
-        if len(snippet) > 18:
-            snippet = snippet[:16] + "…"
-        return f"自定义: {snippet}" if snippet else "自定义提示词"
 
     def _build_combo_field(self, label_text: str, combo: QComboBox) -> tuple[QWidget, QLabel]:
         """Wrap a label-combo pair so the group collapses gracefully."""
@@ -528,22 +556,22 @@ class GUI(QMainWindow):
         self.modify_prompt_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         provider_row.addWidget(self.modify_prompt_button)
 
-        prompt_row = QHBoxLayout()
-        prompt_row.setSpacing(6)
-        prompt_row.setContentsMargins(0, 0, 0, 0)
+        prompt_action_row = QHBoxLayout()
+        prompt_action_row.setSpacing(6)
+        prompt_action_row.setContentsMargins(0, 0, 0, 0)
 
-        self.prompt_combo = QComboBox()
-        self._configure_collapsible_combo(self.prompt_combo)
-        self.prompt_combo.setEditable(False)
-        self.prompt_combo.currentIndexChanged.connect(self.on_prompt_changed)
-        prompt_field, self.prompt_label = self._build_combo_field("ASR 提示词:", self.prompt_combo)
-        prompt_row.addWidget(prompt_field, 1)
+        self.dashscope_realtime_checkbox = QCheckBox("流式音频")
+        self.dashscope_realtime_checkbox.setToolTip("DashScope 使用录音时实时发送音频；关闭后改为录音结束后上传文件")
+        self.dashscope_realtime_checkbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.dashscope_realtime_checkbox.toggled.connect(self.on_dashscope_realtime_toggled)
+        prompt_action_row.addWidget(self.dashscope_realtime_checkbox)
+        prompt_action_row.addStretch()
 
         self.edit_polish_prompt_button = QPushButton("编辑 LLM 提示词")
         self.edit_polish_prompt_button.setToolTip("编辑 config/polish/polish.yaml 中的 LLM 润色提示词")
         self.edit_polish_prompt_button.clicked.connect(self.show_edit_polish_prompt_dialog)
         self.edit_polish_prompt_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        prompt_row.addWidget(self.edit_polish_prompt_button)
+        prompt_action_row.addWidget(self.edit_polish_prompt_button)
 
         action_row = QHBoxLayout()
         action_row.setSpacing(6)
@@ -645,83 +673,36 @@ class GUI(QMainWindow):
         self.model_container = model_field
 
         self.provider_layout.addLayout(provider_row)
-        self.provider_layout.addLayout(prompt_row)
+        self.provider_layout.addLayout(prompt_action_row)
         self.provider_layout.addLayout(action_row)
         self.provider_layout.addLayout(self.model_row)
 
         # Populate initial lists according to active provider
         self.populate_model_combo()
-        self.populate_prompt_combo()
+        self.sync_dashscope_realtime_control()
 
-    def populate_prompt_combo(self):
-        """Populate the prompt preset dropdown from prompts.yaml and current provider state."""
-        if not hasattr(self, "prompt_combo"):
+    def sync_dashscope_realtime_control(self):
+        """Show and sync the DashScope realtime/file mode switch."""
+        if not hasattr(self, "dashscope_realtime_checkbox"):
             return
-        self.prompt_combo.blockSignals(True)
+
+        visible = False
+        checked = False
+        if self.provider_manager and hasattr(self, "provider_combo"):
+            provider_id = self.provider_combo.currentData()
+            if provider_id is not None:
+                provider = self.provider_manager.get_provider(provider_id)
+                if provider and getattr(provider, "type", "").lower() == "dashscope":
+                    visible = True
+                    settings = provider.settings or {}
+                    checked = bool(settings.get("realtime", False))
+
+        self.dashscope_realtime_checkbox.blockSignals(True)
         try:
-            self.prompt_combo.clear()
-            # Default item: use global default preset
-            self.prompt_combo.addItem("使用全局默认", "__DEFAULT__")
-
-            # Load preset names from provider manager
-            presets = {}
-            try:
-                from src.provider.provider_config import provider_manager as _pm
-                if hasattr(_pm, "list_prompt_presets"):
-                    presets = _pm.list_prompt_presets() or {}
-            except Exception:
-                presets = {}
-
-            # Keep insertion order
-            for name, meta in presets.items():
-                label = str(name)
-                self.prompt_combo.addItem(label, label)
-                # Tooltip preview of text
-                try:
-                    text = meta.get("text") if isinstance(meta, dict) else None
-                    if isinstance(text, str) and text.strip():
-                        preview = " ".join(line.strip() for line in text.splitlines() if line.strip())
-                        if len(preview) > 160:
-                            preview = preview[:157] + "..."
-                        idx = self.prompt_combo.count() - 1
-                        self.prompt_combo.setItemData(idx, preview, Qt.ItemDataRole.ToolTipRole)
-                except Exception:
-                    pass
-
-            inline_prompt: str | None = None
-            current_preset: str | None = None
-            current_data = None
-            try:
-                current_data = self.provider_combo.currentData()
-                if self.provider_manager and current_data is not None:
-                    provider = self.provider_manager.get_provider(current_data)
-                    if provider and hasattr(provider, "settings"):
-                        settings = provider.settings or {}
-                        raw_inline = settings.get("prompt")
-                        if isinstance(raw_inline, str) and raw_inline.strip():
-                            inline_prompt = raw_inline
-                        preset_value = settings.get("prompt_preset")
-                        if isinstance(preset_value, str) and preset_value.strip():
-                            current_preset = preset_value.strip()
-            except Exception:
-                pass
-
-            selected_index = 0
-            if inline_prompt:
-                label = self._inline_prompt_label(inline_prompt)
-                custom_index = self.prompt_combo.count()
-                self.prompt_combo.addItem(label, "__INLINE__")
-                self.prompt_combo.setItemData(custom_index, inline_prompt, Qt.ItemDataRole.ToolTipRole)
-                selected_index = custom_index
-            elif isinstance(current_preset, str) and current_preset:
-                for i in range(self.prompt_combo.count()):
-                    if self.prompt_combo.itemData(i) == current_preset:
-                        selected_index = i
-                        break
-
-            self.prompt_combo.setCurrentIndex(selected_index)
+            self.dashscope_realtime_checkbox.setChecked(checked)
+            self.dashscope_realtime_checkbox.setVisible(visible)
         finally:
-            self.prompt_combo.blockSignals(False)
+            self.dashscope_realtime_checkbox.blockSignals(False)
 
     def _resolve_prompt_text_for_provider(self, provider_id: str) -> str:
         """Determine the prompt text to show in the editor for the given provider."""
@@ -773,19 +754,7 @@ class GUI(QMainWindow):
             self.append_colored_line("请先选择转录服务商", "#ff5555")
             return
 
-        try:
-            selection_value = self.prompt_combo.itemData(self.prompt_combo.currentIndex())
-        except Exception:
-            selection_value = None
-
-        preset_name: str | None = None
-        if isinstance(selection_value, str) and selection_value not in {"__INLINE__", "__DEFAULT__"}:
-            preset_name = selection_value
-
-        if preset_name:
-            initial_text = self.provider_manager.get_prompt_preset(preset_name) or ""
-        else:
-            initial_text = self._resolve_prompt_text_for_provider(provider_id)
+        initial_text = self._resolve_prompt_text_for_provider(provider_id)
 
         dialog = PromptEditDialog(self, initial_text=initial_text, window_title="编辑 ASR 提示词")
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -794,37 +763,6 @@ class GUI(QMainWindow):
         new_prompt_raw = dialog.prompt_text()
         new_prompt_trimmed = new_prompt_raw.strip()
 
-        if preset_name:
-            updated = False
-            try:
-                updated = self.provider_manager.update_prompt_preset_text(preset_name, new_prompt_raw)
-            except Exception:
-                updated = False
-
-            if not updated:
-                self.append_colored_line("保存提示词预设失败（请检查 prompts.yaml 权限或格式）", "#ff5555")
-                return
-
-            provider_updated = True
-            try:
-                provider_updated = self.provider_manager.update_provider_prompt(
-                    provider_id,
-                    prompt=None,
-                    prompt_preset=preset_name,
-                )
-            except Exception:
-                provider_updated = False
-
-            self.populate_prompt_combo()
-            self.restart_children_with_env()
-
-            msg = f"已更新 ASR 提示词预设: {preset_name}"
-            if not provider_updated:
-                msg += "（但未能刷新当前服务商设置，请手动检查配置）"
-            self.append_colored_line(msg)
-            return
-
-        # Inline or default-backed prompt editing falls back to provider-specific overrides
         try:
             if new_prompt_trimmed:
                 updated = self.provider_manager.update_provider_prompt(provider_id, prompt=new_prompt_raw)
@@ -837,7 +775,6 @@ class GUI(QMainWindow):
             self.append_colored_line("保存 ASR 提示词失败（请检查配置文件权限或格式）", "#ff5555")
             return
 
-        self.populate_prompt_combo()
         self.restart_children_with_env()
 
         if new_prompt_trimmed:
@@ -872,9 +809,13 @@ class GUI(QMainWindow):
     def show_edit_lexicon_dialog(self) -> None:
         """Open the user lexicon editor and persist any changes."""
         try:
-            from src.gui.lexicon_editor import open_lexicon_editor
+            from src.gui.lexicon_editor import LexiconEditDialog, open_lexicon_editor
 
-            accepted, _saved_text = open_lexicon_editor(self)
+            dialog = self._lexicon_dialog
+            if not isinstance(dialog, LexiconEditDialog):
+                dialog = LexiconEditDialog(self)
+                self._lexicon_dialog = dialog
+            accepted, _saved_text = open_lexicon_editor(self, dialog=dialog)
         except Exception as exc:
             self.append_colored_line(f"读取用户词库失败：{exc}", "#ff5555")
             return
@@ -883,6 +824,37 @@ class GUI(QMainWindow):
             return
 
         self.append_colored_line("用户词库已保存，下次录音自动生效。")
+
+    def _schedule_lexicon_editor_warmup(self, delay_ms: int) -> None:
+        """Schedule a single idle-time attempt to create the hidden editor."""
+        if self._lexicon_dialog is not None or self._lexicon_warmup_timer.isActive():
+            return
+        self._lexicon_warmup_timer.start(max(0, delay_ms))
+
+    def _warm_up_lexicon_editor(self) -> None:
+        """Create and retain the lexicon editor once the recording UI is idle."""
+        if self._lexicon_dialog is not None:
+            return
+
+        try:
+            if self.status_overlay.overlay.isVisible():
+                self._schedule_lexicon_editor_warmup(LEXICON_EDITOR_BUSY_RETRY_MS)
+                return
+        except Exception:
+            pass
+
+        try:
+            from src.gui.lexicon_editor import LexiconEditDialog
+
+            dialog = LexiconEditDialog(self)
+            dialog.hide()
+            self._lexicon_dialog = dialog
+            self._lexicon_warmup_failures = 0
+        except Exception as exc:
+            self._lexicon_warmup_failures += 1
+            record_console_message(f"词库编辑器后台预热失败：{exc}", style="#ff8800")
+            if self._lexicon_warmup_failures < LEXICON_EDITOR_MAX_WARMUP_FAILURES:
+                self._schedule_lexicon_editor_warmup(LEXICON_EDITOR_FAILURE_RETRY_MS)
 
     def clear_recent_output_history(self) -> None:
         """Clear the recent finalized-text history used as LLM polish context."""
@@ -894,33 +866,30 @@ class GUI(QMainWindow):
 
         self.append_colored_line("已请求清除最近上屏消息记录。", "#008000")
 
-    def on_prompt_changed(self, index: int):
-        """Handle prompt preset selection change and persist."""
+    def on_dashscope_realtime_toggled(self, checked: bool):
+        """Persist DashScope realtime/file upload mode."""
         if not self.provider_manager:
             return
         current_data = self.provider_combo.currentData() if hasattr(self, "provider_combo") else None
         if current_data is None:
             return
-        try:
-            value = self.prompt_combo.itemData(index)
-        except Exception:
-            value = None
+        provider = self.provider_manager.get_provider(current_data)
+        if not provider or getattr(provider, "type", "").lower() != "dashscope":
+            return
+
         ok = False
         try:
-            if value == "__DEFAULT__":
-                ok = self.provider_manager.update_provider_prompt(current_data, prompt=None, prompt_preset=None)
-            elif value == "__INLINE__":
-                # Inline prompts are managed via the modify dialog; no change needed.
-                return
-            elif isinstance(value, str) and value:
-                ok = self.provider_manager.update_provider_prompt(current_data, prompt_preset=value)
+            ok = self.provider_manager.update_provider_setting(current_data, "realtime", bool(checked))
         except Exception:
             ok = False
+
         if ok:
-            self.append_colored_line(f"已切换提示词预置: {self.prompt_combo.currentText()}")
+            mode = "流式音频" if checked else "录音文件"
+            self.append_colored_line(f"DashScope 已切换为{mode}模式")
             self.restart_children_with_env()
         else:
-            self.append_colored_line("更新提示词失败（请检查配置文件权限或格式）", "#ff5555")
+            self.append_colored_line("更新 DashScope 音频模式失败（请检查配置文件权限或格式）", "#ff5555")
+            self.sync_dashscope_realtime_control()
 
     def populate_provider_combo(self):
         """Populate the provider combo box with available providers."""
@@ -1001,8 +970,8 @@ class GUI(QMainWindow):
                 self.restart_children_with_env()
                 # Refresh model selector visibility and values
                 self.populate_model_combo()
-                # Refresh prompt selector values
-                self.populate_prompt_combo()
+                # Refresh provider-specific controls
+                self.sync_dashscope_realtime_control()
 
     def _collect_known_openai_models(self) -> list[str]:
         """Collect a reasonable list of model options for OpenAI-compatible providers.
@@ -1527,7 +1496,7 @@ class GUI(QMainWindow):
                 self.provider_manager.load_providers()
                 self.populate_provider_combo()
                 self.populate_model_combo()
-                self.populate_prompt_combo()
+                self.sync_dashscope_realtime_control()
                 self.log_message("已重新加载转录服务商配置")
 
                 # Restart workers to apply any changes
@@ -1865,6 +1834,8 @@ class GUI(QMainWindow):
     def apply_scale_factor(self):
         # 应用缩放因子
         widgets: list[QWidget] = [self.text_box_client]
+        if hasattr(self, 'daily_input_count_label'):
+            widgets.append(self.daily_input_count_label)
         if hasattr(self, 'provider_combo'):
             widgets.append(self.provider_combo)
         if hasattr(self, 'modify_prompt_button'):
@@ -1885,10 +1856,6 @@ class GUI(QMainWindow):
             widgets.append(self.model_combo)
         if hasattr(self, 'model_label'):
             widgets.append(self.model_label)
-        if hasattr(self, 'prompt_combo'):
-            widgets.append(self.prompt_combo)
-        if hasattr(self, 'prompt_label'):
-            widgets.append(self.prompt_label)
 
         for widget in widgets:
             # 检查字体大小是否已设置，如果没有设置，则使用一个默认值

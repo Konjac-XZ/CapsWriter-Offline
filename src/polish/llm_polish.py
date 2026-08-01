@@ -41,6 +41,7 @@ class PolishRequestContext:
     textbox_context_has_position: bool
     vision_context: str | None
     history: list[str]
+    asr_history: list[str]
     lexicon_message: str | None
     prepared_at: float
     timing: dict[str, float]
@@ -133,6 +134,54 @@ _feature_state_logged = False
 _finalized_history: list[str] = []
 _history_lock = threading.Lock()
 _HTTP_CLIENT: httpx.AsyncClient | None = None
+
+
+def _qwen_asr_context_enabled() -> bool:
+    try:
+        from src.provider.provider_config import provider_manager
+
+        provider_type = (provider_manager.get_active_provider_type() or "").strip().lower()
+        if provider_type not in {
+            "qwen_audio_3",
+            "qwen-audio-3",
+            "qwen_audio",
+            "alibaba_qwen_audio_3",
+        }:
+            return False
+        from src.transcribe.qwen_audio_3.qwen_audio_3_transcribe_http import (
+            should_use_asr_context,
+        )
+
+        return should_use_asr_context()
+    except Exception:
+        return False
+
+
+def _qwen_asr_history_settings() -> tuple[bool, int]:
+    if not _qwen_asr_context_enabled():
+        return False, 0
+    try:
+        from src.transcribe.qwen_audio_3.qwen_audio_3_transcribe_http import (
+            get_asr_history_max_messages,
+            should_use_asr_history,
+        )
+
+        return should_use_asr_history(), get_asr_history_max_messages()
+    except Exception:
+        return False, 0
+
+
+def _qwen_asr_textbox_enabled() -> bool:
+    if not _qwen_asr_context_enabled():
+        return False
+    try:
+        from src.transcribe.qwen_audio_3.qwen_audio_3_transcribe_http import (
+            should_use_asr_textbox,
+        )
+
+        return should_use_asr_textbox()
+    except Exception:
+        return False
 _HTTP_CLIENT_KEY: tuple[Any, ...] | None = None
 _HTTP_CLIENT_LOOP_ID: int | None = None
 
@@ -255,9 +304,12 @@ def record_finalized_text(text: str) -> None:
     if not text or not text.strip():
         return
     h_cfg = _cfg().get("history", {})
-    if not h_cfg.get("enabled", False):
+    polish_history_enabled = bool(h_cfg.get("enabled", False))
+    asr_history_enabled, asr_max_size = _qwen_asr_history_settings()
+    if not polish_history_enabled and not asr_history_enabled:
         return
-    max_size: int = max(1, int(h_cfg.get("max_size", 5)))
+    polish_max_size = max(1, int(h_cfg.get("max_size", 5))) if polish_history_enabled else 0
+    max_size = max(polish_max_size, asr_max_size, 1)
     with _history_lock:
         _finalized_history.append(text.strip())
         if len(_finalized_history) > max_size:
@@ -273,6 +325,14 @@ def get_finalized_history() -> list[str]:
     if not h_cfg.get("enabled", False):
         return []
     max_size: int = max(1, int(h_cfg.get("max_size", 5)))
+    with _history_lock:
+        return list(_finalized_history[-max_size:])
+
+
+def get_asr_finalized_history() -> list[str]:
+    enabled, max_size = _qwen_asr_history_settings()
+    if not enabled or max_size <= 0:
+        return []
     with _history_lock:
         return list(_finalized_history[-max_size:])
 
@@ -832,6 +892,7 @@ def _prepare_polish_request_context() -> PolishRequestContext:
     timings["config_env_ms"] = (time.perf_counter() - t0) * 1000.0
 
     textbox_context_enabled: bool = bool(tc_cfg.get("enabled", False))
+    capture_textbox_context = textbox_context_enabled or _qwen_asr_textbox_enabled()
     textbox_context_max_chars: int = max(1, int(tc_cfg.get("max_chars", 4096)))
     textbox_context_max_tokens: int | None = _coerce_optional_positive_int(
         tc_cfg.get("max_tokens"),
@@ -845,7 +906,7 @@ def _prepare_polish_request_context() -> PolishRequestContext:
     captured_textbox_context: TextBoxContext | None = None
     textbox_context: str | None = None
     textbox_context_has_position = False
-    if textbox_context_enabled:
+    if capture_textbox_context:
         t0 = time.perf_counter()
         captured = get_active_textbox_context(
             debug=textbox_context_debug,
@@ -856,13 +917,14 @@ def _prepare_polish_request_context() -> PolishRequestContext:
         if captured and captured.text.strip():
             captured_textbox_context = captured
             textbox_context_has_position = _has_usable_caret_offset(captured)
-            t0 = time.perf_counter()
-            textbox_context, _was_truncated = _format_textbox_context(
-                captured,
-                textbox_context_max_chars,
-                textbox_context_max_tokens,
-            )
-            timings["textbox_format_ms"] = (time.perf_counter() - t0) * 1000.0
+            if textbox_context_enabled:
+                t0 = time.perf_counter()
+                textbox_context, _was_truncated = _format_textbox_context(
+                    captured,
+                    textbox_context_max_chars,
+                    textbox_context_max_tokens,
+                )
+                timings["textbox_format_ms"] = (time.perf_counter() - t0) * 1000.0
 
     t0 = time.perf_counter()
     vision_context = get_recent_vision_context_summary()
@@ -871,6 +933,10 @@ def _prepare_polish_request_context() -> PolishRequestContext:
     t0 = time.perf_counter()
     history = get_finalized_history()
     timings["history_ms"] = (time.perf_counter() - t0) * 1000.0
+
+    t0 = time.perf_counter()
+    asr_history = get_asr_finalized_history()
+    timings["asr_history_ms"] = (time.perf_counter() - t0) * 1000.0
 
     t0 = time.perf_counter()
     from src.infra.user_lexicon import get_lexicon_user_message  # local import
@@ -892,19 +958,25 @@ def _prepare_polish_request_context() -> PolishRequestContext:
         textbox_context_has_position=textbox_context_has_position,
         vision_context=vision_context,
         history=history,
+        asr_history=asr_history,
         lexicon_message=lexicon_message,
         prepared_at=time.time(),
         timing=timings,
     )
 
 
-async def prefetch_polish_request_context() -> PolishRequestContext | None:
-    if not is_llm_polish_enabled():
+async def prefetch_request_context() -> PolishRequestContext | None:
+    if not is_llm_polish_enabled() and not _qwen_asr_context_enabled():
         return None
     try:
         return await asyncio.to_thread(_prepare_polish_request_context)
     except Exception:
         return None
+
+
+async def prefetch_polish_request_context() -> PolishRequestContext | None:
+    """Backward-compatible name for the shared polish/ASR context capture."""
+    return await prefetch_request_context()
 
 
 def _build_messages(

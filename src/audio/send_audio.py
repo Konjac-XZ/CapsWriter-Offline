@@ -23,7 +23,7 @@ from src.transcribe.openai.openai_transcribe_audio import get_mp3_bitrate
 from src.transcribe.api import transcribe_audio, get_incremental_results_flag
 from src.transcribe.providers import make_provider
 from src.transcribe.streaming import StreamingTranscriptionSession
-from src.polish.llm_polish import prefetch_polish_request_context, should_polish_text
+from src.polish.llm_polish import prefetch_request_context, should_polish_text
 
 
 def _emit_status_overlay(action: str, state: str | None = None) -> None:
@@ -161,11 +161,30 @@ async def _submit_payload(
     max_retries = int(os.getenv("OPENAI_TRANSCRIBE_RETRIES", "3"))
     base_delay = float(os.getenv("OPENAI_TRANSCRIBE_BACKOFF_BASE", "0.05"))
 
+    context_task = polish_prefetch_task
+    owns_context_task = False
+    if _is_qwen_audio_3_provider() and context_task is None:
+        context_task = asyncio.create_task(
+            prefetch_request_context(),
+            name=f"request_context:{task_id}",
+        )
+        owns_context_task = True
+    request_context, asr_context_timed_out = await _await_qwen_asr_context(context_task)
+
     t_presubmit = time.time()
     upload_buf = io.BytesIO(payload_bytes)
     text_result, status_code, t_submit, t_complete, transport_info = await transcribe_audio(
-        upload_buf, payload_mime, task_id, time_start, record_stop, max_retries, base_delay
+        upload_buf,
+        payload_mime,
+        task_id,
+        time_start,
+        record_stop,
+        max_retries,
+        base_delay,
+        request_context=request_context,
     )
+    if isinstance(transport_info, dict):
+        transport_info["asr_context_capture_timed_out"] = asr_context_timed_out
     if Cosmic.abandon_requested or task_id in Cosmic.abandoned_task_ids:
         return False
 
@@ -209,9 +228,13 @@ async def _submit_payload(
             "http2": (transport_info.get("http2") if isinstance(transport_info, dict) else None),
         },
     }
-    if should_polish_text(text_result):
-        message["polish_prefetch_task"] = polish_prefetch_task
+    context_task_attached = False
+    if should_polish_text(text_result) and context_task is not None:
+        message["polish_prefetch_task"] = context_task
+        context_task_attached = True
     await Cosmic.queue_out.put(message)
+    if owns_context_task and not context_task_attached and not context_task.done():
+        context_task.cancel()
     return True
 
 
@@ -225,6 +248,43 @@ def _active_provider_kind() -> str:
     except Exception:
         pass
     return os.getenv("TRANSCRIBE_PROVIDER", "openai").strip().lower()
+
+
+def _is_qwen_audio_3_provider() -> bool:
+    return _active_provider_kind() in {
+        "qwen_audio_3",
+        "qwen-audio-3",
+        "qwen_audio",
+        "alibaba_qwen_audio_3",
+    }
+
+
+async def _await_qwen_asr_context(
+    context_task: asyncio.Task | None,
+) -> tuple[object | None, bool]:
+    if not _is_qwen_audio_3_provider() or context_task is None:
+        return None, False
+    try:
+        from src.transcribe.qwen_audio_3.qwen_audio_3_transcribe_http import (
+            get_asr_context_capture_timeout_seconds,
+            should_use_asr_context,
+        )
+
+        if not should_use_asr_context():
+            return None, False
+        timeout = get_asr_context_capture_timeout_seconds()
+        if timeout <= 0:
+            if not context_task.done():
+                return None, True
+            return context_task.result(), False
+        context = await asyncio.wait_for(asyncio.shield(context_task), timeout=timeout)
+        return context, False
+    except asyncio.TimeoutError:
+        return None, True
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        return None, False
 
 
 def _create_streaming_session(task_id: str, time_start: float) -> StreamingTranscriptionSession | None:
@@ -393,7 +453,7 @@ async def send_audio():
             record_stop=record_stop,
         )
         polish_prefetch_task = asyncio.create_task(
-            prefetch_polish_request_context(),
+            prefetch_request_context(),
             name=f"polish_prefetch:{task_id}",
         )
 

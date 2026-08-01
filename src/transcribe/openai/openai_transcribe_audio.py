@@ -18,6 +18,7 @@ _DEFAULT_SAMPLE_RATE: dict[str, int] = {
     "elevenlabs": 44100,
     "dashscope": 44100,
     "alibabacloud": 44100,
+    "qwen_audio_3": 44100,
     "soniox": 44100,
     "openrouter": 44100,
     "xiaomi": 44100,
@@ -36,6 +37,8 @@ def _canonical_provider_type(provider: str | None) -> str:
         return "openrouter"
     if p in ("mimo", "xiaomi-mimo"):
         return "xiaomi"
+    if p in ("qwen-audio-3", "qwen_audio", "alibaba_qwen_audio_3"):
+        return "qwen_audio_3"
     return p or "openai"
 
 
@@ -61,6 +64,7 @@ def _get_target_sample_rate() -> int:
         "elevenlabs": ("ELEVENLABS_TRANSCRIBE_SAMPLE_RATE", "TRANSCRIBE_SAMPLE_RATE"),
         "dashscope": ("DASHSCOPE_TRANSCRIBE_SAMPLE_RATE", "TRANSCRIBE_SAMPLE_RATE"),
         "alibabacloud": ("ALIBABACLOUD_TRANSCRIBE_SAMPLE_RATE", "TRANSCRIBE_SAMPLE_RATE"),
+        "qwen_audio_3": ("QWEN_AUDIO_3_TRANSCRIBE_SAMPLE_RATE", "TRANSCRIBE_SAMPLE_RATE"),
         "soniox": ("SONIOX_TRANSCRIBE_SAMPLE_RATE", "TRANSCRIBE_SAMPLE_RATE"),
         "gemini": ("GEMINI_TRANSCRIBE_SAMPLE_RATE", "TRANSCRIBE_SAMPLE_RATE"),
         "openrouter": ("OPENROUTER_TRANSCRIBE_SAMPLE_RATE", "TRANSCRIBE_SAMPLE_RATE"),

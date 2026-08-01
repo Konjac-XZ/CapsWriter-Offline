@@ -8,6 +8,7 @@ import websockets
 from rich.console import Console
 from rich.theme import Theme
 from . import gui_output
+from .runtime_logging import record_console_message
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 my_theme = Theme({"markdown.code": "cyan", "markdown.item.number": "yellow"})
@@ -47,6 +48,7 @@ def _console_print_wrapper(*args, **kwargs):
         text = " ".join(_arg_to_text(a) for a in args)
         # Detect a style kwarg commonly used in this codebase
         color = kwargs.get("style")
+        record_console_message(text, style=color)
         try:
             gui_output.gui_print(text, color=color)
         except Exception:

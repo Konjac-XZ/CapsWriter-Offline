@@ -218,6 +218,39 @@ class DashScopeProvider(TranscriptionProvider):
         return text_result, status_code, t_submit, t_complete, transport_meta
 
 
+class QwenAudio3Provider(TranscriptionProvider):
+    """Qwen Audio 3.0 synchronous HTTP transcription provider."""
+
+    def name(self) -> str:
+        return "qwen_audio_3"
+
+    async def transcribe(
+        self,
+        payload_buf: io.BytesIO,
+        payload_mime: str,
+        task_id: str,
+        time_start: float,
+        record_stop: float,
+        max_retries: int,
+        base_delay: float,
+        request_context: Any = None,
+    ) -> Tuple[str, int, float, float, Dict[str, Any]]:
+        from src.transcribe.qwen_audio_3.qwen_audio_3_transcribe_http import (
+            transcribe_with_retries,
+        )
+
+        return await transcribe_with_retries(
+            payload_buf,
+            payload_mime,
+            task_id,
+            time_start,
+            record_stop,
+            max_retries,
+            base_delay,
+            request_context,
+        )
+
+
 class SonioxProvider(TranscriptionProvider):
     def name(self) -> str:
         return "soniox"
@@ -348,6 +381,13 @@ def make_provider(kind: str) -> TranscriptionProvider:
         return ElevenLabsProvider()
     if kind in ("dashscope", "alibabacloud"):
         return DashScopeProvider()
+    if kind in (
+        "qwen_audio_3",
+        "qwen-audio-3",
+        "qwen_audio",
+        "alibaba_qwen_audio_3",
+    ):
+        return QwenAudio3Provider()
     if kind in ("soniox", "soniox-rest", "soniox_http"):
         return SonioxProvider()
     if kind in ("gemini", "google-gemini", "google"):

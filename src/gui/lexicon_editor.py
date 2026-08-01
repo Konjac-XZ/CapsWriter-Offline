@@ -270,6 +270,11 @@ class LexiconEditDialog(QDialog):
     def saved_text(self) -> str | None:
         return self._saved_text
 
+    def prepare_for_open(self, initial_text: str) -> None:
+        """Reset transient state and refresh the editor from the on-disk text."""
+        self._saved_text = None
+        self.editor_api.set_text(initial_text)
+
     def _handle_accept(self) -> None:
         raw_text = self.editor_api.get_text()
         try:
@@ -288,9 +293,17 @@ class LexiconEditDialog(QDialog):
         self.accept()
 
 
-def open_lexicon_editor(parent: QWidget | None = None) -> tuple[bool, str | None]:
+def open_lexicon_editor(
+    parent: QWidget | None = None,
+    *,
+    dialog: LexiconEditDialog | None = None,
+) -> tuple[bool, str | None]:
+    """Open a fresh or reusable lexicon dialog with the latest on-disk text."""
     initial_text = read_lexicon_text()
-    dialog = LexiconEditDialog(parent, initial_text=initial_text)
+    if dialog is None:
+        dialog = LexiconEditDialog(parent, initial_text=initial_text)
+    else:
+        dialog.prepare_for_open(initial_text)
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return False, None
     return True, dialog.saved_text()
