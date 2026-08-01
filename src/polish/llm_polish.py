@@ -1,34 +1,35 @@
 from __future__ import annotations
 
-import atexit
 import asyncio
-import json
 import inspect
 import os
 import sys
 import threading
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-import httpx
-from httpx_sse import aconnect_sse
 import yaml
 
 from src.polish.smart_quotes import normalize_zh_cn_smart_quotes
 from src.polish.textbox_context import TextBoxContext, get_active_textbox_context
 from src.polish.vision_context import get_recent_vision_context_summary
-from src.infra.response_parse import extract_text_from_body
-
-
-PolishStreamCallback = Callable[[str], None | Awaitable[None]]
+from src.polish.providers import (
+    PolishProviderConfig,
+    close_polish_provider,
+    get_polish_provider,
+    normalize_provider_name,
+)
+from src.polish.providers.base import PolishCompletionRequest, PolishStreamCallback
 
 
 @dataclass(slots=True)
 class PolishRequestContext:
     cfg: dict[str, Any]
+    provider_name: str
+    provider_options: dict[str, Any]
     base_url: str | None
     api_key: str | None
     model: str | None
@@ -133,7 +134,6 @@ _missing_config_warned = False
 _feature_state_logged = False
 _finalized_history: list[str] = []
 _history_lock = threading.Lock()
-_HTTP_CLIENT: httpx.AsyncClient | None = None
 
 
 def _qwen_asr_context_enabled() -> bool:
@@ -182,8 +182,6 @@ def _qwen_asr_textbox_enabled() -> bool:
         return should_use_asr_textbox()
     except Exception:
         return False
-_HTTP_CLIENT_KEY: tuple[Any, ...] | None = None
-_HTTP_CLIENT_LOOP_ID: int | None = None
 
 
 def _get_bool_env(name: str, default: bool) -> bool:
@@ -193,101 +191,9 @@ def _get_bool_env(name: str, default: bool) -> bool:
     return value.strip().lower() not in {"0", "false", "no", "off"}
 
 
-def _should_reuse_http_client() -> bool:
-    return _get_bool_env("LLM_POLISH_REUSE_HTTP_CLIENT", True)
-
-
-def _should_use_http2() -> bool:
-    return _get_bool_env("LLM_POLISH_HTTP2", True)
-
-
-def _build_http_limits() -> httpx.Limits:
-    keepalive_expiry = float(_get_env("LLM_POLISH_KEEPALIVE_EXPIRY", "90") or "90")
-    return httpx.Limits(
-        max_keepalive_connections=5,
-        max_connections=10,
-        keepalive_expiry=keepalive_expiry,
-    )
-
-
 async def close_polish_http_client(reason: str = "manual") -> None:
     del reason
-    global _HTTP_CLIENT, _HTTP_CLIENT_KEY, _HTTP_CLIENT_LOOP_ID
-
-    client = _HTTP_CLIENT
-    _HTTP_CLIENT = None
-    _HTTP_CLIENT_KEY = None
-    _HTTP_CLIENT_LOOP_ID = None
-    if client is None:
-        return
-
-    close = getattr(client, "aclose", None)
-    if close is None:
-        return
-    try:
-        result = close()
-        if inspect.isawaitable(result):
-            await result
-    except Exception:
-        pass
-
-
-async def get_polish_http_client(
-    *,
-    base_url: str,
-    api_key: str,
-    timeout_s: float,
-) -> tuple[httpx.AsyncClient, bool]:
-    """Return a polish HTTP client and whether the caller should close it."""
-    global _HTTP_CLIENT, _HTTP_CLIENT_KEY, _HTTP_CLIENT_LOOP_ID
-
-    reuse_client = _should_reuse_http_client()
-    http2 = _should_use_http2()
-    try:
-        loop_id = id(asyncio.get_running_loop())
-    except RuntimeError:
-        loop_id = None
-    client_key = (base_url.rstrip("/"), api_key, float(timeout_s), http2)
-
-    if reuse_client and _HTTP_CLIENT is not None:
-        if _HTTP_CLIENT_KEY == client_key and _HTTP_CLIENT_LOOP_ID == loop_id:
-            return _HTTP_CLIENT, False
-        await close_polish_http_client(reason="config-changed")
-
-    client = httpx.AsyncClient(
-        timeout=httpx.Timeout(timeout_s),
-        http2=http2,
-        limits=_build_http_limits(),
-    )
-    if reuse_client:
-        _HTTP_CLIENT = client
-        _HTTP_CLIENT_KEY = client_key
-        _HTTP_CLIENT_LOOP_ID = loop_id
-        return client, False
-    return client, True
-
-
-def _atexit_close_http_client() -> None:
-    try:
-        client = globals().get("_HTTP_CLIENT")
-        if client is None:
-            return
-        close = getattr(client, "aclose", None)
-        if close is None:
-            return
-        try:
-            loop = asyncio.get_event_loop()
-        except Exception:
-            loop = None
-        if loop and loop.is_running():
-            loop.create_task(close())
-        elif loop and not loop.is_closed():
-            loop.run_until_complete(close())
-    except Exception:
-        pass
-
-
-atexit.register(_atexit_close_http_client)
+    await close_polish_provider()
 
 
 # ---------------------------------------------------------------------------
@@ -437,158 +343,6 @@ def is_smart_quotes_enabled() -> bool:
     return bool(smart_quotes_cfg.get("enabled", True))
 
 
-def _build_url(base_url: str) -> str:
-    base = base_url.rstrip("/")
-    if base.endswith("/chat/completions"):
-        return base
-    if base.endswith("/chat"):
-        return f"{base}/completions"
-    if base.endswith("/v1"):
-        return f"{base}/chat/completions"
-    return f"{base}/v1/chat/completions"
-
-
-def _extract_error_message(payload: Any) -> str | None:
-    if not isinstance(payload, dict):
-        return None
-    err = payload.get("error")
-    if isinstance(err, dict):
-        for key in ("message", "code", "type"):
-            val = err.get(key)
-            if isinstance(val, str) and val.strip():
-                return val.strip()
-    if isinstance(err, str) and err.strip():
-        return err.strip()
-    return None
-
-
-async def _call_polish_stream_callback(
-    callback: PolishStreamCallback | None,
-    value: str,
-) -> None:
-    if callback is None:
-        return
-    try:
-        result = callback(value)
-        if inspect.isawaitable(result):
-            await result
-    except Exception:
-        pass
-
-
-def _extract_stream_text_from_obj(obj: Any) -> tuple[str | None, bool]:
-    if isinstance(obj, str):
-        return obj, True
-    if not isinstance(obj, dict):
-        return None, False
-
-    if isinstance(obj.get("delta"), str):
-        return obj["delta"], True
-
-    if isinstance(obj.get("text"), str):
-        return obj["text"], False
-
-    try:
-        delta = obj["choices"][0]["delta"].get("content")
-        if isinstance(delta, str):
-            return delta, True
-    except Exception:
-        pass
-
-    if isinstance(obj.get("choices"), list):
-        return None, False
-
-    if obj.get("object") == "chat.completion.chunk":
-        return None, False
-
-    txt = extract_text_from_body(json.dumps(obj, ensure_ascii=False))
-    if isinstance(txt, str) and txt:
-        return txt, False
-    return None, False
-
-
-async def _stream_polish_request(
-    client: httpx.AsyncClient,
-    url: str,
-    headers: dict[str, str],
-    body: dict[str, Any],
-    *,
-    on_delta: PolishStreamCallback | None = None,
-    on_text: PolishStreamCallback | None = None,
-) -> tuple[str | None, int]:
-    streamed_body = dict(body)
-    streamed_body["stream"] = True
-    status_code = 0
-    current_text = ""
-
-    async with aconnect_sse(
-        client,
-        "POST",
-        url,
-        headers=headers,
-        json=streamed_body,
-    ) as event_source:
-        status_code = event_source.response.status_code
-        if status_code >= 400:
-            return None, status_code
-
-        async for event in event_source.aiter_sse():
-            s = event.data.strip()
-            if s in ("[DONE]", "DONE"):
-                break
-
-            try:
-                obj = json.loads(s)
-            except Exception:
-                txt = extract_text_from_body(s)
-                if isinstance(txt, str) and txt:
-                    current_text += txt
-                    await _call_polish_stream_callback(on_delta, txt)
-                    await _call_polish_stream_callback(on_text, current_text)
-                continue
-
-            text_part, is_delta = _extract_stream_text_from_obj(obj)
-            if not isinstance(text_part, str) or not text_part:
-                continue
-
-            if is_delta:
-                current_text += text_part
-                delta = text_part
-            else:
-                delta = text_part[len(current_text):] if text_part.startswith(current_text) else text_part
-                current_text = text_part
-
-            await _call_polish_stream_callback(on_delta, delta)
-            await _call_polish_stream_callback(on_text, current_text)
-
-    return current_text if current_text.strip() else None, status_code
-
-
-async def _nonstream_polish_request(
-    client: httpx.AsyncClient,
-    url: str,
-    headers: dict[str, str],
-    body: dict[str, Any],
-) -> tuple[str | None, int]:
-    nonstream_body = dict(body)
-    nonstream_body["stream"] = False
-    response = await client.post(url, headers=headers, json=nonstream_body)
-    status_code = response.status_code
-    if status_code >= 400:
-        return None, status_code
-
-    try:
-        payload = response.json()
-        body_text = json.dumps(payload, ensure_ascii=False)
-    except Exception:
-        body_text = response.text
-
-    polished = extract_text_from_body(body_text)
-    if isinstance(polished, str) and polished.strip():
-        return polished, status_code
-    return None, status_code
-
-
 def _truncate_textbox_context(
     text: str,
     max_chars: int,
@@ -645,7 +399,7 @@ def _format_textbox_context(
 
     marked_text, marker_offset = _insert_textbox_position_markers(
         text,
-        caret_offset=captured.caret_offset,
+        caret_offset=cast(int, captured.caret_offset),
         selection_start=captured.selection_start,
         selection_end=captured.selection_end,
         caret_marker=caret_marker,
@@ -869,6 +623,8 @@ def _get_excluded_process_names(value: object) -> list[str]:
 def _coerce_optional_positive_int(value: object, default: int | None = None) -> int | None:
     if value is None:
         return default
+    if not isinstance(value, (str, bytes, bytearray, int, float)):
+        return default
     try:
         number = int(value)
     except (TypeError, ValueError):
@@ -882,8 +638,34 @@ def _prepare_polish_request_context() -> PolishRequestContext:
     timings: dict[str, float] = {}
 
     t0 = time.perf_counter()
-    base_url = _get_env("LLM_POLISH_BASE_URL")
-    api_key = _get_env("LLM_POLISH_API_KEY")
+    provider_name = normalize_provider_name(cfg.get("provider"))
+    raw_provider_cfg = cfg.get(provider_name, {})
+    provider_cfg = dict(raw_provider_cfg) if isinstance(raw_provider_cfg, Mapping) else {}
+    if provider_name == "openrouter":
+        base_url = (
+            provider_cfg.get("base_url")
+            or _get_env("OPENROUTER_BASE_URL")
+            or _get_env("LLM_POLISH_BASE_URL")
+            or "https://openrouter.ai/api/v1"
+        )
+        api_key = _get_env("OPENROUTER_API_KEY") or _get_env("LLM_POLISH_API_KEY")
+    else:
+        base_url = provider_cfg.get("base_url") or _get_env("LLM_POLISH_BASE_URL")
+        api_key = _get_env("LLM_POLISH_API_KEY")
+
+    provider_options = dict(provider_cfg)
+    provider_options.pop("base_url", None)
+    provider_options.setdefault(
+        "reuse_client",
+        _get_bool_env("LLM_POLISH_REUSE_HTTP_CLIENT", True),
+    )
+    provider_options.setdefault("http2", _get_bool_env("LLM_POLISH_HTTP2", True))
+    provider_options.setdefault(
+        "keepalive_expiry",
+        float(_get_env("LLM_POLISH_KEEPALIVE_EXPIRY", "90") or "90"),
+    )
+    if provider_name == "openai_compatible":
+        provider_options.setdefault("extra_body", {"thinking": {"type": "disabled"}})
     model: str | None = cfg.get("model") or None
     timeout_s: float = float(cfg.get("timeout", 30.0))
     temperature = cfg.get("temperature")
@@ -946,6 +728,8 @@ def _prepare_polish_request_context() -> PolishRequestContext:
 
     return PolishRequestContext(
         cfg=cfg,
+        provider_name=provider_name,
+        provider_options=provider_options,
         base_url=base_url,
         api_key=api_key,
         model=model,
@@ -1085,7 +869,10 @@ async def polish_text(
     if prepared_context is not None:
         try:
             if inspect.isawaitable(prepared_context):
-                context = await prepared_context
+                context = await cast(
+                    Awaitable[PolishRequestContext | None],
+                    prepared_context,
+                )
             elif isinstance(prepared_context, PolishRequestContext):
                 context = prepared_context
         except asyncio.CancelledError:
@@ -1108,11 +895,9 @@ async def polish_text(
 
     _missing_config_warned = False
 
-    body: dict[str, Any] = {
-        "model": context.model,
-        "stream": True,
-        "thinking": {"type": "disabled"},
-        "messages": _build_messages(
+    request = PolishCompletionRequest(
+        model=context.model,
+        messages=_build_messages(
             context.prompt,
             text,
             context.textbox_context,
@@ -1121,18 +906,15 @@ async def polish_text(
             context.textbox_context_has_position,
             context.lexicon_message,
         ),
-    }
-    if context.temperature is not None:
-        body["temperature"] = float(context.temperature)
-    if context.max_output_tokens is not None:
-        body["max_tokens"] = int(context.max_output_tokens)
-
-    headers = {
-        "Accept": "application/json",
-        "Authorization": f"Bearer {context.api_key}",
-        "Content-Type": "application/json",
-    }
-    url = _build_url(context.base_url)
+        temperature=(
+            float(context.temperature) if context.temperature is not None else None
+        ),
+        max_output_tokens=(
+            int(context.max_output_tokens)
+            if context.max_output_tokens is not None
+            else None
+        ),
+    )
     # console.print(
     #     (
     #         f"[LLM 润色] 发送润色请求"
@@ -1143,40 +925,25 @@ async def polish_text(
 
     try:
         _t_http = time.monotonic()
-        client, close_after_request = await get_polish_http_client(
-            base_url=context.base_url,
-            api_key=context.api_key,
-            timeout_s=context.timeout_s,
+        provider = await get_polish_provider(
+            PolishProviderConfig(
+                name=context.provider_name,
+                api_key=context.api_key,
+                base_url=context.base_url,
+                timeout_s=context.timeout_s,
+                options=context.provider_options,
+            )
         )
         try:
-            try:
-                polished, status_code = await _stream_polish_request(
-                    client,
-                    url,
-                    headers,
-                    body,
-                    on_delta=on_delta,
-                    on_text=on_text,
-                )
-            except Exception:
-                polished, status_code = None, 0
-            if polished is None:
-                polished, status_code = await _nonstream_polish_request(
-                    client,
-                    url,
-                    headers,
-                    body,
-                )
+            result = await provider.complete(
+                request,
+                on_delta=on_delta,
+                on_text=on_text,
+            )
         finally:
-            if close_after_request:
-                close = getattr(client, "aclose", None)
-                if close is not None:
-                    try:
-                        result = close()
-                        if inspect.isawaitable(result):
-                            await result
-                    except Exception:
-                        pass
+            if not bool(context.provider_options.get("reuse_client", True)):
+                await provider.close()
+        polished = result.text
         _http_elapsed = time.monotonic() - _t_http
         # console.print(
         #     f"[LLM 润色] 响应状态：{status_code}  耗时={_http_elapsed:.2f}s",
@@ -1198,12 +965,6 @@ async def polish_text(
 
         # console.print(
         #     "[LLM 润色] 润色响应未提取到文本",
-        #     style="yellow",
-        # )
-        return text
-    except httpx.TimeoutException:
-        # console.print(
-        #     f"[LLM 润色] 润色请求超时（timeout={context.timeout_s}s）：{exc}",
         #     style="yellow",
         # )
         return text

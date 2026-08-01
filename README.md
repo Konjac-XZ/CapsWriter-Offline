@@ -108,12 +108,38 @@ Launcher behavior: before starting, it terminates any existing running `start_cl
   Qwen ASR context is independently configurable under `asr_context`: by default it reuses the shared capture task to send up to four finalized input-history messages plus one caret-local textbox excerpt before the audio message. Each message is capped at 400 characters; vision summaries and LLM polish instructions are never sent. The upload waits at most `capture_timeout_ms` for capture, then continues without context.
   To inspect the outgoing JSON request, set both `debug: true` and `log_request_payload: true` in the provider YAML. The debug copy keeps model, context, vocabulary, and parameters, but removes the entire `input_audio` value and never includes request headers or the API key.
 - Client settings: Edit `config.toml`
-- Optional LLM polishing: set `LLM_POLISH_BASE_URL` and `LLM_POLISH_API_KEY` in a `.env` or `.env.local` file in the repo root, then edit `config/polish/polish.yaml` for feature settings such as `enabled`, `model`, `timeout`, and `textbox_context`:
+- Optional LLM polishing: select the LLM backend with `provider` in `config/polish/polish.yaml`. Existing configurations that omit it remain compatible and default to `openai_compatible`. For a generic OpenAI-compatible endpoint, set these credentials in `.env` or `.env.local`:
    ```env
    LLM_POLISH_BASE_URL=https://api.openai.com
    LLM_POLISH_API_KEY=your_key_here
    ```
-   This feature uses the OpenAI-compatible Chat Completions API in non-streaming mode and runs before regex replacement and whitespace reformatting in the live microphone pipeline.
+   ```yaml
+   provider: openai_compatible
+   model: gpt-4.1-mini
+   openai_compatible:
+     extra_body: {}
+   ```
+   To use OpenRouter's official Python SDK, set `OPENROUTER_API_KEY`, select `openrouter`, and use OpenRouter's `author/model` model slug. `LLM_POLISH_API_KEY` remains a fallback for migration:
+   ```env
+   OPENROUTER_API_KEY=your_openrouter_key_here
+   ```
+   ```yaml
+   provider: openrouter
+   model: deepseek/deepseek-v3.2
+   openrouter:
+     base_url: https://openrouter.ai/api/v1
+     site_name: CapsWriter-Offline
+     site_url: ''
+     routing:
+       only: [friendli]
+       allow_fallbacks: false
+       require_parameters: true
+       data_collection: deny
+     reasoning:
+       enabled: false
+   ```
+   The `openrouter.routing` mapping is passed to OpenRouter's `provider` request parameter. It supports OpenRouter routing fields such as `order`, `only`, `ignore`, `allow_fallbacks`, `require_parameters`, `data_collection`, `zdr`, `quantizations`, `sort`, and `max_price`; use exact provider slugs from OpenRouter. `order` prioritizes providers, while `only` restricts requests to them. Setting `allow_fallbacks: false` prevents routing to providers outside the selected route.
+   The provider layer streams by default and falls back to one non-streaming request when streaming is unavailable. Polishing runs before regex replacement and whitespace reformatting in the live microphone pipeline.
    LLM polish also runs a conservative Chinese smart-quotes post-processor by default (`smart_quotes.enabled=true`) to turn abused straight quotes into Chinese quotes while protecting Markdown code, inline code, URLs, paths, HTML, math, frontmatter, and structured text.
    When `textbox_context.enabled=true`, it tries Windows UI Automation in this order: focused element → `TextPattern` → `ValuePattern` → `LegacyIAccessible`; if those all fail, it finally falls back to a more intrusive `Ctrl+A` / `Ctrl+C` clipboard probe before attaching a truncated snapshot as extra reference context. Controls that support `TextPattern2` also attach `<|caret|>` at the current insertion point, with optional selection boundary markers when UIA exposes a text selection. `textbox_context.max_tokens` limits the attached textbox context with a lightweight token estimate; the default is 600.
    Press the client hotkey configured by `toggle_textbox_context_shortcut` in `config.toml` (default: `f16`) to quickly toggle `textbox_context.enabled`; set it to an empty string to disable the toggle hotkey.

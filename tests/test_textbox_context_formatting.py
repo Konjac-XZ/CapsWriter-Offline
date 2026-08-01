@@ -259,7 +259,7 @@ class TextboxContextFormattingTest(unittest.TestCase):
         with (
             patch("src.polish.llm_polish._cfg", return_value=cfg),
             patch("src.polish.llm_polish._get_env") as get_env,
-            patch("src.polish.llm_polish.httpx.AsyncClient", _MockAsyncClient),
+            patch("src.polish.providers.openai_compatible.httpx.AsyncClient", _MockAsyncClient),
             patch("src.polish.llm_polish.get_recent_vision_context_summary", return_value=None),
             patch("src.polish.llm_polish.get_finalized_history", return_value=[]),
             patch("src.infra.user_lexicon.get_lexicon_user_message", return_value=None),
@@ -313,7 +313,7 @@ class TextboxContextFormattingTest(unittest.TestCase):
         with (
             patch("src.polish.llm_polish._cfg", return_value=cfg),
             patch("src.polish.llm_polish._get_env") as get_env,
-            patch("src.polish.llm_polish.httpx.AsyncClient", _MockAsyncClient),
+            patch("src.polish.providers.openai_compatible.httpx.AsyncClient", _MockAsyncClient),
             patch("src.polish.llm_polish.get_recent_vision_context_summary", return_value=None),
             patch("src.polish.llm_polish.get_finalized_history", return_value=[]),
             patch("src.polish.llm_polish.get_active_textbox_context", return_value=captured),
@@ -356,7 +356,7 @@ class TextboxContextFormattingTest(unittest.TestCase):
         with (
             patch("src.polish.llm_polish._cfg", return_value=cfg),
             patch("src.polish.llm_polish._get_env") as get_env,
-            patch("src.polish.llm_polish.httpx.AsyncClient", _MockAsyncClient),
+            patch("src.polish.providers.openai_compatible.httpx.AsyncClient", _MockAsyncClient),
             patch("src.polish.llm_polish.get_recent_vision_context_summary", return_value=None),
             patch("src.polish.llm_polish.get_finalized_history", return_value=[]),
             patch("src.infra.user_lexicon.get_lexicon_user_message", return_value=None),
@@ -404,7 +404,7 @@ class TextboxContextFormattingTest(unittest.TestCase):
         with (
             patch("src.polish.llm_polish._cfg", return_value=cfg),
             patch("src.polish.llm_polish._get_env") as get_env,
-            patch("src.polish.llm_polish.httpx.AsyncClient", _MockAsyncClient),
+            patch("src.polish.providers.openai_compatible.httpx.AsyncClient", _MockAsyncClient),
             patch("src.polish.llm_polish.get_recent_vision_context_summary", return_value=None),
             patch("src.polish.llm_polish.get_finalized_history", return_value=[]),
             patch("src.infra.user_lexicon.get_lexicon_user_message", return_value=None),
@@ -448,7 +448,7 @@ class TextboxContextFormattingTest(unittest.TestCase):
         with (
             patch("src.polish.llm_polish._cfg", return_value=cfg),
             patch("src.polish.llm_polish._get_env") as get_env,
-            patch("src.polish.llm_polish.httpx.AsyncClient", _MockAsyncClient),
+            patch("src.polish.providers.openai_compatible.httpx.AsyncClient", _MockAsyncClient),
             patch("src.polish.llm_polish.get_recent_vision_context_summary", return_value=None),
             patch("src.polish.llm_polish.get_finalized_history", return_value=[]),
             patch("src.infra.user_lexicon.get_lexicon_user_message", return_value=None),
@@ -491,7 +491,7 @@ class TextboxContextFormattingTest(unittest.TestCase):
         with (
             patch("src.polish.llm_polish._cfg", return_value=cfg),
             patch("src.polish.llm_polish._get_env") as get_env,
-            patch("src.polish.llm_polish.httpx.AsyncClient", _MockAsyncClient),
+            patch("src.polish.providers.openai_compatible.httpx.AsyncClient", _MockAsyncClient),
             patch("src.polish.llm_polish.get_recent_vision_context_summary", return_value=None),
             patch("src.polish.llm_polish.get_finalized_history", return_value=[]),
             patch("src.infra.user_lexicon.get_lexicon_user_message", return_value=None),
@@ -540,7 +540,7 @@ class TextboxContextFormattingTest(unittest.TestCase):
         with (
             patch("src.polish.llm_polish._cfg", return_value=cfg),
             patch("src.polish.llm_polish._get_env") as get_env,
-            patch("src.polish.llm_polish.httpx.AsyncClient", _MockAsyncClient),
+            patch("src.polish.providers.openai_compatible.httpx.AsyncClient", _MockAsyncClient),
             patch("src.polish.llm_polish.get_recent_vision_context_summary", return_value=None),
             patch("src.polish.llm_polish.get_finalized_history", return_value=[]),
             patch("src.infra.user_lexicon.get_lexicon_user_message", return_value=None),
