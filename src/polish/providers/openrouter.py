@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import re
+import time
+import uuid
 from collections.abc import Mapping
 from typing import Any
 
@@ -58,6 +60,10 @@ def _emit_warning(message: str) -> None:
         pass
 
 
+def _emit_info(message: str) -> None:
+    _LOGGER.info(message)
+
+
 def _value(value: Any, name: str, default: Any = None) -> Any:
     if isinstance(value, Mapping):
         return value.get(name, default)
@@ -110,6 +116,10 @@ class OpenRouterPolishProvider:
             "api_key": config.api_key,
             "async_client": self._http_client,
             "timeout_ms": max(1, int(config.timeout_s * 1000)),
+            # The SDK retries 5XX responses by default without exposing each
+            # attempt to this adapter. Keep retry ownership here so every
+            # additional HTTP request is visible in application logs.
+            "retry_config": None,
         }
         if config.base_url:
             client_options["server_url"] = config.base_url.rstrip("/")
@@ -139,6 +149,8 @@ class OpenRouterPolishProvider:
         on_text: PolishStreamCallback | None = None,
     ) -> PolishCompletionResult:
         kwargs = self._build_kwargs(request)
+        request_id = uuid.uuid4().hex[:8]
+        stream_started_at = time.perf_counter()
         try:
             stream = await self._client.chat.send_async(stream=True, **kwargs)
             current_text = ""
@@ -150,26 +162,40 @@ class OpenRouterPolishProvider:
                 await invoke_callback(on_delta, delta)
                 await invoke_callback(on_text, current_text)
             if current_text.strip():
+                _emit_info(
+                    "[LLM 润色][OpenRouter] 流式请求成功"
+                    f"（request_id={request_id}, model={request.model}, "
+                    f"elapsed={time.perf_counter() - stream_started_at:.2f}s, "
+                    f"chars={len(current_text)}）"
+                )
                 return PolishCompletionResult(current_text, 200)
         except Exception as exc:
             # Match the legacy transport behavior: retry once without streaming.
             _emit_error(
                 "[LLM 润色][OpenRouter] 流式请求失败，将回退到非流式请求"
-                f"（model={request.model}）",
+                f"（request_id={request_id}, model={request.model}, "
+                f"elapsed={time.perf_counter() - stream_started_at:.2f}s）",
                 exc,
             )
         else:
             _emit_warning(
                 "[LLM 润色][OpenRouter] 流式响应未返回可用文本，将回退到非流式请求"
-                f"（model={request.model}）"
+                f"（request_id={request_id}, model={request.model}, "
+                f"elapsed={time.perf_counter() - stream_started_at:.2f}s）"
             )
 
+        fallback_started_at = time.perf_counter()
+        _emit_info(
+            "[LLM 润色][OpenRouter] 开始非流式回退请求"
+            f"（request_id={request_id}, model={request.model}）"
+        )
         try:
             result = await self._client.chat.send_async(stream=False, **kwargs)
         except Exception as exc:
             _emit_error(
                 "[LLM 润色][OpenRouter] 非流式回退请求失败"
-                f"（model={request.model}）",
+                f"（request_id={request_id}, model={request.model}, "
+                f"elapsed={time.perf_counter() - fallback_started_at:.2f}s）",
                 exc,
             )
             raise
@@ -177,7 +203,15 @@ class OpenRouterPolishProvider:
         if not text or not text.strip():
             _emit_error(
                 "[LLM 润色][OpenRouter] 非流式响应未包含可用文本"
-                f"（model={request.model}）"
+                f"（request_id={request_id}, model={request.model}, "
+                f"elapsed={time.perf_counter() - fallback_started_at:.2f}s）"
+            )
+        else:
+            _emit_info(
+                "[LLM 润色][OpenRouter] 非流式回退请求成功"
+                f"（request_id={request_id}, model={request.model}, "
+                f"elapsed={time.perf_counter() - fallback_started_at:.2f}s, "
+                f"chars={len(text)}）"
             )
         return PolishCompletionResult(text, 200)
 

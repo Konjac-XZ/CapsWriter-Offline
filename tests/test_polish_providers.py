@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 import pytest
@@ -200,6 +201,7 @@ def test_openrouter_provider_uses_official_sdk_routing(monkeypatch: pytest.Monke
     assert sdk.options["server_url"] == "https://openrouter.example/api/v1"
     assert sdk.options["http_referer"] == "https://example.com/capswriter"
     assert sdk.options["x_open_router_title"] == "CapsWriter-Offline"
+    assert sdk.options["retry_config"] is None
 
     request = sdk.chat.calls[0]
     assert request["model"] == "xiaomi/mimo-v2.5-pro"
@@ -217,6 +219,7 @@ def test_openrouter_provider_uses_official_sdk_routing(monkeypatch: pytest.Monke
 def test_openrouter_provider_falls_back_to_nonstream(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     import src.polish.providers.openrouter as openrouter_provider
 
@@ -238,6 +241,7 @@ def test_openrouter_provider_falls_back_to_nonstream(
     _FallbackOpenRouter.instances = []
     monkeypatch.setattr(openrouter_provider, "OpenRouter", _FallbackOpenRouter)
     monkeypatch.setattr(openrouter_provider.httpx, "AsyncClient", _FakeAsyncClient)
+    caplog.set_level(logging.INFO, logger="capswriter.polish.openrouter")
 
     async def run_case() -> str | None:
         provider = OpenRouterPolishProvider(
@@ -267,6 +271,59 @@ def test_openrouter_provider_falls_back_to_nonstream(
     assert "stream unavailable" in output
     assert fake_secret not in output
     assert "[REDACTED]" in output
+    assert "开始非流式回退请求" in caplog.text
+    assert "非流式回退请求成功" in caplog.text
+    assert "request_id=" in caplog.text
+
+
+def test_openrouter_provider_logs_empty_stream_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import src.polish.providers.openrouter as openrouter_provider
+
+    class _EmptyStreamChat(_FakeChat):
+        async def send_async(self, **kwargs: Any):
+            self.calls.append(kwargs)
+            if kwargs["stream"]:
+                return _FakeStream([{"choices": []}])
+            return {"choices": [{"message": {"content": "回退结果"}}]}
+
+    class _EmptyStreamOpenRouter(_FakeOpenRouter):
+        def __init__(self, **kwargs: Any) -> None:
+            self.options = kwargs
+            self.chat = _EmptyStreamChat()
+            self.__class__.instances.append(self)
+
+    _EmptyStreamOpenRouter.instances = []
+    monkeypatch.setattr(openrouter_provider, "OpenRouter", _EmptyStreamOpenRouter)
+    monkeypatch.setattr(openrouter_provider.httpx, "AsyncClient", _FakeAsyncClient)
+    caplog.set_level(logging.INFO, logger="capswriter.polish.openrouter")
+
+    async def run_case() -> str | None:
+        provider = OpenRouterPolishProvider(
+            PolishProviderConfig(
+                name="openrouter",
+                api_key="or-test-key",
+                base_url="https://openrouter.ai/api/v1",
+                timeout_s=10,
+            )
+        )
+        try:
+            result = await provider.complete(
+                PolishCompletionRequest(
+                    model="deepseek/deepseek-v3.2",
+                    messages=[{"role": "user", "content": "原文"}],
+                )
+            )
+            return result.text
+        finally:
+            await provider.close()
+
+    assert asyncio.run(run_case()) == "回退结果"
+    assert "流式响应未返回可用文本，将回退到非流式请求" in caplog.text
+    assert "开始非流式回退请求" in caplog.text
+    assert "非流式回退请求成功" in caplog.text
 
 
 def test_openrouter_provider_logs_nonstream_failure(
