@@ -224,6 +224,10 @@ async def recv_result():
                     pass
                 else:
                     await type_final(text)
+            if is_final and text:
+                from src.keyboard.play_music import play_completion_sound
+
+                play_completion_sound()
             _clear_active_task(current_tid)
             if hide_status_overlay_when_done:
                 _emit_status_overlay("hide")

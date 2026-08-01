@@ -29,6 +29,7 @@ Thumbs.db
 downloads/
 models/
 *.wav
+!bubble.wav
 *.mp3
 .provider_state.json
 config_backup.toml

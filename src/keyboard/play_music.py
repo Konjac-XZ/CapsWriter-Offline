@@ -63,6 +63,8 @@ def _candidate_project_roots() -> list[Path]:
     cwd = Path.cwd()
     roots.append(cwd)
     roots.append(Path(__file__).resolve().parents[2])
+    if bundle_root := getattr(sys, "_MEIPASS", None):
+        roots.append(Path(bundle_root))
     if getattr(sys, "frozen", False):
         roots.append(Path(sys.executable).resolve().parent)
     return list(dict.fromkeys(roots))
@@ -124,6 +126,26 @@ def _fallback_beep():
         winsound.MessageBeep(winsound.MB_ICONASTERISK)
     except Exception:
         pass
+
+
+def play_completion_sound() -> None:
+    """Play the bundled completion sound without blocking result delivery."""
+    sound_file = _resolve_audio_file(Path("bubble.wav"))
+    if sound_file is None:
+        console.print("上屏提示音文件不存在: bubble.wav")
+        return
+
+    if sys.platform == "win32":
+        try:
+            import winsound
+
+            flags = winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT
+            winsound.PlaySound(str(sound_file), flags)
+            return
+        except Exception as exc:
+            console.print(f"播放上屏提示音失败: {exc}")
+
+    play_music(sound_file, "100")
 
 
 def play_music(file_path: Path, volume_level: str = "50"):
