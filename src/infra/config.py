@@ -24,37 +24,11 @@ def _section(name: str) -> Mapping[str, Any]:
     return {}
 
 
-server_cfg = _section("server")
 client_cfg = _section("client")
-model_paths_cfg = _section("model_paths")
-sensevoice_cfg = _section("sensevoice_args")
-paraformer_cfg = _section("paraformer_args")
-
-
-# 服务端配置
-class ServerConfig:
-    model: str = str(server_cfg.get("model", ""))
-    addr: str = str(server_cfg.get("addr", ""))
-    speech_recognition_port: str = str(server_cfg.get("speech_recognition_port", ""))
-    format_num: bool = bool(server_cfg.get("format_num", False))
-    format_punc: bool = bool(server_cfg.get("format_punc", False))
-    format_spell: bool = bool(server_cfg.get("format_spell", False))
-    shrink_automatically_to_tray: bool = bool(
-        server_cfg.get("shrink_automatically_to_tray", False)
-    )
-    only_run_once: bool = bool(server_cfg.get("only_run_once", False))
-    in_the_meantime_start_the_client: bool = bool(
-        server_cfg.get("in_the_meantime_start_the_client", False)
-    )
-    in_the_meantime_start_the_client_and_run_as_admin: bool = bool(
-        server_cfg.get("in_the_meantime_start_the_client_and_run_as_admin", False)
-    )
 
 
 # 客户端配置
 class ClientConfig:
-    addr: str = str(client_cfg.get("addr", ""))
-    speech_recognition_port: str = str(client_cfg.get("speech_recognition_port", ""))
     speech_recognition_shortcut: str = str(
         client_cfg.get("speech_recognition_shortcut", "")
     )
@@ -107,47 +81,6 @@ class ClientConfig:
     )
 
 
-# 模型路径配置
-class ModelPaths:
-    model_dir: Path = Path(str(model_paths_cfg.get("model_dir", "")))
-    sensevoice_path: Path = Path(str(model_paths_cfg.get("sensevoice_path", "")))
-    sensevoice_tokens_path: Path = Path(
-        str(model_paths_cfg.get("sensevoice_tokens_path", ""))
-    )
-    paraformer_path: Path = Path(str(model_paths_cfg.get("paraformer_path", "")))
-    paraformer_tokens_path: Path = Path(
-        str(model_paths_cfg.get("paraformer_tokens_path", ""))
-    )
-    punc_model_dir: Path = Path(str(model_paths_cfg.get("punc_model_dir", "")))
-
-
-# SenseVoice 参数配置
-class SenseVoiceArgs:
-    model: str = str(model_paths_cfg.get("sensevoice_path", ""))
-    tokens: str = str(model_paths_cfg.get("sensevoice_tokens_path", ""))
-    num_threads: int = int(sensevoice_cfg.get("num_threads", 0))
-    sample_rate: int = int(sensevoice_cfg.get("sample_rate", 0))
-    feature_dim: int = int(sensevoice_cfg.get("feature_dim", 0))
-    decoding_method: str = str(sensevoice_cfg.get("decoding_method", ""))
-    debug: bool = bool(sensevoice_cfg.get("debug", False))
-    provider: str = str(sensevoice_cfg.get("provider", ""))
-    language: str = str(sensevoice_cfg.get("language", ""))
-    use_itn: bool = bool(sensevoice_cfg.get("use_itn", False))
-    rule_fsts: str = str(sensevoice_cfg.get("rule_fsts", ""))
-    rule_fars: str = str(sensevoice_cfg.get("rule_fars", ""))
-
-
-# Paraformer 参数配置
-class ParaformerArgs:
-    paraformer: str = str(model_paths_cfg.get("paraformer_path", ""))
-    tokens: str = str(model_paths_cfg.get("paraformer_tokens_path", ""))
-    num_threads: int = int(paraformer_cfg.get("num_threads", 0))
-    sample_rate: int = int(paraformer_cfg.get("sample_rate", 0))
-    feature_dim: int = int(paraformer_cfg.get("feature_dim", 0))
-    decoding_method: str = str(paraformer_cfg.get("decoding_method", ""))
-    debug: bool = bool(paraformer_cfg.get("debug", False))
-
-
 def print_config():
     """测试，打印所有配置信息"""
 
@@ -165,13 +98,7 @@ def print_config():
     from rich.table import Table
 
     console = Console()
-    config_classes = [
-        ServerConfig,
-        ClientConfig,
-        ModelPaths,
-        SenseVoiceArgs,
-        ParaformerArgs,
-    ]
+    config_classes = [ClientConfig]
 
     for config_class in config_classes:
         table = Table(title=f"{config_class.__name__} 配置")
