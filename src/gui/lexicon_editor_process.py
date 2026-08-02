@@ -16,6 +16,7 @@ from src.gui.lexicon_editor import LexiconEditDialog, read_lexicon_text
 
 COMMAND_POLL_INTERVAL_MS = 100
 PARENT_POLL_INTERVAL_MS = 2000
+IDLE_EXIT_TIMEOUT_MS = 5 * 60 * 1000
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
@@ -89,6 +90,26 @@ class LexiconEditorService(QObject):
         self._parent_timer.timeout.connect(self._check_parent)
         self._parent_timer.start(PARENT_POLL_INTERVAL_MS)
 
+        self._idle_timer = QTimer(self)
+        self._idle_timer.setSingleShot(True)
+        self._idle_timer.timeout.connect(self._quit_if_idle)
+        self._arm_idle_shutdown()
+
+    def _arm_idle_shutdown(self) -> None:
+        """Exit after five minutes without a visible or pending editor."""
+        self._idle_timer.start(IDLE_EXIT_TIMEOUT_MS)
+
+    def _cancel_idle_shutdown(self) -> None:
+        self._idle_timer.stop()
+
+    def _quit_if_idle(self) -> None:
+        dialog = self._dialog
+        if self._pending_show_serial is not None:
+            return
+        if dialog is not None and dialog.isVisible():
+            return
+        QApplication.quit()
+
     def _initialize_dialog(self) -> None:
         """Create Monaco only after the first explicit show request."""
         if self._dialog is not None:
@@ -108,6 +129,7 @@ class LexiconEditorService(QObject):
                 self._event_path,
                 {"serial": serial, "event": "error", "message": str(exc)},
             )
+            self._arm_idle_shutdown()
 
     def _dialog_initialized(self) -> None:
         self._dialog_ready = True
@@ -115,6 +137,8 @@ class LexiconEditorService(QObject):
         self._pending_show_serial = None
         if serial is not None:
             self._open_dialog(serial)
+        else:
+            self._arm_idle_shutdown()
 
     def _open_dialog(self, serial: int) -> None:
         dialog = self._dialog
@@ -127,8 +151,10 @@ class LexiconEditorService(QObject):
                 self._event_path,
                 {"serial": serial, "event": "error", "message": str(exc)},
             )
+            self._arm_idle_shutdown()
             return
 
+        self._cancel_idle_shutdown()
         self._active_serial = serial
         dialog.open()
         dialog.raise_()
@@ -155,6 +181,8 @@ class LexiconEditorService(QObject):
             return
         if command != "show":
             return
+
+        self._cancel_idle_shutdown()
 
         dialog = self._dialog
         if dialog is not None and dialog.isVisible():
@@ -188,6 +216,7 @@ class LexiconEditorService(QObject):
                 "event": "saved" if accepted else "cancelled",
             },
         )
+        self._arm_idle_shutdown()
 
     def _check_parent(self) -> None:
         if not _process_exists(self._parent_pid):

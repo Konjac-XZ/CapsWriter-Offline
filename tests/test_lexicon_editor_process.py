@@ -30,6 +30,18 @@ class _DialogStub:
         pass
 
 
+class _TimerStub:
+    def __init__(self) -> None:
+        self.started_with: list[int] = []
+        self.stop_count = 0
+
+    def start(self, interval: int) -> None:
+        self.started_with.append(interval)
+
+    def stop(self) -> None:
+        self.stop_count += 1
+
+
 def test_windows_parent_probe_never_calls_os_kill(monkeypatch) -> None:
     kill_calls: list[tuple[int, int]] = []
     monkeypatch.setattr(lexicon_editor_process.os, "name", "nt")
@@ -64,6 +76,7 @@ def test_each_show_command_refreshes_latest_disk_text(monkeypatch, tmp_path: Pat
     service._active_serial = None
     service._dialog = dialog
     service._dialog_ready = True
+    service._idle_timer = _TimerStub()
 
     service._command_path.write_text('{"serial": 1, "command": "show"}', encoding="utf-8")
     service._poll_command()
@@ -94,6 +107,7 @@ def test_first_show_schedules_lazy_editor_initialization(monkeypatch, tmp_path: 
     service._pending_show_serial = None
     service._dialog = None
     service._dialog_ready = False
+    service._idle_timer = _TimerStub()
     service._command_path.write_text('{"serial": 1, "command": "show"}', encoding="utf-8")
 
     service._poll_command()
@@ -119,9 +133,51 @@ def test_visible_editor_is_not_overwritten_by_second_show(monkeypatch, tmp_path:
     service._last_command_serial = 0
     service._active_serial = 1
     service._dialog = dialog
+    service._idle_timer = _TimerStub()
     service._command_path.write_text('{"serial": 2, "command": "show"}', encoding="utf-8")
 
     service._poll_command()
 
     assert dialog.prepared_texts == []
     assert json.loads(service._event_path.read_text(encoding="utf-8"))["event"] == "already_open"
+
+
+def test_dialog_finish_starts_five_minute_idle_timer(tmp_path: Path) -> None:
+    timer = _TimerStub()
+    service = lexicon_editor_process.LexiconEditorService.__new__(
+        lexicon_editor_process.LexiconEditorService
+    )
+    service._event_path = tmp_path / "event.json"
+    service._active_serial = 7
+    service._idle_timer = timer
+
+    service._dialog_finished(0)
+
+    assert timer.started_with == [5 * 60 * 1000]
+    assert json.loads(service._event_path.read_text(encoding="utf-8")) == {
+        "serial": 7,
+        "event": "cancelled",
+    }
+
+
+def test_idle_timer_quits_only_when_editor_is_not_in_use(monkeypatch) -> None:
+    quit_calls: list[bool] = []
+    monkeypatch.setattr(
+        lexicon_editor_process.QApplication,
+        "quit",
+        lambda: quit_calls.append(True),
+    )
+    dialog = _DialogStub()
+    service = lexicon_editor_process.LexiconEditorService.__new__(
+        lexicon_editor_process.LexiconEditorService
+    )
+    service._dialog = dialog
+    service._pending_show_serial = None
+
+    dialog.visible = True
+    service._quit_if_idle()
+    assert quit_calls == []
+
+    dialog.visible = False
+    service._quit_if_idle()
+    assert quit_calls == [True]
