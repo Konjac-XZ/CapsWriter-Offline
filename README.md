@@ -103,7 +103,7 @@ Launcher behavior: before starting, it terminates any existing running `start_cl
 
 - Providers: Edit YAML files in `config/providers/`
 - Gemini: Fill `config/providers/gemini.yaml` (or set `GEMINI_API_KEY`/`GOOGLE_API_KEY`) and enable the provider before use
-- Qwen Audio 3.0 ASR: Set `DASHSCOPE_API_KEY`, then select `阿里百炼 Qwen Audio 3.0` in the GUI. The provider uses final-file HTTP transcription; optionally fill `workspace_id` in `config/providers/qwen_audio_3.yaml` to use the dedicated Beijing or Singapore workspace endpoint.
+- Qwen Audio 3.0 ASR: Set `DASHSCOPE_API_KEY`, then select `阿里百炼 (qwen-audio)` in the GUI. The provider uses final-file HTTP transcription; optionally fill `workspace_id` in `config/providers/qwen_audio_3.yaml` to use the dedicated Beijing or Singapore workspace endpoint.
   The GUI user lexicon is sent as inline Qwen hotwords on the next recording (`use_user_lexicon: true`, default weight `4`). Provider-specific `vocabulary` entries add terms or override weights. Invalid/over-limit terms are skipped with a console diagnostic.
   Qwen ASR context is independently configurable under `asr_context`: by default it reuses the shared capture task to send up to four finalized input-history messages plus one caret-local textbox excerpt before the audio message. Each message is capped at 400 characters; vision summaries and LLM polish instructions are never sent. The upload waits at most `capture_timeout_ms` for capture, then continues without context.
   To inspect the outgoing JSON request, set both `debug: true` and `log_request_payload: true` in the provider YAML. The debug copy keeps model, context, vocabulary, and parameters, but removes the entire `input_audio` value and never includes request headers or the API key.

@@ -142,6 +142,7 @@ def _qwen_asr_context_enabled() -> bool:
 
         provider_type = (provider_manager.get_active_provider_type() or "").strip().lower()
         if provider_type not in {
+            "qwen-audio",
             "qwen_audio_3",
             "qwen-audio-3",
             "qwen_audio",

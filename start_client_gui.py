@@ -692,7 +692,10 @@ class GUI(QMainWindow):
             provider_id = self.provider_combo.currentData()
             if provider_id is not None:
                 provider = self.provider_manager.get_provider(provider_id)
-                if provider and getattr(provider, "type", "").lower() == "dashscope":
+                if provider and getattr(provider, "type", "").lower() in {
+                    "qwen-audio-legacy",
+                    "dashscope",
+                }:
                     visible = True
                     settings = provider.settings or {}
                     checked = bool(settings.get("realtime", False))
@@ -874,7 +877,10 @@ class GUI(QMainWindow):
         if current_data is None:
             return
         provider = self.provider_manager.get_provider(current_data)
-        if not provider or getattr(provider, "type", "").lower() != "dashscope":
+        if not provider or getattr(provider, "type", "").lower() not in {
+            "qwen-audio-legacy",
+            "dashscope",
+        }:
             return
 
         ok = False

@@ -252,6 +252,7 @@ def _active_provider_kind() -> str:
 
 def _is_qwen_audio_3_provider() -> bool:
     return _active_provider_kind() in {
+        "qwen-audio",
         "qwen_audio_3",
         "qwen-audio-3",
         "qwen_audio",

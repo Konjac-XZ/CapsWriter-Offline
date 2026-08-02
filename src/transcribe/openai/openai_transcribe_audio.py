@@ -37,8 +37,10 @@ def _canonical_provider_type(provider: str | None) -> str:
         return "openrouter"
     if p in ("mimo", "xiaomi-mimo"):
         return "xiaomi"
-    if p in ("qwen-audio-3", "qwen_audio", "alibaba_qwen_audio_3"):
+    if p in ("qwen-audio", "qwen-audio-3", "qwen_audio", "alibaba_qwen_audio_3"):
         return "qwen_audio_3"
+    if p == "qwen-audio-legacy":
+        return "dashscope"
     return p or "openai"
 
 

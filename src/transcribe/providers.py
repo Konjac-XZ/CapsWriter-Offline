@@ -379,9 +379,10 @@ def make_provider(kind: str) -> TranscriptionProvider:
         return ReplicateProvider()
     if kind in ("elevenlabs", "eleven-labs", "xi"):
         return ElevenLabsProvider()
-    if kind in ("dashscope", "alibabacloud"):
+    if kind in ("qwen-audio-legacy", "dashscope", "alibabacloud"):
         return DashScopeProvider()
     if kind in (
+        "qwen-audio",
         "qwen_audio_3",
         "qwen-audio-3",
         "qwen_audio",

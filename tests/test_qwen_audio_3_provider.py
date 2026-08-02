@@ -13,6 +13,7 @@ from src.transcribe.qwen_audio_3 import qwen_audio_3_transcribe_http as qwen_aud
 
 def test_make_provider_supports_qwen_audio_3_aliases():
     for provider_type in (
+        "qwen-audio",
         "qwen_audio_3",
         "qwen-audio-3",
         "qwen_audio",
@@ -345,7 +346,7 @@ def test_provider_yaml_is_discoverable_with_hotword_defaults():
 
     provider = manager.get_provider("qwen_audio_3")
     assert provider is not None
-    assert provider.type == "qwen_audio_3"
+    assert provider.type == "qwen-audio"
     assert provider.settings["model"] == "qwen-audio-3.0-asr-flash"
     assert provider.settings["use_user_lexicon"] is True
     assert provider.settings["user_lexicon_weight"] == 4
@@ -357,7 +358,7 @@ def test_transcribe_api_dispatches_qwen_audio_3_provider(monkeypatch):
     class FakeManager:
         @staticmethod
         def get_active_provider_type():
-            return "qwen_audio_3"
+            return "qwen-audio"
 
     class FakeProvider:
         async def transcribe(self, *args, **kwargs):
@@ -385,7 +386,7 @@ def test_transcribe_api_dispatches_qwen_audio_3_provider(monkeypatch):
         )
     )
 
-    assert selected == ["qwen_audio_3"]
+    assert selected == ["qwen-audio"]
     assert result[0] == "已接入"
     assert result[4]["provider"] == "qwen_audio_3"
 

@@ -160,6 +160,7 @@ class ProviderConfig:
     description: str
     settings: Dict[str, Any]
     enabled: bool
+    hidden: bool = False
 
 
 class ProviderManager:
@@ -192,7 +193,8 @@ class ProviderManager:
                     type=data['type'],
                     description=data['description'],
                     settings=data['settings'],
-                    enabled=data.get('enabled', False)
+                    enabled=data.get('enabled', False),
+                    hidden=data.get('hidden', False),
                 )
 
                 self.providers[provider_id] = provider
@@ -289,17 +291,19 @@ class ProviderManager:
                 except Exception as e:
                     print(f"Error saving provider state {yaml_file}: {e}")
     
-    def list_providers(self) -> List[Dict[str, Any]]:
-        """List all available providers with their info."""
+    def list_providers(self, include_hidden: bool = False) -> List[Dict[str, Any]]:
+        """List selectable providers, optionally including hidden configurations."""
         return [
             {
                 "id": provider_id,
                 "name": provider.name,
                 "type": provider.type,
                 "description": provider.description,
-                "enabled": provider.enabled
+                "enabled": provider.enabled,
+                "hidden": provider.hidden,
             }
             for provider_id, provider in self.providers.items()
+            if include_hidden or not provider.hidden
         ]
     
     def get_provider_prompt(self) -> str:

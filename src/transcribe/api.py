@@ -86,8 +86,10 @@ async def transcribe_audio(
         "openai",
         "replicate",
         "elevenlabs",
+        "qwen-audio-legacy",
         "dashscope",
         "alibabacloud",
+        "qwen-audio",
         "qwen_audio_3",
         "qwen-audio-3",
         "qwen_audio",
@@ -106,6 +108,7 @@ async def transcribe_audio(
     ):
         prov = make_provider(provider)
         if provider in (
+            "qwen-audio",
             "qwen_audio_3",
             "qwen-audio-3",
             "qwen_audio",
