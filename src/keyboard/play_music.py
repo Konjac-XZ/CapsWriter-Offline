@@ -130,9 +130,9 @@ def _fallback_beep():
 
 def play_completion_sound() -> None:
     """Play the bundled completion sound without blocking result delivery."""
-    sound_file = _resolve_audio_file(Path("bubble.wav"))
+    sound_file = _resolve_audio_file(Path("assets/bubble.wav"))
     if sound_file is None:
-        console.print("上屏提示音文件不存在: bubble.wav")
+        console.print("上屏提示音文件不存在: assets/bubble.wav")
         return
 
     if sys.platform == "win32":

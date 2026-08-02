@@ -18,7 +18,6 @@ a = Analysis(
     binaries=[],
     datas=[
         ('assets', 'assets'),
-        ('bubble.wav', '.'),
         ('config', 'config'),
         ('config.toml', '.'),
         ('src/client_gui_theme_custom.css', 'src'),

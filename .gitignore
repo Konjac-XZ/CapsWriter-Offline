@@ -29,8 +29,10 @@ Thumbs.db
 downloads/
 models/
 *.wav
-!bubble.wav
+!assets/bubble.wav
 *.mp3
+!assets/SpeechOff.mp3
+!assets/SpeechOn.mp3
 .provider_state.json
 config_backup.toml
 

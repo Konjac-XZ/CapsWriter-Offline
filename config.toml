@@ -136,7 +136,7 @@ play_start_music = true
 # 开始任务时是否播放提示音
 # 需要 ffplay.exe
 
-start_music_path = "SpeechOn.mp3"
+start_music_path = "assets/SpeechOn.mp3"
 # 开始任务提示音的文件路径
 
 start_music_volume = "100"
@@ -146,7 +146,7 @@ play_stop_music = true
 # 结束任务时是否播放提示音
 # 需要 ffplay.exe
 
-stop_music_path = "SpeechOff.mp3"
+stop_music_path = "assets/SpeechOff.mp3"
 # 结束任务提示音的文件路径
 
 stop_music_volume = "100"
