@@ -1,4 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_data_files
 """
 PyInstaller spec file for CapsWriter-Offline GUI client.
 
@@ -21,15 +22,20 @@ a = Analysis(
         ('config', 'config'),
         ('config.toml', '.'),
         ('src/client_gui_theme_custom.css', 'src'),
-    ],
+    ] + collect_data_files('qtmonaco'),
     hiddenimports=[
         'PySide6.QtCore',
         'PySide6.QtGui',
         'PySide6.QtWidgets',
+        'PySide6.QtWebChannel',
+        'PySide6.QtWebEngineCore',
+        'PySide6.QtWebEngineWidgets',
         'comtypes',
         'comtypes.client',
         'comtypes.gen',
         'qt_material',
+        'qtmonaco',
+        'src.gui.lexicon_editor_process',
         'win32api',
         'win32con',
         'win32gui',

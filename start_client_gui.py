@@ -66,6 +66,7 @@ from src.audio.control_requests import write_abandon_request, write_clear_histor
 from src.audio.retry_cache import has_retry_audio, latest_audio_path_for_mime, write_retry_request
 from src.gui.app_startup import apply_theme_later, configure_app_locale_and_font, print_screen_scale
 from src.gui.listening_overlay import StatusOverlayController
+from src.gui.lexicon_editor_client import LexiconEditorProcessClient
 from src.gui.prompt_editor import PromptEditDialog
 from src.gui.startup_profiler import StartupProfileOptions, StartupProfiler
 from src.gui.worker_output_router import WorkerOutputRouter
@@ -107,8 +108,10 @@ GUI_COLOR_ALIASES = {
 GUI_TIMING_SLOW_MS = 100.0
 GUI_TIMER_GAP_MS = 500.0
 GUI_WATCHDOG_GAP_MS = 700.0
-LEXICON_EDITOR_WARMUP_DELAY_MS = 8000
-LEXICON_EDITOR_BUSY_RETRY_MS = 3000
+GUI_LOG_MAX_BLOCKS = 500
+# Monaco is initialized in its own GUI process, so warm it as soon as the
+# primary window has completed its deferred startup turn.
+LEXICON_EDITOR_WARMUP_DELAY_MS = 0
 LEXICON_EDITOR_FAILURE_RETRY_MS = 10000
 LEXICON_EDITOR_MAX_WARMUP_FAILURES = 3
 
@@ -153,11 +156,15 @@ class GUI(QMainWindow):
         self.core_client_process: subprocess.Popen[str] | None = None
         self.text_box_wordCountLabel: QLabel | None = None
         self.old_pos = QPoint()
-        self._lexicon_dialog: Any | None = None
+        lexicon_python = resolve_pythonw_client() or sys.executable
+        self._lexicon_editor_client = LexiconEditorProcessClient(ROOT, lexicon_python)
         self._lexicon_warmup_failures = 0
         self._lexicon_warmup_timer = QTimer(self)
         self._lexicon_warmup_timer.setSingleShot(True)
         self._lexicon_warmup_timer.timeout.connect(self._warm_up_lexicon_editor)
+        self._lexicon_event_timer = QTimer(self)
+        self._lexicon_event_timer.timeout.connect(self._poll_lexicon_editor_event)
+        self._lexicon_event_timer.start(250)
 
         self.init_ui()
         self.output_router = WorkerOutputRouter()
@@ -810,54 +817,38 @@ class GUI(QMainWindow):
         self.append_colored_line("已保存 LLM 提示词。")
 
     def show_edit_lexicon_dialog(self) -> None:
-        """Open the user lexicon editor and persist any changes."""
-        try:
-            from src.gui.lexicon_editor import LexiconEditDialog, open_lexicon_editor
-
-            dialog = self._lexicon_dialog
-            if not isinstance(dialog, LexiconEditDialog):
-                dialog = LexiconEditDialog(self)
-                self._lexicon_dialog = dialog
-            accepted, _saved_text = open_lexicon_editor(self, dialog=dialog)
-        except Exception as exc:
-            self.append_colored_line(f"读取用户词库失败：{exc}", "#ff5555")
-            return
-
-        if not accepted:
-            return
-
-        self.append_colored_line("用户词库已保存，下次录音自动生效。")
+        """Ask the separate, persistent Monaco process to show its window."""
+        if not self._lexicon_editor_client.show():
+            self.append_colored_line("启动用户词库编辑器失败。", "#ff5555")
 
     def _schedule_lexicon_editor_warmup(self, delay_ms: int) -> None:
-        """Schedule a single idle-time attempt to create the hidden editor."""
-        if self._lexicon_dialog is not None or self._lexicon_warmup_timer.isActive():
+        """Schedule a single attempt to start the hidden editor process."""
+        if self._lexicon_editor_client.is_running() or self._lexicon_warmup_timer.isActive():
             return
         self._lexicon_warmup_timer.start(max(0, delay_ms))
 
     def _warm_up_lexicon_editor(self) -> None:
-        """Create and retain the lexicon editor once the recording UI is idle."""
-        if self._lexicon_dialog is not None:
+        """Initialize Monaco in another process without blocking this GUI."""
+        if self._lexicon_editor_client.is_running():
             return
-
-        try:
-            if self.status_overlay.overlay.isVisible():
-                self._schedule_lexicon_editor_warmup(LEXICON_EDITOR_BUSY_RETRY_MS)
-                return
-        except Exception:
-            pass
-
-        try:
-            from src.gui.lexicon_editor import LexiconEditDialog
-
-            dialog = LexiconEditDialog(self)
-            dialog.hide()
-            self._lexicon_dialog = dialog
+        if self._lexicon_editor_client.start():
             self._lexicon_warmup_failures = 0
-        except Exception as exc:
-            self._lexicon_warmup_failures += 1
-            record_console_message(f"词库编辑器后台预热失败：{exc}", style="#ff8800")
-            if self._lexicon_warmup_failures < LEXICON_EDITOR_MAX_WARMUP_FAILURES:
-                self._schedule_lexicon_editor_warmup(LEXICON_EDITOR_FAILURE_RETRY_MS)
+            return
+        self._lexicon_warmup_failures += 1
+        record_console_message("词库编辑器后台进程预热失败", style="#ff8800")
+        if self._lexicon_warmup_failures < LEXICON_EDITOR_MAX_WARMUP_FAILURES:
+            self._schedule_lexicon_editor_warmup(LEXICON_EDITOR_FAILURE_RETRY_MS)
+
+    def _poll_lexicon_editor_event(self) -> None:
+        event = self._lexicon_editor_client.poll_event()
+        if not event:
+            return
+        event_name = event.get("event")
+        if event_name == "saved":
+            self.append_colored_line("用户词库已保存，下次录音自动生效。")
+        elif event_name == "error":
+            message = event.get("message") or "未知错误"
+            self.append_colored_line(f"读取用户词库失败：{message}", "#ff5555")
 
     def clear_recent_output_history(self) -> None:
         """Clear the recent finalized-text history used as LLM polish context."""
@@ -1548,6 +1539,7 @@ class GUI(QMainWindow):
         except Exception:
             pass
         self._stop_latest_wav_playback()
+        self._lexicon_editor_client.stop()
         # Terminate core_client.py and any launcher-spawned child processes from this checkout.
         self._stop_core_client_processes()
 
@@ -1915,6 +1907,8 @@ def start_client_gui(profile_options: StartupProfileOptions | None = None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="处理文件")
     parser.add_argument("files", nargs="*", type=Path, help="要处理的文件")
+    parser.add_argument("--lexicon-editor-process", type=Path, default=None)
+    parser.add_argument("--lexicon-parent-pid", type=int, default=None)
     parser.add_argument("--file-list", type=Path, help="包含文件列表的文本文件")
     parser.add_argument(
         "--profile-startup",
@@ -1940,6 +1934,15 @@ if __name__ == "__main__":
         help="启动分析持续时间（毫秒）",
     )
     args = parser.parse_args()
+
+    if args.lexicon_editor_process is not None:
+        from src.gui.lexicon_editor_process import run_lexicon_editor_process
+
+        if args.lexicon_parent_pid is None:
+            parser.error("--lexicon-parent-pid is required with --lexicon-editor-process")
+        raise SystemExit(
+            run_lexicon_editor_process(args.lexicon_editor_process, args.lexicon_parent_pid)
+        )
 
     profile_env_enabled = os.getenv("CW_PROFILE_STARTUP", "").strip().lower() in {
         "1",
