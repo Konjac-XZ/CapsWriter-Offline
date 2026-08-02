@@ -17,6 +17,7 @@ from PySide6.QtGui import (
     QAction,
     QIcon,
     QWheelEvent,
+    QTextDocument,
     QTextOption,
     QTextCursor,
     QTextCharFormat,
@@ -38,7 +39,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QStyle,
     QSystemTrayIcon,
-    QTextEdit,
+    QPlainTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -120,6 +121,35 @@ def _elapsed_ms(start: float) -> float:
     return (time.perf_counter() - start) * 1000.0
 
 
+def _configure_log_document_retention(
+    document: QTextDocument,
+    max_blocks: int = GUI_LOG_MAX_BLOCKS,
+) -> None:
+    """Keep recent GUI logs bounded without rebuilding the document."""
+    document.setMaximumBlockCount(max(1, int(max_blocks)))
+
+
+def _append_log_document_entries(
+    document: QTextDocument,
+    entries: list[tuple[str, QColor]],
+) -> None:
+    """Append colored plain-text entries as one document edit transaction."""
+    if not entries:
+        return
+    cursor = QTextCursor(document)
+    cursor.movePosition(QTextCursor.MoveOperation.End)
+    cursor.beginEditBlock()
+    try:
+        for text, color in entries:
+            if not document.isEmpty():
+                cursor.insertBlock()
+            fmt = QTextCharFormat()
+            fmt.setForeground(color)
+            cursor.insertText(str(text).replace("\n", "\u2029"), fmt)
+    finally:
+        cursor.endEditBlock()
+
+
 def _resolve_ffplay_exe() -> str | None:
     if ffplay := shutil.which("ffplay"):
         return ffplay
@@ -187,8 +217,11 @@ class GUI(QMainWindow):
         threading.Thread(target=self._gui_watchdog_loop, daemon=True).start()
 
         # Display early messages now that UI is ready
-        for message, color in self.early_messages:
-            self.append_colored_line(message, color)
+        if self.early_messages:
+            self._append_colored_entries(
+                self.early_messages,
+                source=f"early lines={len(self.early_messages)}",
+            )
         self.early_messages = []
 
     def log_message(self, message: str, color: str = "#000000"):
@@ -310,11 +343,13 @@ class GUI(QMainWindow):
     # Removed custom title bar and its buttons; using native frame instead
 
     def create_text_box(self):
-        self.text_box_client = QTextEdit()
+        self.text_box_client = QPlainTextEdit()
+        _configure_log_document_retention(self.text_box_client.document())
         self.text_box_client.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.text_box_client.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        # Treat content strictly as plain text to avoid HTML rendering side-effects
-        self.text_box_client.setAcceptRichText(False)
+        # QPlainTextEdit is intrinsically plain text and avoids rich-document
+        # parsing/layout work for the log console.
+        self.text_box_client.setUndoRedoEnabled(False)
         # Make widget read-only to prevent user edits while still allowing programmatic updates
         self.text_box_client.setReadOnly(True)
         # Disable drag-and-drop to prevent dropping text into the widget
@@ -325,13 +360,8 @@ class GUI(QMainWindow):
             | Qt.TextInteractionFlag.TextSelectableByKeyboard
         )
         # Wrap at widget width and allow wrapping anywhere to avoid mid-glyph clipping for long CJK strings
-        self.text_box_client.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        self.text_box_client.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self.text_box_client.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
-        # Always follow the latest output (auto-scroll to the bottom on new text)
-        try:
-            self.text_box_client.textChanged.connect(self.scroll_to_bottom)
-        except Exception:
-            pass
 
     def create_daily_input_count_label(self) -> None:
         """Create the compact daily character counter below the output pane."""
@@ -1128,6 +1158,40 @@ class GUI(QMainWindow):
         text = "\n".join(str(line) for line in lines)
         self.append_colored_line(text, color, source=f"batch lines={len(lines)} chars={len(text)}")
 
+    def _append_colored_entries(
+        self,
+        entries: list[tuple[str, QColor | str]],
+        *,
+        source: str,
+    ) -> None:
+        """Append a mixed-color batch with one layout/scroll transaction."""
+        if not entries:
+            return
+        start = time.perf_counter()
+        block_count_before = 0
+        try:
+            document = self.text_box_client.document()
+            block_count_before = document.blockCount()
+            resolved = [
+                (str(text), self._resolve_gui_color(color))
+                for text, color in entries
+            ]
+            _append_log_document_entries(document, resolved)
+            self.scroll_to_bottom()
+        except Exception:
+            pass
+        finally:
+            elapsed = _elapsed_ms(start)
+            if not self._suppress_append_timing and elapsed >= GUI_TIMING_SLOW_MS:
+                try:
+                    block_count_after = self.text_box_client.document().blockCount()
+                except Exception:
+                    block_count_after = block_count_before
+                self._log_gui_timing(
+                    f"append log batch {elapsed:.1f}ms {source} "
+                    f"blocks={block_count_before}->{block_count_after}"
+                )
+
     def append_colored_line(
         self,
         text: str,
@@ -1140,44 +1204,13 @@ class GUI(QMainWindow):
         Use a detached cursor at the document end so user selection and current
         cursor formatting cannot recolor existing text or bleed into new lines.
         """
-        start = time.perf_counter()
-        block_count_before = 0
-        try:
-            fmt = QTextCharFormat()
-            fmt.setForeground(self._resolve_gui_color(color))
-
-            document = self.text_box_client.document()
-            block_count_before = document.blockCount()
-            cursor = QTextCursor(document)
-            cursor.movePosition(QTextCursor.MoveOperation.End)
-            self._suppress_scroll_timing = True
-            if not document.isEmpty():
-                cursor.insertBlock()
-            cursor.insertText(str(text).replace("\n", "\u2029"), fmt)
-        except Exception:
-            pass
-        finally:
-            self._suppress_scroll_timing = False
-            elapsed = _elapsed_ms(start)
-            if not self._suppress_append_timing and elapsed >= GUI_TIMING_SLOW_MS:
-                try:
-                    block_count_after = self.text_box_client.document().blockCount()
-                except Exception:
-                    block_count_after = block_count_before
-                self._log_gui_timing(
-                    f"append_colored_line {elapsed:.1f}ms {source} "
-                    f"blocks={block_count_before}->{block_count_after}"
-                )
+        self._append_colored_entries([(text, color)], source=source)
 
     def _log_gui_timing(self, message: str) -> None:
         if self._gui_timing_reports >= 60:
             return
         self._gui_timing_reports += 1
-        self._suppress_append_timing = True
-        try:
-            self.append_colored_line(f"[timing][gui] {message}", "#888888")
-        finally:
-            self._suppress_append_timing = False
+        record_console_message(f"[timing][gui] {message}", style="#888888")
 
     def _emit_watchdog_timing(self, message: str) -> None:
         try:
@@ -1187,8 +1220,7 @@ class GUI(QMainWindow):
         if self._gui_timing_reports >= 60:
             return
         self._gui_timing_reports += 1
-        first_line = message.splitlines()[0]
-        self._log_queue_from_thread(f"[timing][watchdog] {first_line}")
+        record_console_message(f"[timing][watchdog] {message}", style="#888888")
 
     def _log_queue_from_thread(self, text: str) -> None:
         try:
@@ -1600,21 +1632,23 @@ class GUI(QMainWindow):
         level_ms = _elapsed_ms(level_start)
 
         drain_start = time.perf_counter()
-        batch_texts: list[str] = []
-        batch_color: str | None = None
+        batch_entries: list[tuple[str, str]] = []
         line_count = 0
         char_count = 0
         for line in self.output_router.take_log_lines_for(200, 0.004):
             line_count += 1
             char_count += len(line.text)
             color = line.color or "#000000"
-            if batch_texts and color != batch_color:
-                self.append_colored_lines(batch_texts, batch_color or "#000000")
-                batch_texts = []
-            batch_color = color
-            batch_texts.append(line.text)
-        if batch_texts:
-            self.append_colored_lines(batch_texts, batch_color or "#000000")
+            if batch_entries and color == batch_entries[-1][1]:
+                previous_text, previous_color = batch_entries[-1]
+                batch_entries[-1] = (f"{previous_text}\n{line.text}", previous_color)
+            else:
+                batch_entries.append((line.text, color))
+        if batch_entries:
+            self._append_colored_entries(
+                batch_entries,
+                source=f"worker lines={line_count} chars={char_count}",
+            )
         drain_ms = _elapsed_ms(drain_start)
         total_ms = _elapsed_ms(total_start)
         if total_ms >= GUI_TIMING_SLOW_MS or drain_ms >= GUI_TIMING_SLOW_MS:
