@@ -7,19 +7,29 @@ import numpy as np
 import pytest
 
 from src.transcribe.qwen_audio_legacy import settings
-from src.transcribe.qwen_audio_legacy import qwen_audio_legacy_transcribe_sdk as realtime
+from src.transcribe.qwen_audio_legacy import (
+    qwen_audio_legacy_transcribe_sdk as realtime,
+)
 from src.infra.cosmic import Cosmic
 from src.transcribe.providers import QwenAudioLegacyProvider, make_provider
 
 
 def test_realtime_model_defaults_from_qwen3_flash(monkeypatch):
-    monkeypatch.setattr(settings, "ps_get_str", lambda key, **kwargs: None if key == "realtime_model" else "qwen3-asr-flash")
+    monkeypatch.setattr(
+        settings,
+        "ps_get_str",
+        lambda key, **kwargs: None if key == "realtime_model" else "qwen3-asr-flash",
+    )
 
     assert settings.get_realtime_model() == "qwen3-asr-flash-realtime"
 
 
 def test_realtime_url_leaves_model_query_to_official_sdk(monkeypatch):
-    monkeypatch.setattr(settings, "get_realtime_url", lambda: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime")
+    monkeypatch.setattr(
+        settings,
+        "get_realtime_url",
+        lambda: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
+    )
 
     assert realtime.build_realtime_url() == (
         "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
@@ -149,7 +159,9 @@ def _configure_sdk_realtime(monkeypatch):
     monkeypatch.setattr(settings, "get_realtime_vad_silence_ms", lambda: 400)
     monkeypatch.setattr(settings, "get_realtime_timeout_seconds", lambda: 0.2)
     monkeypatch.setattr(settings, "get_realtime_close_timeout_seconds", lambda: 0.2)
-    monkeypatch.setattr(settings, "get_realtime_model", lambda: "qwen3-asr-flash-realtime")
+    monkeypatch.setattr(
+        settings, "get_realtime_model", lambda: "qwen3-asr-flash-realtime"
+    )
     monkeypatch.setattr(settings, "should_show_debug_logs", lambda: False)
 
 
@@ -341,7 +353,9 @@ def test_official_sdk_session_error_aborts_start_for_http_fallback(monkeypatch):
 
 
 def test_realtime_deltas_are_disabled_by_default(monkeypatch):
-    monkeypatch.setattr(settings, "ps_get_bool", lambda *args, **kwargs: kwargs.get("default", False))
+    monkeypatch.setattr(
+        settings, "ps_get_bool", lambda *args, **kwargs: kwargs.get("default", False)
+    )
 
     assert settings.should_emit_realtime_deltas() is False
 

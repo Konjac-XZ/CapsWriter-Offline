@@ -1,4 +1,5 @@
 """Qwen Audio Legacy response parsing helpers."""
+
 import json
 from typing import Any, Dict, List, Tuple
 
@@ -36,7 +37,9 @@ def _normalize_text(s: str) -> str:
     if not isinstance(s, str):
         return ""
     s = s.strip()
-    if len(s) >= 2 and ((s[0] == '"' and s[-1] == '"') or (s[0] == "'" and s[-1] == "'")):
+    if len(s) >= 2 and (
+        (s[0] == '"' and s[-1] == '"') or (s[0] == "'" and s[-1] == "'")
+    ):
         s = s[1:-1]
     return " ".join(s.split())
 

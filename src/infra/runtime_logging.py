@@ -15,6 +15,7 @@ import threading
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import TracebackType
+from typing import Mapping
 
 
 APP_DIRECTORY_NAME = "CapsWriter-Offline"
@@ -22,6 +23,7 @@ LOG_DIRECTORY_NAME = "Logs"
 LOG_FILE_NAME = "capswriter.log"
 MAX_LOG_BYTES = 2 * 1024 * 1024
 BACKUP_LOG_COUNT = 5
+_exception_hooks_installed = False
 
 _SENSITIVE_CONSOLE_PREFIXES = (
     "识别结果：",
@@ -30,7 +32,7 @@ _SENSITIVE_CONSOLE_PREFIXES = (
 )
 
 
-def application_data_directory(environ: dict[str, str] | None = None) -> Path:
+def application_data_directory(environ: Mapping[str, str] | None = None) -> Path:
     """Return the per-user machine-local application directory without creating it."""
     env = os.environ if environ is None else environ
     if local_app_data := env.get("LOCALAPPDATA"):
@@ -44,7 +46,7 @@ def application_data_directory(environ: dict[str, str] | None = None) -> Path:
     return base_directory / APP_DIRECTORY_NAME
 
 
-def log_directory(environ: dict[str, str] | None = None) -> Path:
+def log_directory(environ: Mapping[str, str] | None = None) -> Path:
     """Return the per-user directory for diagnostic logs without creating it.
 
     ``LOCALAPPDATA`` is the Windows location for non-roaming, potentially large
@@ -58,7 +60,7 @@ def log_directory(environ: dict[str, str] | None = None) -> Path:
     return application_data_directory(env) / LOG_DIRECTORY_NAME
 
 
-def log_file_path(environ: dict[str, str] | None = None) -> Path:
+def log_file_path(environ: Mapping[str, str] | None = None) -> Path:
     """Return the active log-file path without creating it."""
     return log_directory(environ) / LOG_FILE_NAME
 
@@ -66,7 +68,9 @@ def log_file_path(environ: dict[str, str] | None = None) -> Path:
 def _sanitize_console_message(message: str) -> str:
     """Avoid persisting dictated or recognized text in diagnostic logs."""
     stripped_message = message.lstrip()
-    if any(stripped_message.startswith(prefix) for prefix in _SENSITIVE_CONSOLE_PREFIXES):
+    if any(
+        stripped_message.startswith(prefix) for prefix in _SENSITIVE_CONSOLE_PREFIXES
+    ):
         prefix, _, _ = stripped_message.partition("：")
         return f"{prefix}：[内容未写入诊断日志]"
     return re.sub(
@@ -106,6 +110,8 @@ def configure_runtime_logging(component: str) -> logging.Logger:
     The operation is idempotent.  A failure to create Local AppData logs is
     deliberately non-fatal: speech input remains usable on locked-down hosts.
     """
+    global _exception_hooks_installed
+
     logger = logging.getLogger("capswriter")
     logger.setLevel(logging.INFO)
     logger.propagate = False
@@ -131,11 +137,13 @@ def configure_runtime_logging(component: str) -> logging.Logger:
         except OSError:
             return logger
 
-    if not getattr(configure_runtime_logging, "_exception_hooks_installed", False):
+    if not _exception_hooks_installed:
         previous_excepthook = sys.excepthook
 
         def excepthook(
-            exc_type: type[BaseException], exc_value: BaseException, exc_traceback: TracebackType | None
+            exc_type: type[BaseException],
+            exc_value: BaseException,
+            exc_traceback: TracebackType | None,
         ) -> None:
             _log_unhandled_exception(exc_type, exc_value, exc_traceback)
             previous_excepthook(exc_type, exc_value, exc_traceback)
@@ -145,11 +153,14 @@ def configure_runtime_logging(component: str) -> logging.Logger:
         previous_threading_excepthook = threading.excepthook
 
         def threading_excepthook(args: threading.ExceptHookArgs) -> None:
-            _log_unhandled_exception(args.exc_type, args.exc_value, args.exc_traceback)
+            if args.exc_value is not None:
+                _log_unhandled_exception(
+                    args.exc_type, args.exc_value, args.exc_traceback
+                )
             previous_threading_excepthook(args)
 
         threading.excepthook = threading_excepthook
-        configure_runtime_logging._exception_hooks_installed = True
+        _exception_hooks_installed = True
 
     logger.info("Runtime logging initialized for component=%s", component)
     return logger

@@ -20,7 +20,10 @@ def test_infer_audio_format_from_mime():
 def test_build_audio_data_url_uses_mime_and_base64():
     audio_b64 = base64.b64encode(b"audio").decode("ascii")
 
-    assert xiaomi.build_audio_data_url("audio/mpeg", audio_b64) == f"data:audio/mpeg;base64,{audio_b64}"
+    assert (
+        xiaomi.build_audio_data_url("audio/mpeg", audio_b64)
+        == f"data:audio/mpeg;base64,{audio_b64}"
+    )
 
 
 def test_build_request_body_includes_xiaomi_chat_audio_shape(monkeypatch):
@@ -56,7 +59,9 @@ def test_build_request_body_can_experimentally_include_prompt(monkeypatch):
     monkeypatch.setattr(xiaomi, "get_model", lambda: "mimo-v2.5-asr")
     monkeypatch.setattr(xiaomi, "get_language", lambda: "zh")
     monkeypatch.setattr(xiaomi, "should_send_prompt", lambda: True)
-    monkeypatch.setattr(xiaomi, "ps_get_prompt", lambda: "Use this vocabulary: CapsWriter.")
+    monkeypatch.setattr(
+        xiaomi, "ps_get_prompt", lambda: "Use this vocabulary: CapsWriter."
+    )
 
     audio_b64 = base64.b64encode(b"audio").decode("ascii")
     body = xiaomi.build_request_body("audio/wav", audio_b64)

@@ -168,7 +168,13 @@ class LexiconEditorService(QObject):
         try:
             payload = json.loads(self._command_path.read_text(encoding="utf-8"))
             serial = int(payload.get("serial", 0))
-        except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        except (
+            FileNotFoundError,
+            OSError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ):
             return
 
         if serial <= self._last_command_serial:
@@ -235,7 +241,9 @@ def run_lexicon_editor_process(session_dir: Path, parent_pid: int) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="CapsWriter Monaco lexicon editor process")
+    parser = argparse.ArgumentParser(
+        description="CapsWriter Monaco lexicon editor process"
+    )
     parser.add_argument("session_dir", type=Path)
     parser.add_argument("--parent-pid", type=int, required=True)
     args = parser.parse_args()

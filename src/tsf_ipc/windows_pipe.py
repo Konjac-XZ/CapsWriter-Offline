@@ -74,7 +74,9 @@ class WindowsNamedPipeBroker:
         self._accept_thread: threading.Thread | None = None
         self._clients: dict[int, _PipeClient] = {}
         self._clients_lock = threading.Lock()
-        self._pending: dict[tuple[uuid.UUID, int, int], list[asyncio.Future[Frame]]] = {}
+        self._pending: dict[
+            tuple[uuid.UUID, int, int], list[asyncio.Future[Frame]]
+        ] = {}
         self._pending_lock = threading.Lock()
 
     @property
@@ -308,6 +310,8 @@ class WindowsNamedPipeBroker:
         attributes = SECURITY_ATTRIBUTES(
             ctypes.sizeof(SECURITY_ATTRIBUTES), descriptor, False
         )
+        if descriptor.value is None:
+            raise RuntimeError("Security descriptor conversion returned a null pointer")
         return attributes, int(descriptor.value)
 
     def _accept_loop(self) -> None:
@@ -470,7 +474,9 @@ class WindowsNamedPipeBroker:
             chunk_size = size - len(result)
             buf = ctypes.create_string_buffer(chunk_size)
             read = wintypes.DWORD()
-            if not self._kernel32.ReadFile(handle, buf, chunk_size, ctypes.byref(read), None):
+            if not self._kernel32.ReadFile(
+                handle, buf, chunk_size, ctypes.byref(read), None
+            ):
                 return None
             if read.value == 0:
                 return None

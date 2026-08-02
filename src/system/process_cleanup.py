@@ -8,6 +8,13 @@ from pathlib import Path
 ProcessInfo = dict[str, int | str | None]
 
 
+def _process_id(process: ProcessInfo, key: str) -> int:
+    value = process.get(key)
+    if not isinstance(value, (int, str)):
+        raise ValueError(f"Missing process identifier: {key}")
+    return int(value)
+
+
 def _norm_text(value: str | None) -> str:
     return (value or "").replace("/", "\\").lower()
 
@@ -32,13 +39,13 @@ def _query_windows_processes() -> list[ProcessInfo]:
         import pythoncom
         import win32com.client
 
-        pythoncom.CoInitialize()
+        pythoncom.CoInitialize()  # ty: ignore[unresolved-attribute]
         try:
             service = win32com.client.GetObject("winmgmts:")
             query = "SELECT ProcessId, ParentProcessId, Name, CommandLine FROM Win32_Process"
             rows = service.ExecQuery(query)
         finally:
-            pythoncom.CoUninitialize()
+            pythoncom.CoUninitialize()  # ty: ignore[unresolved-attribute]
     except Exception:
         return []
 
@@ -65,7 +72,7 @@ def current_process_family(processes: list[ProcessInfo] | None = None) -> set[in
     if processes is None:
         processes = _query_windows_processes()
     parent_by_pid = {
-        int(proc["pid"]): int(proc["parent_pid"])
+        _process_id(proc, "pid"): _process_id(proc, "parent_pid")
         for proc in processes
         if proc.get("pid") is not None and proc.get("parent_pid") is not None
     }
@@ -98,14 +105,18 @@ def find_executable_processes(exe_path: Path) -> list[ProcessInfo]:
     for proc in _query_windows_processes():
         name = str(proc.get("name") or "")
         command_line = str(proc.get("command_line") or "")
-        if (name or "").lower() != expected_name or not _matches_executable(command_line, exe_path):
+        if (name or "").lower() != expected_name or not _matches_executable(
+            command_line, exe_path
+        ):
             continue
         matches.append(proc)
     return matches
 
 
 def _descendant_order(processes: list[ProcessInfo]) -> list[int]:
-    parent_by_pid = {int(proc["pid"]): int(proc["parent_pid"]) for proc in processes}
+    parent_by_pid = {
+        _process_id(proc, "pid"): _process_id(proc, "parent_pid") for proc in processes
+    }
 
     def depth(pid: int) -> int:
         current = pid
@@ -123,7 +134,9 @@ def _descendant_order(processes: list[ProcessInfo]) -> list[int]:
     return sorted(parent_by_pid, key=depth, reverse=True)
 
 
-def terminate_python_script_processes(script_path: Path, exclude_pid: int | None = None) -> list[int]:
+def terminate_python_script_processes(
+    script_path: Path, exclude_pid: int | None = None
+) -> list[int]:
     """Terminate all Python processes running this repository's script path."""
     processes = find_python_script_processes(script_path)
     return terminate_process_matches(processes, exclude_pid=exclude_pid)
@@ -154,7 +167,9 @@ def terminate_python_script_basename_processes(
     return terminate_process_matches(matches, exclude_pid=exclude_pid)
 
 
-def terminate_executable_processes(exe_path: Path, exclude_pid: int | None = None) -> list[int]:
+def terminate_executable_processes(
+    exe_path: Path, exclude_pid: int | None = None
+) -> list[int]:
     """Terminate processes launched from an exact executable path."""
     processes = find_executable_processes(exe_path)
     return terminate_process_matches(processes, exclude_pid=exclude_pid)

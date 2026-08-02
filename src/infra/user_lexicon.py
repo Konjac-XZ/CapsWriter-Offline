@@ -4,6 +4,7 @@ Loads ``config/user_lexicon.yaml`` and exposes helpers that format the word
 list for injection into ASR prompts and LLM polish messages.  The file is
 read fresh on every call so edits take effect without restarting the client.
 """
+
 from __future__ import annotations
 
 import sys

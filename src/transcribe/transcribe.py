@@ -18,8 +18,11 @@ def _get_api_key() -> str:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         # Fail fast: require the API key to be provided via environment variable
-        raise RuntimeError("OPENAI_API_KEY environment variable is required but not set")
+        raise RuntimeError(
+            "OPENAI_API_KEY environment variable is required but not set"
+        )
     return api_key
+
 
 def _get_model() -> str:
     return os.getenv("TRANSCRIBE_MODEL", "gpt-4o-transcribe")
@@ -46,7 +49,10 @@ async def transcribe_check(file: Path):
         return False
     # 简要提示 API 配置（未设置环境变量则使用内置示例）
     if not os.getenv("OPENAI_API_KEY"):
-        console.print("未检测到 OPENAI_API_KEY 环境变量，使用内置示例密钥进行个人测试。", style="yellow")
+        console.print(
+            "未检测到 OPENAI_API_KEY 环境变量，使用内置示例密钥进行个人测试。",
+            style="yellow",
+        )
 
 
 async def transcribe_send(file: Path):
@@ -89,7 +95,9 @@ async def transcribe_send(file: Path):
                 files = {"file": (file.name, f, mime)}
                 resp = await client.post(url, headers=headers, data=data, files=files)
         if resp.status_code >= 400:
-            console.print(f"服务响应错误：{resp.status_code} {resp.text}", style="bright_red")
+            console.print(
+                f"服务响应错误：{resp.status_code} {resp.text}", style="bright_red"
+            )
             # 标记失败结果，便于 recv 侧退出
             Cosmic.audio_files[str(file)] = {
                 "ok": False,
@@ -106,12 +114,14 @@ async def transcribe_send(file: Path):
             parsed = extract_text_from_body(body)
         except Exception:
             parsed = None
-        text_result = parsed if isinstance(parsed, str) and parsed.strip() != "" else body
+        text_result = (
+            parsed if isinstance(parsed, str) and parsed.strip() != "" else body
+        )
         # 某些服务会返回带引号的纯文本，尽量去除首尾引号（若存在）
         if (
             len(text_result) >= 2
-            and text_result.startswith("\"")
-            and text_result.endswith("\"")
+            and text_result.startswith('"')
+            and text_result.endswith('"')
         ):
             text_result = text_result[1:-1]
 
@@ -143,7 +153,10 @@ async def transcribe_recv(file: Path):
         process_duration = message.get("time_complete", time.time()) - message.get(
             "time_start", time.time()
         )
-        console.print(f"\033[K    处理失败（{process_duration:.2f}s）：{message.get('error')}", style="bright_red")
+        console.print(
+            f"\033[K    处理失败（{process_duration:.2f}s）：{message.get('error')}",
+            style="bright_red",
+        )
         return
 
     # 解析结果（OpenAI 兼容端点使用纯文本返回）

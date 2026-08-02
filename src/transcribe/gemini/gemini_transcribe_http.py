@@ -24,16 +24,24 @@ def _clean_base_url(url: str) -> str:
 
 
 def get_api_key() -> str:
-    return ps_get_str("api_key", env=("GEMINI_API_KEY", "GOOGLE_API_KEY"), default="") or ""
+    return (
+        ps_get_str("api_key", env=("GEMINI_API_KEY", "GOOGLE_API_KEY"), default="")
+        or ""
+    )
 
 
 def get_model() -> str:
-    return ps_get_str("model", env="GEMINI_MODEL", default="gemini-2.5-flash") or "gemini-2.5-flash"
+    return (
+        ps_get_str("model", env="GEMINI_MODEL", default="gemini-2.5-flash")
+        or "gemini-2.5-flash"
+    )
 
 
 def get_base_url() -> str:
     default = "https://generativelanguage.googleapis.com"
-    return _clean_base_url(ps_get_str("base_url", env="GEMINI_BASE_URL", default=default) or default)
+    return _clean_base_url(
+        ps_get_str("base_url", env="GEMINI_BASE_URL", default=default) or default
+    )
 
 
 def get_timeout_seconds() -> float:
@@ -147,7 +155,9 @@ def _build_request_body(
     request: Dict[str, Any] = {"contents": [{"role": "user", "parts": parts}]}
 
     generation_config: Dict[str, Any] = {}
-    temperature = ps_get_float("temperature", env="TRANSCRIBE_TEMPERATURE", default=None)
+    temperature = ps_get_float(
+        "temperature", env="TRANSCRIBE_TEMPERATURE", default=None
+    )
     if temperature is not None:
         generation_config["temperature"] = float(temperature)
 
@@ -159,8 +169,6 @@ def _build_request_body(
 
     if generation_config:
         request["generationConfig"] = generation_config
-        
-
 
     return request
 
@@ -183,7 +191,13 @@ async def transcribe_with_retries(
     """
     api_key = get_api_key()
     if not api_key:
-        return "Gemini API key is missing. Set GEMINI_API_KEY or fill config/providers/gemini.yaml.", 0, time.time(), time.time(), False
+        return (
+            "Gemini API key is missing. Set GEMINI_API_KEY or fill config/providers/gemini.yaml.",
+            0,
+            time.time(),
+            time.time(),
+            False,
+        )
 
     model = get_model()
     base_url = get_base_url()

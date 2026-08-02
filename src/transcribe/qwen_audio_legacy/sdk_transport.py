@@ -1,4 +1,5 @@
 """Qwen Audio Legacy official SDK transport."""
+
 import io
 import json
 import os

@@ -69,7 +69,9 @@ class WorkerOutputRouter(QObject):
             lines.append(self._log_queue.get())
         return lines
 
-    def take_log_lines_for(self, max_lines: int, max_seconds: float) -> list[WorkerLogLine]:
+    def take_log_lines_for(
+        self, max_lines: int, max_seconds: float
+    ) -> list[WorkerLogLine]:
         lines: list[WorkerLogLine] = []
         deadline = time.perf_counter() + max(0.0, max_seconds)
         while len(lines) < max_lines and not self._log_queue.empty():

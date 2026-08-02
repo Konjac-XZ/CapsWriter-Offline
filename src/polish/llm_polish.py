@@ -52,6 +52,7 @@ class PolishRequestContext:
 # Config loader
 # ---------------------------------------------------------------------------
 
+
 def _get_root_dir() -> Path:
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         return Path(sys.executable).resolve().parent
@@ -118,6 +119,7 @@ def reload_polish_config() -> dict:
 # Env helpers (credentials only)
 # ---------------------------------------------------------------------------
 
+
 def _get_env(name: str, default: str | None = None) -> str | None:
     value = os.getenv(name)
     if value is None:
@@ -140,7 +142,9 @@ def _qwen_asr_context_enabled() -> bool:
     try:
         from src.provider.provider_config import provider_manager
 
-        provider_type = (provider_manager.get_active_provider_type() or "").strip().lower()
+        provider_type = (
+            (provider_manager.get_active_provider_type() or "").strip().lower()
+        )
         if provider_type not in {
             "qwen-audio",
             "qwen_audio_3",
@@ -201,6 +205,7 @@ async def close_polish_http_client(reason: str = "manual") -> None:
 # History helpers
 # ---------------------------------------------------------------------------
 
+
 def record_finalized_text(text: str) -> None:
     """Append *text* to the rolling history buffer (called from recv_result).
 
@@ -215,7 +220,9 @@ def record_finalized_text(text: str) -> None:
     asr_history_enabled, asr_max_size = _qwen_asr_history_settings()
     if not polish_history_enabled and not asr_history_enabled:
         return
-    polish_max_size = max(1, int(h_cfg.get("max_size", 5))) if polish_history_enabled else 0
+    polish_max_size = (
+        max(1, int(h_cfg.get("max_size", 5))) if polish_history_enabled else 0
+    )
     max_size = max(polish_max_size, asr_max_size, 1)
     with _history_lock:
         _finalized_history.append(text.strip())
@@ -257,6 +264,7 @@ def clear_finalized_history() -> int:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def is_llm_polish_enabled() -> bool:
     return bool(_cfg().get("enabled", False))
@@ -434,8 +442,16 @@ def _insert_textbox_position_markers(
     selection_end_marker: str = "<|selection_end|>",
 ) -> tuple[str, int]:
     caret_offset = _clamp_text_offset(caret_offset, text)
-    start = _clamp_text_offset(selection_start, text) if selection_start is not None else caret_offset
-    end = _clamp_text_offset(selection_end, text) if selection_end is not None else caret_offset
+    start = (
+        _clamp_text_offset(selection_start, text)
+        if selection_start is not None
+        else caret_offset
+    )
+    end = (
+        _clamp_text_offset(selection_end, text)
+        if selection_end is not None
+        else caret_offset
+    )
     if end < start:
         start, end = end, start
 
@@ -621,7 +637,9 @@ def _get_excluded_process_names(value: object) -> list[str]:
     return [item.strip() for item in value if isinstance(item, str) and item.strip()]
 
 
-def _coerce_optional_positive_int(value: object, default: int | None = None) -> int | None:
+def _coerce_optional_positive_int(
+    value: object, default: int | None = None
+) -> int | None:
     if value is None:
         return default
     if not isinstance(value, (str, bytes, bytearray, int, float)):
@@ -641,7 +659,9 @@ def _prepare_polish_request_context() -> PolishRequestContext:
     t0 = time.perf_counter()
     provider_name = normalize_provider_name(cfg.get("provider"))
     raw_provider_cfg = cfg.get(provider_name, {})
-    provider_cfg = dict(raw_provider_cfg) if isinstance(raw_provider_cfg, Mapping) else {}
+    provider_cfg = (
+        dict(raw_provider_cfg) if isinstance(raw_provider_cfg, Mapping) else {}
+    )
     if provider_name == "openrouter":
         base_url = (
             provider_cfg.get("base_url")
@@ -848,7 +868,9 @@ async def polish_text(
     *,
     on_delta: PolishStreamCallback | None = None,
     on_text: PolishStreamCallback | None = None,
-    prepared_context: PolishRequestContext | Awaitable[PolishRequestContext | None] | None = None,
+    prepared_context: PolishRequestContext
+    | Awaitable[PolishRequestContext | None]
+    | None = None,
 ) -> str:
     global _missing_config_warned, _feature_state_logged
 

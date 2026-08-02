@@ -59,7 +59,9 @@ def test_poll_event_returns_each_serial_once(monkeypatch, tmp_path: Path) -> Non
     assert client.poll_event() == {"serial": 1, "event": "saved"}
 
 
-def test_client_becomes_ready_only_after_editor_is_opened(monkeypatch, tmp_path: Path) -> None:
+def test_client_becomes_ready_only_after_editor_is_opened(
+    monkeypatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(
         lexicon_editor_client.tempfile,
         "mkdtemp",
@@ -92,4 +94,7 @@ def test_show_reuses_running_process(monkeypatch, tmp_path: Path) -> None:
 
     assert client.show() is True
     assert client.process is process
-    assert json.loads((tmp_path / "command.json").read_text(encoding="utf-8"))["serial"] == 1
+    assert (
+        json.loads((tmp_path / "command.json").read_text(encoding="utf-8"))["serial"]
+        == 1
+    )

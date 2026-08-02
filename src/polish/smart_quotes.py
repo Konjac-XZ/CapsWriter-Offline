@@ -7,7 +7,9 @@ from dataclasses import dataclass
 
 _QUOTE_PATTERN = re.compile(r"""["']""")
 _CJK_PATTERN = re.compile(r"[\u3400-\u9fff]")
-_FRONTMATTER_PATTERN = re.compile(r"\A(---|\+\+\+)[^\n]*\n.*?\n\1[ \t]*(?:\n|$)", re.DOTALL)
+_FRONTMATTER_PATTERN = re.compile(
+    r"\A(---|\+\+\+)[^\n]*\n.*?\n\1[ \t]*(?:\n|$)", re.DOTALL
+)
 _FENCED_CODE_PATTERN = re.compile(r"(?ms)^([ \t]*)(`{3,}|~{3,}).*?\n.*?^\1\2[ \t]*$")
 _INDENTED_CODE_PATTERN = re.compile(r"(?m)(?:^(?: {4}|\t).*(?:\n|$))+")
 _HTML_BLOCK_PATTERN = re.compile(
@@ -26,9 +28,7 @@ _EMAIL_PATTERN = re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b")
 _WINDOWS_PATH_PATTERN = re.compile(
     r"(?i)(?<![\w/\\])(?:[A-Z]:\\|\\\\)[^\s<>，。！？；：、]+"
 )
-_UNIX_PATH_PATTERN = re.compile(
-    r"(?<![\w.])(?:\.{1,2}/|/)[^\s<>，。！？；：、]+"
-)
+_UNIX_PATH_PATTERN = re.compile(r"(?<![\w.])(?:\.{1,2}/|/)[^\s<>，。！？；：、]+")
 _LINK_DEST_PATTERN = re.compile(r"(?<=\]\()[^)\n]+(?=\))")
 
 _URLISH_PATTERN = re.compile(r"(?i)(?:https?://|ftp://|www\.|mailto:)")
@@ -76,7 +76,7 @@ def _protect_non_prose_ranges(text: str) -> tuple[str, Callable[[str], str]]:
     if frontmatter:
         raw = frontmatter.group(0)
         placeholders.append(raw)
-        protected = f"\x00SQ{len(placeholders) - 1}\x00" + protected[len(raw):]
+        protected = f"\x00SQ{len(placeholders) - 1}\x00" + protected[len(raw) :]
 
     for pattern in (
         _FENCED_CODE_PATTERN,
@@ -178,14 +178,27 @@ def _is_measure_quote(prev_char: str | None, next_char: str | None) -> bool:
 
 
 def _is_english_apostrophe(prev_char: str | None, next_char: str | None) -> bool:
-    if prev_char and next_char and _is_ascii_alpha(prev_char) and _is_ascii_alpha(next_char):
-        return True
-    if prev_char and _is_ascii_alpha(prev_char) and (
-        next_char is None or next_char.isspace() or next_char in _CLOSING_AFTER_QUOTE
+    if (
+        prev_char
+        and next_char
+        and _is_ascii_alpha(prev_char)
+        and _is_ascii_alpha(next_char)
     ):
         return True
-    if next_char and next_char.isdigit() and (
-        prev_char is None or prev_char.isspace() or prev_char in _OPEN_PUNCT
+    if (
+        prev_char
+        and _is_ascii_alpha(prev_char)
+        and (
+            next_char is None
+            or next_char.isspace()
+            or next_char in _CLOSING_AFTER_QUOTE
+        )
+    ):
+        return True
+    if (
+        next_char
+        and next_char.isdigit()
+        and (prev_char is None or prev_char.isspace() or prev_char in _OPEN_PUNCT)
     ):
         return True
     return False
@@ -196,8 +209,12 @@ def _is_open_quote_context(
     next_char: str | None,
     depth: int,
 ) -> bool:
-    prev_says_open = prev_char is None or prev_char.isspace() or prev_char in _OPEN_PUNCT
-    next_says_close = next_char is None or next_char.isspace() or next_char in _CLOSING_AFTER_QUOTE
+    prev_says_open = (
+        prev_char is None or prev_char.isspace() or prev_char in _OPEN_PUNCT
+    )
+    next_says_close = (
+        next_char is None or next_char.isspace() or next_char in _CLOSING_AFTER_QUOTE
+    )
     if prev_says_open and not next_says_close:
         return True
     if next_says_close and not prev_says_open:
@@ -250,7 +267,10 @@ def _looks_structured(chunk: str) -> bool:
         return True
 
     lines = [line.strip() for line in stripped.splitlines() if line.strip()]
-    if len(lines) >= 2 and sum(bool(_YAML_LINE_PATTERN.match(line)) for line in lines) >= 2:
+    if (
+        len(lines) >= 2
+        and sum(bool(_YAML_LINE_PATTERN.match(line)) for line in lines) >= 2
+    ):
         return True
     if len(lines) == 1:
         line = lines[0]

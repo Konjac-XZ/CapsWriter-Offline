@@ -1,4 +1,5 @@
 """Qwen Audio Legacy provider settings and request construction."""
+
 import os
 from typing import Any, Dict, List
 
@@ -34,8 +35,13 @@ def use_sdk() -> bool:
 
 
 def should_reuse_http_client() -> bool:
-    if ps_get_str("reuse_http_client", env="DASHSCOPE_REUSE_HTTP_CLIENT", default=None) is not None:
-        return ps_get_bool("reuse_http_client", env="DASHSCOPE_REUSE_HTTP_CLIENT", default=False)
+    if (
+        ps_get_str("reuse_http_client", env="DASHSCOPE_REUSE_HTTP_CLIENT", default=None)
+        is not None
+    ):
+        return ps_get_bool(
+            "reuse_http_client", env="DASHSCOPE_REUSE_HTTP_CLIENT", default=False
+        )
     return True
 
 
@@ -50,13 +56,20 @@ def should_show_debug_logs() -> bool:
 
 
 def should_show_realtime_logs() -> bool:
-    if ps_get_str("realtime_debug", env="DASHSCOPE_REALTIME_DEBUG", default=None) is not None:
-        return ps_get_bool("realtime_debug", env="DASHSCOPE_REALTIME_DEBUG", default=False)
+    if (
+        ps_get_str("realtime_debug", env="DASHSCOPE_REALTIME_DEBUG", default=None)
+        is not None
+    ):
+        return ps_get_bool(
+            "realtime_debug", env="DASHSCOPE_REALTIME_DEBUG", default=False
+        )
     return False
 
 
 def should_emit_realtime_deltas() -> bool:
-    return ps_get_bool("realtime_emit_deltas", env="DASHSCOPE_REALTIME_EMIT_DELTAS", default=False)
+    return ps_get_bool(
+        "realtime_emit_deltas", env="DASHSCOPE_REALTIME_EMIT_DELTAS", default=False
+    )
 
 
 def get_api_base() -> str:
@@ -77,7 +90,11 @@ def get_api_key() -> str:
 
 
 def get_timeout_seconds() -> float:
-    raw = ps_get_str("timeout_seconds", env=["DASHSCOPE_TIMEOUT_SECONDS", "OPENAI_HTTP_TIMEOUT"], default="30")
+    raw = ps_get_str(
+        "timeout_seconds",
+        env=["DASHSCOPE_TIMEOUT_SECONDS", "OPENAI_HTTP_TIMEOUT"],
+        default="30",
+    )
     try:
         return min(30.0, max(1.0, float(raw or "30")))
     except Exception:
@@ -113,7 +130,9 @@ def candidate_endpoints() -> List[str]:
 
 
 def get_model() -> str:
-    variant = clean_str(ps_get_str("model_variant", env="DASHSCOPE_MODEL_VARIANT", default=None))
+    variant = clean_str(
+        ps_get_str("model_variant", env="DASHSCOPE_MODEL_VARIANT", default=None)
+    )
     if variant:
         return variant
     model = clean_str(ps_get_str("model", env="DASHSCOPE_MODEL", default=None))
@@ -126,7 +145,9 @@ def get_model() -> str:
 
 
 def get_realtime_model() -> str:
-    model = clean_str(ps_get_str("realtime_model", env="DASHSCOPE_REALTIME_MODEL", default=None))
+    model = clean_str(
+        ps_get_str("realtime_model", env="DASHSCOPE_REALTIME_MODEL", default=None)
+    )
     if model:
         return model
     base_model = get_model()
@@ -155,7 +176,9 @@ def get_region() -> str:
 
 
 def get_realtime_url() -> str:
-    url = clean_str(ps_get_str("realtime_url", env="DASHSCOPE_REALTIME_URL", default=None))
+    url = clean_str(
+        ps_get_str("realtime_url", env="DASHSCOPE_REALTIME_URL", default=None)
+    )
     if url:
         return url
     workspace_id = get_workspace_id()
@@ -163,8 +186,7 @@ def get_realtime_url() -> str:
     if region in {"cn-beijing", "beijing"}:
         if workspace_id:
             return (
-                f"wss://{workspace_id}.cn-beijing.maas.aliyuncs.com"
-                "/api-ws/v1/realtime"
+                f"wss://{workspace_id}.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime"
             )
         return "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
     if region in {"ap-southeast-1", "singapore"}:
@@ -180,11 +202,20 @@ def get_realtime_url() -> str:
 
 
 def get_realtime_format() -> str:
-    return clean_str(ps_get_str("realtime_format", env="DASHSCOPE_REALTIME_FORMAT", default="pcm")) or "pcm"
+    return (
+        clean_str(
+            ps_get_str(
+                "realtime_format", env="DASHSCOPE_REALTIME_FORMAT", default="pcm"
+            )
+        )
+        or "pcm"
+    )
 
 
 def get_realtime_sample_rate() -> int:
-    raw = ps_get_str("realtime_sample_rate", env="DASHSCOPE_REALTIME_SAMPLE_RATE", default="16000")
+    raw = ps_get_str(
+        "realtime_sample_rate", env="DASHSCOPE_REALTIME_SAMPLE_RATE", default="16000"
+    )
     try:
         return int(raw or "16000")
     except Exception:
@@ -192,11 +223,15 @@ def get_realtime_sample_rate() -> int:
 
 
 def get_realtime_enable_vad() -> bool:
-    return ps_get_bool("realtime_enable_vad", env="DASHSCOPE_REALTIME_ENABLE_VAD", default=False)
+    return ps_get_bool(
+        "realtime_enable_vad", env="DASHSCOPE_REALTIME_ENABLE_VAD", default=False
+    )
 
 
 def get_realtime_vad_threshold() -> float:
-    raw = ps_get_str("realtime_vad_threshold", env="DASHSCOPE_REALTIME_VAD_THRESHOLD", default="0.0")
+    raw = ps_get_str(
+        "realtime_vad_threshold", env="DASHSCOPE_REALTIME_VAD_THRESHOLD", default="0.0"
+    )
     try:
         return max(-1.0, min(1.0, float(raw or "0.0")))
     except Exception:
@@ -204,7 +239,11 @@ def get_realtime_vad_threshold() -> float:
 
 
 def get_realtime_vad_silence_ms() -> int:
-    raw = ps_get_str("realtime_vad_silence_ms", env="DASHSCOPE_REALTIME_VAD_SILENCE_MS", default="400")
+    raw = ps_get_str(
+        "realtime_vad_silence_ms",
+        env="DASHSCOPE_REALTIME_VAD_SILENCE_MS",
+        default="400",
+    )
     try:
         return max(200, min(6000, int(raw or "400")))
     except Exception:
@@ -214,7 +253,11 @@ def get_realtime_vad_silence_ms() -> int:
 def get_realtime_timeout_seconds() -> float:
     raw = ps_get_str(
         "realtime_timeout_seconds",
-        env=["DASHSCOPE_REALTIME_TIMEOUT_SECONDS", "DASHSCOPE_TIMEOUT_SECONDS", "OPENAI_HTTP_TIMEOUT"],
+        env=[
+            "DASHSCOPE_REALTIME_TIMEOUT_SECONDS",
+            "DASHSCOPE_TIMEOUT_SECONDS",
+            "OPENAI_HTTP_TIMEOUT",
+        ],
         default="30",
     )
     try:
@@ -224,7 +267,11 @@ def get_realtime_timeout_seconds() -> float:
 
 
 def get_realtime_close_timeout_seconds() -> float:
-    raw = ps_get_str("realtime_close_timeout_seconds", env="DASHSCOPE_REALTIME_CLOSE_TIMEOUT_SECONDS", default="0.2")
+    raw = ps_get_str(
+        "realtime_close_timeout_seconds",
+        env="DASHSCOPE_REALTIME_CLOSE_TIMEOUT_SECONDS",
+        default="0.2",
+    )
     try:
         return min(5.0, max(0.0, float(raw or "0.2")))
     except Exception:
@@ -238,15 +285,25 @@ def should_use_realtime() -> bool:
 
 
 def get_language() -> str | None:
-    return clean_str(ps_get_str("language", env=["DASHSCOPE_LANGUAGE", "OPENAI_TRANSCRIBE_LANGUAGE"], default=None))
+    return clean_str(
+        ps_get_str(
+            "language",
+            env=["DASHSCOPE_LANGUAGE", "OPENAI_TRANSCRIBE_LANGUAGE"],
+            default=None,
+        )
+    )
 
 
 def get_result_format() -> str | None:
-    return clean_str(ps_get_str("result_format", env="DASHSCOPE_RESULT_FORMAT", default=None))
+    return clean_str(
+        ps_get_str("result_format", env="DASHSCOPE_RESULT_FORMAT", default=None)
+    )
 
 
 def get_response_format() -> str | None:
-    return clean_str(ps_get_str("response_format", env="DASHSCOPE_RESPONSE_FORMAT", default=None))
+    return clean_str(
+        ps_get_str("response_format", env="DASHSCOPE_RESPONSE_FORMAT", default=None)
+    )
 
 
 def get_context_text() -> str | None:
@@ -300,7 +357,9 @@ def build_asr_options() -> Dict[str, Any]:
     return asr_options
 
 
-def build_messages(audio_payload: str, audio_format: str | None = None) -> List[Dict[str, Any]]:
+def build_messages(
+    audio_payload: str, audio_format: str | None = None
+) -> List[Dict[str, Any]]:
     messages: List[Dict[str, Any]] = []
     context = get_context_text()
     if context:
@@ -383,4 +442,8 @@ def build_headers() -> dict:
 
 def build_limits() -> httpx.Limits:
     keepalive_expiry = float(os.getenv("DASHSCOPE_KEEPALIVE_EXPIRY", "90"))
-    return httpx.Limits(max_keepalive_connections=5, max_connections=10, keepalive_expiry=keepalive_expiry)
+    return httpx.Limits(
+        max_keepalive_connections=5,
+        max_connections=10,
+        keepalive_expiry=keepalive_expiry,
+    )

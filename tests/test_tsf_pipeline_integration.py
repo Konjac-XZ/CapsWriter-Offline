@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any, cast
 
 from src.infra.cosmic import Cosmic
 from src.pipeline import recv_result as pipeline
@@ -73,7 +74,7 @@ def test_final_asr_and_llm_full_text_revisions_commit_without_legacy_paste(monke
         "time_complete": 3.0,
         "source": "mic",
     }
-    Cosmic.queue_out = OneMessageQueue(message)
+    Cosmic.queue_out = cast(Any, OneMessageQueue(message))
     Cosmic.abandon_requested = False
     Cosmic.abandoned_task_ids.clear()
     Cosmic.active_task_id = None
@@ -125,7 +126,7 @@ def test_full_text_asr_revision_is_not_sent_to_append_only_keyboard_fallback(
         "source": "mic",
         "stream": True,
     }
-    Cosmic.queue_out = OneMessageQueue(message)
+    Cosmic.queue_out = cast(Any, OneMessageQueue(message))
     Cosmic.abandon_requested = False
     Cosmic.abandoned_task_ids.clear()
     Cosmic.active_task_id = None

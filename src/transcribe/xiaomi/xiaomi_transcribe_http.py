@@ -4,7 +4,7 @@ import asyncio
 import base64
 import io
 import time
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Protocol, Tuple
 
 import httpx
 
@@ -27,12 +27,17 @@ def get_api_key() -> str:
 
 
 def get_model() -> str:
-    return ps_get_str("model", env="XIAOMI_TRANSCRIBE_MODEL", default="mimo-v2.5-asr") or "mimo-v2.5-asr"
+    return (
+        ps_get_str("model", env="XIAOMI_TRANSCRIBE_MODEL", default="mimo-v2.5-asr")
+        or "mimo-v2.5-asr"
+    )
 
 
 def get_base_url() -> str:
     default = "https://api.xiaomimimo.com"
-    return _clean_base_url(ps_get_str("base_url", env="XIAOMI_BASE_URL", default=default) or default)
+    return _clean_base_url(
+        ps_get_str("base_url", env="XIAOMI_BASE_URL", default=default) or default
+    )
 
 
 def get_timeout_seconds() -> float:
@@ -44,7 +49,10 @@ def get_timeout_seconds() -> float:
 
 
 def get_auth_header_mode() -> str:
-    mode = ps_get_str("auth_header", env="XIAOMI_AUTH_HEADER", default="api-key") or "api-key"
+    mode = (
+        ps_get_str("auth_header", env="XIAOMI_AUTH_HEADER", default="api-key")
+        or "api-key"
+    )
     normalized = mode.strip().lower().replace("_", "-")
     if normalized in {"bearer", "authorization"}:
         return "bearer"
@@ -52,13 +60,18 @@ def get_auth_header_mode() -> str:
 
 
 def get_language() -> str:
-    language = ps_get_str("language", env="XIAOMI_TRANSCRIBE_LANGUAGE", default="auto") or "auto"
+    language = (
+        ps_get_str("language", env="XIAOMI_TRANSCRIBE_LANGUAGE", default="auto")
+        or "auto"
+    )
     normalized = language.strip().lower()
     return normalized if normalized in {"auto", "zh", "en"} else "auto"
 
 
 def should_send_prompt() -> bool:
-    raw = ps_get_str("send_prompt", env="XIAOMI_SEND_PROMPT", default="false") or "false"
+    raw = (
+        ps_get_str("send_prompt", env="XIAOMI_SEND_PROMPT", default="false") or "false"
+    )
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -170,7 +183,13 @@ def _error_text(resp: Optional[httpx.Response]) -> str:
     return resp.text.strip()
 
 
-def _extract_text(resp: httpx.Response) -> str:
+class TextResponse(Protocol):
+    text: str
+
+    def json(self) -> Any: ...
+
+
+def _extract_text(resp: TextResponse) -> str:
     parsed = extract_text_from_body(resp.text)
     if isinstance(parsed, str) and parsed.strip():
         return parsed.strip()
@@ -232,12 +251,25 @@ async def transcribe_with_retries(
             last_status = resp.status_code
             http2_flag = resp.http_version == "HTTP/2"
             if 200 <= resp.status_code < 300:
-                return _extract_text(resp), resp.status_code, t_submit, t_complete, http2_flag
+                return (
+                    _extract_text(resp),
+                    resp.status_code,
+                    t_submit,
+                    t_complete,
+                    http2_flag,
+                )
 
             last_text = _error_text(resp)
             if not _should_retry(resp.status_code):
                 return last_text, resp.status_code, t_submit, t_complete, http2_flag
-        except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.ConnectError, httpx.RemoteProtocolError, httpx.HTTPError, OSError) as exc:
+        except (
+            httpx.ReadTimeout,
+            httpx.ConnectTimeout,
+            httpx.ConnectError,
+            httpx.RemoteProtocolError,
+            httpx.HTTPError,
+            OSError,
+        ) as exc:
             t_complete = time.time()
             last_status = 0
             last_text = f"Xiaomi request error: {exc}"

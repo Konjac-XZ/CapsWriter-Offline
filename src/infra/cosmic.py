@@ -36,10 +36,14 @@ def _console_print_wrapper(*args, **kwargs):
             def _arg_to_text(a):
                 return "" if isinstance(a, NewLine) else str(a)
         except Exception:
+
             def _arg_to_text(a):
                 # Fallback: avoid obvious NewLine reprs
                 try:
-                    if a.__class__.__name__ == "NewLine" and a.__class__.__module__.startswith("rich"):
+                    if (
+                        a.__class__.__name__ == "NewLine"
+                        and a.__class__.__module__.startswith("rich")
+                    ):
                         return ""
                 except Exception:
                     pass
@@ -79,7 +83,6 @@ def _console_print_wrapper(*args, **kwargs):
 
 # Monkeypatch the Console.print method for convenience across the codebase
 setattr(console, "print", cast(Any, _console_print_wrapper))
-
 
 
 class Cosmic:

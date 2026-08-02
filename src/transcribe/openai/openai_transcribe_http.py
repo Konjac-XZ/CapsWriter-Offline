@@ -7,7 +7,10 @@ import time
 from typing import Tuple
 
 import httpx
-from src.infra.response_parse import extract_text_from_body, extract_json_from_labeled_line
+from src.infra.response_parse import (
+    extract_text_from_body,
+    extract_json_from_labeled_line,
+)
 
 from src.infra.cosmic import Cosmic, console
 from src.provider.provider_settings import (
@@ -39,12 +42,17 @@ def get_api_key() -> str:
     api_key = ps_get_str("api_key", env="OPENAI_API_KEY")
     if not api_key:
         # Fail fast: require the API key to be provided via environment variable
-        raise RuntimeError("OPENAI_API_KEY environment variable is required but not set")
+        raise RuntimeError(
+            "OPENAI_API_KEY environment variable is required but not set"
+        )
     return api_key
 
 
 def get_model() -> str:
-    return ps_get_str("model", env="TRANSCRIBE_MODEL", default="gpt-4o-transcribe") or "gpt-4o-transcribe"
+    return (
+        ps_get_str("model", env="TRANSCRIBE_MODEL", default="gpt-4o-transcribe")
+        or "gpt-4o-transcribe"
+    )
 
 
 def get_prompt() -> str:
@@ -57,7 +65,9 @@ def get_temperature() -> float | None:
 
 
 def get_language() -> str:
-    return ps_get_str("language", env="OPENAI_TRANSCRIBE_LANGUAGE", default="zh") or "zh"
+    return (
+        ps_get_str("language", env="OPENAI_TRANSCRIBE_LANGUAGE", default="zh") or "zh"
+    )
 
 
 def is_incremental_results_enabled() -> bool:
@@ -70,8 +80,13 @@ def is_streaming_enabled() -> bool:
 
 
 def should_reuse_http_client() -> bool:
-    if ps_get_str("reuse_http_client", env="OPENAI_REUSE_HTTP_CLIENT", default=None) is not None:
-        return ps_get_bool("reuse_http_client", env="OPENAI_REUSE_HTTP_CLIENT", default=True)
+    if (
+        ps_get_str("reuse_http_client", env="OPENAI_REUSE_HTTP_CLIENT", default=None)
+        is not None
+    ):
+        return ps_get_bool(
+            "reuse_http_client", env="OPENAI_REUSE_HTTP_CLIENT", default=True
+        )
     return True
 
 
@@ -101,18 +116,16 @@ def build_headers() -> dict:
 
 
 def _log_persistent_established():
-    console.print(
-        "持久连接已建立"
-    )
+    console.print("持久连接已建立")
+
 
 def _log_incremental_results_status():
     status = "开" if is_incremental_results_enabled() else "关"
     console.print(f"增量转录结果：{status}")
 
+
 def _log_persistent_closed(reason: str):
-    console.print(
-        "持久连接已关闭"
-    )
+    console.print("持久连接已关闭")
 
 
 def _next_request_id() -> str:
@@ -240,7 +253,9 @@ def _atexit_close_client():
 atexit.register(_atexit_close_client)
 
 
-async def emit_transcript_delta(task_id: str, new_text: str, time_start: float, record_stop: float, t_submit: float):
+async def emit_transcript_delta(
+    task_id: str, new_text: str, time_start: float, record_stop: float, t_submit: float
+):
     """Emit an incremental transcript update to the outbound queue."""
     await Cosmic.queue_out.put(
         {
@@ -278,12 +293,29 @@ async def sse_transcribe_incremental_results(
     current_text = ""
     last_emit = 0.0
     status_code = 0
-    _log_request_event(request_id, "sse_open", client=client, url=url, attempt=attempt, incremental_results=True)
+    _log_request_event(
+        request_id,
+        "sse_open",
+        client=client,
+        url=url,
+        attempt=attempt,
+        incremental_results=True,
+    )
     async with client.stream("POST", url, data=data_form, files=files) as resp:
         status_code = resp.status_code
-        _log_request_event(request_id, "sse_headers", client=client, url=url, attempt=attempt, incremental_results=True, status=status_code)
+        _log_request_event(
+            request_id,
+            "sse_headers",
+            client=client,
+            url=url,
+            attempt=attempt,
+            incremental_results=True,
+            status=status_code,
+        )
         if status_code >= 400:
-            raise httpx.HTTPStatusError("非成功状态码", request=resp.request, response=resp)
+            raise httpx.HTTPStatusError(
+                "非成功状态码", request=resp.request, response=resp
+            )
         async for line in resp.aiter_lines():
             if not line:
                 continue
@@ -351,7 +383,9 @@ async def sse_transcribe_incremental_results(
             now = time.time()
             if new_text is not None and (now - last_emit >= 0.05) and len(new_text) > 0:
                 last_emit = now
-                await emit_transcript_delta(task_id, new_text, time_start, record_stop, t_submit)
+                await emit_transcript_delta(
+                    task_id, new_text, time_start, record_stop, t_submit
+                )
 
     t_complete = time.time()
     _log_request_event(
@@ -378,7 +412,14 @@ async def nonstream_transcribe(
 ) -> tuple[str, int, float, str | None]:
     """Perform non-streaming transcription. Returns (text, status_code, t_complete, err_text)."""
     t0 = time.time()
-    _log_request_event(request_id, "post_begin", client=client, url=url, attempt=attempt, incremental_results=False)
+    _log_request_event(
+        request_id,
+        "post_begin",
+        client=client,
+        url=url,
+        attempt=attempt,
+        incremental_results=False,
+    )
     resp = await client.post(url, data=data_form, files=files)
     t_complete = time.time()
     status_code = resp.status_code
@@ -395,7 +436,9 @@ async def nonstream_transcribe(
     if resp.status_code >= 500 or resp.status_code in (408, 429):
         return "", status_code, t_complete, resp.text
     if resp.status_code >= 400:
-        console.print(f"OpenAI 服务响应错误：{resp.status_code} {resp.text}", style="bright_red")
+        console.print(
+            f"OpenAI 服务响应错误：{resp.status_code} {resp.text}", style="bright_red"
+        )
         return "", status_code, t_complete, None
     # Parse plain-text, JSON, or labeled JSON bodies to extract transcript text
     body = resp.text
@@ -406,7 +449,11 @@ async def nonstream_transcribe(
         parsed = None
     text_result = parsed if isinstance(parsed, str) and parsed.strip() != "" else body
     # Some providers return quoted plain text (e.g., "你好")
-    if len(text_result) >= 2 and text_result.startswith("\"") and text_result.endswith("\""):
+    if (
+        len(text_result) >= 2
+        and text_result.startswith('"')
+        and text_result.endswith('"')
+    ):
         text_result = text_result[1:-1]
     return text_result, status_code, t_complete, None
 
@@ -433,7 +480,13 @@ async def transcribe_with_retries(
     t_submit = time.time()
     t_complete = t_submit
 
-    from httpx import ReadTimeout, ConnectTimeout, ConnectError, RemoteProtocolError, HTTPError
+    from httpx import (
+        ReadTimeout,
+        ConnectTimeout,
+        ConnectError,
+        RemoteProtocolError,
+        HTTPError,
+    )
 
     for attempt in range(max_retries):
         try:
@@ -453,8 +506,10 @@ async def transcribe_with_retries(
 
         # Use incremental transcript responses on the first attempt if enabled;
         # also allow the first retry to try them once more.
-        attempt_incremental_results = enable_incremental_results if attempt == 0 else (
-            enable_incremental_results and (attempt == 1)
+        attempt_incremental_results = (
+            enable_incremental_results
+            if attempt == 0
+            else (enable_incremental_results and (attempt == 1))
         )
         data_form = dict(data_form_base)
         # Provider requires the 'stream' option to be sent as a string; always include it explicitly
@@ -474,11 +529,28 @@ async def transcribe_with_retries(
                 detail=f"task_id={task_id} mime={payload_mime}",
             )
             if attempt_incremental_results:
-                text_result, status_code, t_complete = await sse_transcribe_incremental_results(
-                    client, url, data_form, files, task_id, time_start, record_stop, request_id, attempt + 1
+                (
+                    text_result,
+                    status_code,
+                    t_complete,
+                ) = await sse_transcribe_incremental_results(
+                    client,
+                    url,
+                    data_form,
+                    files,
+                    task_id,
+                    time_start,
+                    record_stop,
+                    request_id,
+                    attempt + 1,
                 )
             else:
-                text_result, status_code, t_complete, err_text = await nonstream_transcribe(
+                (
+                    text_result,
+                    status_code,
+                    t_complete,
+                    err_text,
+                ) = await nonstream_transcribe(
                     client, url, data_form, files, request_id, attempt + 1
                 )
                 if status_code >= 500 or status_code in (408, 429):
@@ -495,7 +567,14 @@ async def transcribe_with_retries(
                 detail=f"text_len={len(text_result)}",
             )
             break
-        except (ReadTimeout, ConnectTimeout, ConnectError, RemoteProtocolError, HTTPError, OSError) as e:
+        except (
+            ReadTimeout,
+            ConnectTimeout,
+            ConnectError,
+            RemoteProtocolError,
+            HTTPError,
+            OSError,
+        ) as e:
             t_complete = time.time()
             msg = err_text or str(e)
             _log_request_event(
@@ -518,9 +597,11 @@ async def transcribe_with_retries(
             except Exception:
                 pass
             if attempt + 1 >= max_retries:
-                console.print("已达到最大重试次数，返回当前结果（可能为空）", style="bright_red")
+                console.print(
+                    "已达到最大重试次数，返回当前结果（可能为空）", style="bright_red"
+                )
                 break
-            delay = base_delay * (2 ** attempt) + random.uniform(0.0, 0.1)
+            delay = base_delay * (2**attempt) + random.uniform(0.0, 0.1)
             import asyncio
 
             await asyncio.sleep(delay)

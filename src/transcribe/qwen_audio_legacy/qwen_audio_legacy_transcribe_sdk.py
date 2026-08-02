@@ -1,4 +1,5 @@
 """Qwen Audio Legacy realtime integration via the official SDK."""
+
 from __future__ import annotations
 
 import asyncio
@@ -96,7 +97,13 @@ def _text_field_lengths(message: Dict[str, Any]) -> Dict[str, int]:
         if isinstance(value, dict):
             for key, child in value.items():
                 child_path = f"{path}.{key}" if path else str(key)
-                if key in {"text", "stash", "transcript", "delta", "result"} and isinstance(child, str):
+                if key in {
+                    "text",
+                    "stash",
+                    "transcript",
+                    "delta",
+                    "result",
+                } and isinstance(child, str):
                     lengths[child_path] = len(child)
                 walk(child, child_path)
         elif isinstance(value, list):
@@ -322,8 +329,12 @@ class QwenAudioLegacyRealtimeSession(StreamingTranscriptionSession):
         if not pcm:
             return
         self._audio_bytes_sent += len(pcm)
-        if self._audio_bytes_sent == len(pcm) or self._audio_bytes_sent % (self._sample_rate * 2) < len(pcm):
-            _rt_log(f"append audio chunk_bytes={len(pcm)} total_bytes={self._audio_bytes_sent}")
+        if self._audio_bytes_sent == len(pcm) or self._audio_bytes_sent % (
+            self._sample_rate * 2
+        ) < len(pcm):
+            _rt_log(
+                f"append audio chunk_bytes={len(pcm)} total_bytes={self._audio_bytes_sent}"
+            )
         await asyncio.to_thread(
             self._conversation.append_audio,
             base64.b64encode(pcm).decode("ascii"),
@@ -352,8 +363,7 @@ class QwenAudioLegacyRealtimeSession(StreamingTranscriptionSession):
             )
         except asyncio.TimeoutError:
             self._error = (
-                "qwen-audio-legacy realtime finish timed out after "
-                f"{timeout:.1f}s"
+                f"qwen-audio-legacy realtime finish timed out after {timeout:.1f}s"
             )
             console.print(self._error, style="bright_yellow")
         except Exception as exc:

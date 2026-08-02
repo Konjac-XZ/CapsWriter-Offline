@@ -57,13 +57,17 @@ def get_realtime_model() -> str:
 
 def get_realtime_format() -> str:
     return (
-        ps_get_str(
-            "realtime_format",
-            env="QWEN_AUDIO_3_REALTIME_FORMAT",
-            default="pcm",
+        (
+            ps_get_str(
+                "realtime_format",
+                env="QWEN_AUDIO_3_REALTIME_FORMAT",
+                default="pcm",
+            )
+            or "pcm"
         )
-        or "pcm"
-    ).strip().lower()
+        .strip()
+        .lower()
+    )
 
 
 def get_realtime_sample_rate() -> int:
@@ -106,9 +110,13 @@ def get_workspace_id() -> str | None:
 
 def get_region() -> str:
     return (
-        ps_get_str("region", env="DASHSCOPE_REGION", default="cn-beijing")
-        or "cn-beijing"
-    ).strip().lower()
+        (
+            ps_get_str("region", env="DASHSCOPE_REGION", default="cn-beijing")
+            or "cn-beijing"
+        )
+        .strip()
+        .lower()
+    )
 
 
 def get_realtime_url() -> str:
@@ -125,8 +133,7 @@ def get_realtime_url() -> str:
     if region in {"cn-beijing", "beijing"}:
         if workspace_id:
             return (
-                f"wss://{workspace_id}.cn-beijing.maas.aliyuncs.com"
-                "/api-ws/v1/inference"
+                f"wss://{workspace_id}.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference"
             )
         return _DEFAULT_BEIJING_URL
     if region in {"ap-southeast-1", "singapore"}:
@@ -136,7 +143,9 @@ def get_realtime_url() -> str:
                 "/api-ws/v1/inference"
             )
         return _DEFAULT_SINGAPORE_URL
-    raise ValueError("Qwen Audio 3 realtime region must be cn-beijing or ap-southeast-1")
+    raise ValueError(
+        "Qwen Audio 3 realtime region must be cn-beijing or ap-southeast-1"
+    )
 
 
 def get_semantic_punctuation_enabled() -> bool:
@@ -338,7 +347,9 @@ class QwenAudioStreamingSession(StreamingTranscriptionSession):
             return await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
         except asyncio.TimeoutError:
             self._context_timed_out = True
-            task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
+            task.add_done_callback(
+                lambda done: done.exception() if not done.cancelled() else None
+            )
             return None
         except asyncio.CancelledError:
             task.cancel()
@@ -376,10 +387,14 @@ class QwenAudioStreamingSession(StreamingTranscriptionSession):
         if self._started:
             return
         if get_realtime_format() != "pcm":
-            raise ValueError("Qwen Audio 3 live microphone streaming requires realtime_format=pcm")
+            raise ValueError(
+                "Qwen Audio 3 live microphone streaming requires realtime_format=pcm"
+            )
         api_key = get_api_key()
         if not api_key:
-            raise RuntimeError("Qwen Audio 3.0 API key is missing. Set DASHSCOPE_API_KEY.")
+            raise RuntimeError(
+                "Qwen Audio 3.0 API key is missing. Set DASHSCOPE_API_KEY."
+            )
 
         self._loop = asyncio.get_running_loop()
         self._callback_queue = asyncio.Queue()
@@ -540,7 +555,9 @@ class QwenAudioStreamingSession(StreamingTranscriptionSession):
         self._sentences[sentence_id] = text
         if sentence.get("end_time") is not None or bool(sentence.get("sentence_end")):
             self._final_sentence_ids.add(sentence_id)
-            self._fallback_sentence_id = max(self._fallback_sentence_id, sentence_id + 1)
+            self._fallback_sentence_id = max(
+                self._fallback_sentence_id, sentence_id + 1
+            )
 
         full_text = self._current_full_text()
         if full_text == self._last_full_text:

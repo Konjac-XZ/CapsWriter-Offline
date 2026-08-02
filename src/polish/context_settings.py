@@ -59,7 +59,7 @@ def set_textbox_context_enabled(enabled: bool) -> bool:
         if not match:
             continue
 
-        newline = line[len(stripped):]
+        newline = line[len(stripped) :]
         lines[idx] = (
             f"{match.group('indent')}{match.group('prefix')}{replacement}"
             f"{match.group('suffix')}{newline}"

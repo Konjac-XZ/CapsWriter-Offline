@@ -155,6 +155,7 @@ prompt_manager = PromptManager()
 @dataclass
 class ProviderConfig:
     """Configuration for a single transcription provider."""
+
     name: str
     type: str
     description: str
@@ -165,14 +166,16 @@ class ProviderConfig:
 
 class ProviderManager:
     """Manages transcription provider configurations."""
-    
+
     def __init__(self, config_dir: Optional[Path] = None):
         # src/provider/ → src/ → project root → config/providers/
-        self.config_dir = config_dir or Path(__file__).parent.parent.parent / "config" / "providers"
+        self.config_dir = (
+            config_dir or Path(__file__).parent.parent.parent / "config" / "providers"
+        )
         self.providers: Dict[str, ProviderConfig] = {}
         self.active_provider: Optional[str] = None
         self.load_providers()
-    
+
     def load_providers(self) -> None:
         """Load all provider configurations from YAML files."""
         if not self.config_dir.exists():
@@ -184,17 +187,17 @@ class ProviderManager:
 
         for yaml_file in sorted(self.config_dir.glob("*.yaml")):
             try:
-                with open(yaml_file, 'r', encoding='utf-8') as f:
+                with open(yaml_file, "r", encoding="utf-8") as f:
                     data = yaml.safe_load(f)
 
                 provider_id = yaml_file.stem
                 provider = ProviderConfig(
-                    name=data['name'],
-                    type=data['type'],
-                    description=data['description'],
-                    settings=data['settings'],
-                    enabled=data.get('enabled', False),
-                    hidden=data.get('hidden', False),
+                    name=data["name"],
+                    type=data["type"],
+                    description=data["description"],
+                    settings=data["settings"],
+                    enabled=data.get("enabled", False),
+                    hidden=data.get("hidden", False),
                 )
 
                 self.providers[provider_id] = provider
@@ -214,10 +217,12 @@ class ProviderManager:
 
             # If multiple providers are enabled (shouldn't happen), fix it
             if len(enabled_providers) > 1:
-                print(f"Warning: Multiple providers enabled, selecting {self.active_provider}")
+                print(
+                    f"Warning: Multiple providers enabled, selecting {self.active_provider}"
+                )
                 # Disable all others and save the corrected state
                 for pid, p in self.providers.items():
-                    p.enabled = (pid == self.active_provider)
+                    p.enabled = pid == self.active_provider
                 self.save_provider_states()
 
             # Initialize environment variables for the active provider
@@ -234,11 +239,11 @@ class ProviderManager:
 
         # Migration note: we no longer mirror settings to environment variables.
         # Handlers should query ProviderManager/providers' settings directly.
-    
+
     def get_provider(self, provider_id: str) -> Optional[ProviderConfig]:
         """Get provider configuration by ID."""
         return self.providers.get(provider_id)
-    
+
     def get_active_provider(self) -> Optional[ProviderConfig]:
         """Get the currently active provider configuration."""
         if self.active_provider:
@@ -252,45 +257,47 @@ class ProviderManager:
     def get_active_settings(self) -> Dict[str, Any]:
         p = self.get_active_provider()
         return dict(p.settings) if p and p.settings else {}
-    
+
     def set_active_provider(self, provider_id: str) -> bool:
         """Set the active provider and update environment variables."""
         if provider_id not in self.providers:
             return False
-        
+
         # We no longer export settings to env; only track active id internally
-        
+
         # Handlers will read settings from ProviderManager instead.
-        
+
         # Update enabled status in configs
         for pid, p in self.providers.items():
-            p.enabled = (pid == provider_id)
-        
+            p.enabled = pid == provider_id
+
         self.active_provider = provider_id
         self.save_provider_states()
         return True
-    
+
     def clear_env_settings(self) -> None:
         """No-op in YAML-first mode; kept for backward compatibility."""
         return
-    
+
     def save_provider_states(self) -> None:
         """Save current enabled states back to YAML files."""
         for provider_id, provider in self.providers.items():
             yaml_file = self.config_dir / f"{provider_id}.yaml"
             if yaml_file.exists():
                 try:
-                    with open(yaml_file, 'r', encoding='utf-8') as f:
+                    with open(yaml_file, "r", encoding="utf-8") as f:
                         data = yaml.safe_load(f)
-                    
-                    data['enabled'] = provider.enabled
-                    
-                    with open(yaml_file, 'w', encoding='utf-8') as f:
-                        yaml.safe_dump(data, f, default_flow_style=False, allow_unicode=True)
-                        
+
+                    data["enabled"] = provider.enabled
+
+                    with open(yaml_file, "w", encoding="utf-8") as f:
+                        yaml.safe_dump(
+                            data, f, default_flow_style=False, allow_unicode=True
+                        )
+
                 except Exception as e:
                     print(f"Error saving provider state {yaml_file}: {e}")
-    
+
     def list_providers(self, include_hidden: bool = False) -> List[Dict[str, Any]]:
         """List selectable providers, optionally including hidden configurations."""
         return [
@@ -305,7 +312,7 @@ class ProviderManager:
             for provider_id, provider in self.providers.items()
             if include_hidden or not provider.hidden
         ]
-    
+
     def get_provider_prompt(self) -> str:
         """Get transcription prompt from active provider or default."""
         # Prefer provider-specific overrides
@@ -320,7 +327,9 @@ class ProviderManager:
 
                 # Preset reference (with alias support)
                 preset_name = settings.get("prompt_preset")
-                from_text = prompt_manager.get_text(preset_name) if preset_name else None
+                from_text = (
+                    prompt_manager.get_text(preset_name) if preset_name else None
+                )
                 if from_text:
                     return from_text
 
@@ -346,7 +355,12 @@ class ProviderManager:
         raw = prompt_manager.list_presets()
         return {k: v for k, v in raw.items()}
 
-    def update_provider_prompt(self, provider_id: str, prompt: Optional[str] = None, prompt_preset: Optional[str] = None) -> bool:
+    def update_provider_prompt(
+        self,
+        provider_id: str,
+        prompt: Optional[str] = None,
+        prompt_preset: Optional[str] = None,
+    ) -> bool:
         """Update prompt setting for a provider and save to file."""
         if provider_id not in self.providers:
             return False
@@ -371,23 +385,25 @@ class ProviderManager:
         yaml_file = self.config_dir / f"{provider_id}.yaml"
         if yaml_file.exists():
             try:
-                with open(yaml_file, 'r', encoding='utf-8') as f:
+                with open(yaml_file, "r", encoding="utf-8") as f:
                     data = yaml.safe_load(f)
 
                 # Update the prompt settings
                 if prompt is not None:
-                    data['settings']['prompt'] = prompt
-                    data['settings'].pop('prompt_preset', None)
+                    data["settings"]["prompt"] = prompt
+                    data["settings"].pop("prompt_preset", None)
                 elif prompt_preset is not None:
-                    data['settings']['prompt_preset'] = prompt_preset
-                    data['settings'].pop('prompt', None)
+                    data["settings"]["prompt_preset"] = prompt_preset
+                    data["settings"].pop("prompt", None)
                 else:
                     # Clear both if neither provided
-                    data['settings'].pop('prompt', None)
-                    data['settings'].pop('prompt_preset', None)
+                    data["settings"].pop("prompt", None)
+                    data["settings"].pop("prompt_preset", None)
 
-                with open(yaml_file, 'w', encoding='utf-8') as f:
-                    yaml.safe_dump(data, f, default_flow_style=False, allow_unicode=True)
+                with open(yaml_file, "w", encoding="utf-8") as f:
+                    yaml.safe_dump(
+                        data, f, default_flow_style=False, allow_unicode=True
+                    )
 
                 return True
 
@@ -413,13 +429,15 @@ class ProviderManager:
         yaml_file = self.config_dir / f"{provider_id}.yaml"
         if yaml_file.exists():
             try:
-                with open(yaml_file, 'r', encoding='utf-8') as f:
+                with open(yaml_file, "r", encoding="utf-8") as f:
                     data = yaml.safe_load(f)
 
-                data['settings']['model'] = model
+                data["settings"]["model"] = model
 
-                with open(yaml_file, 'w', encoding='utf-8') as f:
-                    yaml.safe_dump(data, f, default_flow_style=False, allow_unicode=True)
+                with open(yaml_file, "w", encoding="utf-8") as f:
+                    yaml.safe_dump(
+                        data, f, default_flow_style=False, allow_unicode=True
+                    )
 
                 return True
 
@@ -446,17 +464,19 @@ class ProviderManager:
         yaml_file = self.config_dir / f"{provider_id}.yaml"
         if yaml_file.exists():
             try:
-                with open(yaml_file, 'r', encoding='utf-8') as f:
+                with open(yaml_file, "r", encoding="utf-8") as f:
                     data = yaml.safe_load(f) or {}
 
-                settings = data.setdefault('settings', {})
+                settings = data.setdefault("settings", {})
                 if not isinstance(settings, dict):
                     settings = {}
-                    data['settings'] = settings
+                    data["settings"] = settings
                 settings[key] = value
 
-                with open(yaml_file, 'w', encoding='utf-8') as f:
-                    yaml.safe_dump(data, f, default_flow_style=False, allow_unicode=True)
+                with open(yaml_file, "w", encoding="utf-8") as f:
+                    yaml.safe_dump(
+                        data, f, default_flow_style=False, allow_unicode=True
+                    )
 
                 return True
 

@@ -46,7 +46,9 @@ def _canonical_provider_type(provider: str | None) -> str:
 
 def _get_active_provider_type() -> str:
     try:
-        from src.provider.provider_config import provider_manager  # local import to avoid cycles
+        from src.provider.provider_config import (
+            provider_manager,
+        )  # local import to avoid cycles
 
         ptype = provider_manager.get_active_provider_type()
         if ptype:
@@ -68,7 +70,10 @@ def _get_target_sample_rate() -> int:
             "DASHSCOPE_TRANSCRIBE_SAMPLE_RATE",
             "TRANSCRIBE_SAMPLE_RATE",
         ),
-        "alibabacloud": ("ALIBABACLOUD_TRANSCRIBE_SAMPLE_RATE", "TRANSCRIBE_SAMPLE_RATE"),
+        "alibabacloud": (
+            "ALIBABACLOUD_TRANSCRIBE_SAMPLE_RATE",
+            "TRANSCRIBE_SAMPLE_RATE",
+        ),
         "qwen_audio": (
             "QWEN_AUDIO_3_TRANSCRIBE_SAMPLE_RATE",
             "TRANSCRIBE_SAMPLE_RATE",
@@ -96,14 +101,22 @@ def _get_target_sample_rate() -> int:
 
 
 def _force_mono() -> bool:
-    return os.getenv("OPENAI_TRANSCRIBE_MONO", "1").strip() not in ("0", "false", "False")
+    return os.getenv("OPENAI_TRANSCRIBE_MONO", "1").strip() not in (
+        "0",
+        "false",
+        "False",
+    )
 
 
 def _use_mp3_upload() -> bool:
     # 默认开启 MP3（若系统存在 ffmpeg），可通过环境变量关闭
     if shutil.which("ffmpeg") is None:
         return False
-    return os.getenv("OPENAI_TRANSCRIBE_USE_MP3", "1").strip() not in ("0", "false", "False")
+    return os.getenv("OPENAI_TRANSCRIBE_USE_MP3", "1").strip() not in (
+        "0",
+        "false",
+        "False",
+    )
 
 
 def _mp3_bitrate() -> str:
@@ -116,12 +129,20 @@ def _ffmpeg_path() -> str | None:
 
 def _ffmpeg_processing_enabled() -> bool:
     # Whether to let ffmpeg handle resampling and mono fold-down when available
-    return os.getenv("OPENAI_TRANSCRIBE_FFMPEG_PROCESS", "1").strip() not in ("0", "false", "False")
+    return os.getenv("OPENAI_TRANSCRIBE_FFMPEG_PROCESS", "1").strip() not in (
+        "0",
+        "false",
+        "False",
+    )
 
 
 def _prefer_ffmpeg_for_wav() -> bool:
     # If true, use ffmpeg for WAV generation too (for better resample/mix); fallback to Python WAV if ffmpeg fails
-    return os.getenv("OPENAI_TRANSCRIBE_FFMPEG_WAV", "1").strip() not in ("0", "false", "False")
+    return os.getenv("OPENAI_TRANSCRIBE_FFMPEG_WAV", "1").strip() not in (
+        "0",
+        "false",
+        "False",
+    )
 
 
 def _build_wav_buf_from_pcm(pcm: bytes, channels: int, sr: int) -> io.BytesIO:
@@ -136,7 +157,9 @@ def _build_wav_buf_from_pcm(pcm: bytes, channels: int, sr: int) -> io.BytesIO:
     return wav_buf
 
 
-async def make_audio_payload(audio_concat: np.ndarray, actual_sr: int) -> tuple[io.BytesIO, str, float, int, int]:
+async def make_audio_payload(
+    audio_concat: np.ndarray, actual_sr: int
+) -> tuple[io.BytesIO, str, float, int, int]:
     """Create upload payload from float32 audio [-1,1].
 
     Prefers ffmpeg with float32 input for resample + mono fold-down and encoding (MP3 or WAV).
@@ -160,21 +183,35 @@ async def make_audio_payload(audio_concat: np.ndarray, actual_sr: int) -> tuple[
             # Prepare float32 little-endian stream for ffmpeg input
             # Sanitize first to avoid NaN/Inf propagating
             np.nan_to_num(audio_concat, copy=False, nan=0.0, posinf=1.0, neginf=-1.0)
-            f32 = np.clip(audio_concat, -1.0, 1.0).astype(np.float32, copy=False).tobytes()
+            f32 = (
+                np.clip(audio_concat, -1.0, 1.0)
+                .astype(np.float32, copy=False)
+                .tobytes()
+            )
             args = [
                 ffmpeg,
                 "-hide_banner",
-                "-loglevel", "error",
-                "-f", "f32le",
-                "-ar", str(48000),  # input stream SR (capture is 48k)
-                "-ac", str(in_channels),
-                "-i", "pipe:0",
+                "-loglevel",
+                "error",
+                "-f",
+                "f32le",
+                "-ar",
+                str(48000),  # input stream SR (capture is 48k)
+                "-ac",
+                str(in_channels),
+                "-i",
+                "pipe:0",
                 "-vn",
-                "-ac", str(out_channels),
-                "-ar", str(target_sr),
-                "-c:a", "libmp3lame",
-                "-b:a", _mp3_bitrate(),
-                "-f", "mp3",
+                "-ac",
+                str(out_channels),
+                "-ar",
+                str(target_sr),
+                "-c:a",
+                "libmp3lame",
+                "-b:a",
+                _mp3_bitrate(),
+                "-f",
+                "mp3",
                 "pipe:1",
             ]
             flags = sp.CREATE_NO_WINDOW if hasattr(sp, "CREATE_NO_WINDOW") else 0
@@ -184,7 +221,13 @@ async def make_audio_payload(audio_concat: np.ndarray, actual_sr: int) -> tuple[
             stdout, stderr = await proc.communicate(input=f32)
             if proc.returncode == 0 and stdout:
                 elapsed = (time.time() - t_start) * 1000.0
-                return io.BytesIO(stdout), "audio/mpeg", elapsed, int(target_sr), int(out_channels)
+                return (
+                    io.BytesIO(stdout),
+                    "audio/mpeg",
+                    elapsed,
+                    int(target_sr),
+                    int(out_channels),
+                )
             # fallthrough if encoder fails
         except Exception:
             pass
@@ -193,20 +236,33 @@ async def make_audio_payload(audio_concat: np.ndarray, actual_sr: int) -> tuple[
     if ffmpeg is not None and prefer_ffmpeg and _prefer_ffmpeg_for_wav():
         try:
             np.nan_to_num(audio_concat, copy=False, nan=0.0, posinf=1.0, neginf=-1.0)
-            f32 = np.clip(audio_concat, -1.0, 1.0).astype(np.float32, copy=False).tobytes()
+            f32 = (
+                np.clip(audio_concat, -1.0, 1.0)
+                .astype(np.float32, copy=False)
+                .tobytes()
+            )
             args = [
                 ffmpeg,
                 "-hide_banner",
-                "-loglevel", "error",
-                "-f", "f32le",
-                "-ar", str(48000),
-                "-ac", str(in_channels),
-                "-i", "pipe:0",
+                "-loglevel",
+                "error",
+                "-f",
+                "f32le",
+                "-ar",
+                str(48000),
+                "-ac",
+                str(in_channels),
+                "-i",
+                "pipe:0",
                 "-vn",
-                "-ac", str(out_channels),
-                "-ar", str(target_sr),
-                "-c:a", "pcm_s16le",
-                "-f", "wav",
+                "-ac",
+                str(out_channels),
+                "-ar",
+                str(target_sr),
+                "-c:a",
+                "pcm_s16le",
+                "-f",
+                "wav",
                 "pipe:1",
             ]
             flags = sp.CREATE_NO_WINDOW if hasattr(sp, "CREATE_NO_WINDOW") else 0
@@ -216,14 +272,20 @@ async def make_audio_payload(audio_concat: np.ndarray, actual_sr: int) -> tuple[
             stdout, stderr = await proc.communicate(input=f32)
             if proc.returncode == 0 and stdout:
                 elapsed = (time.time() - t_start) * 1000.0
-                return io.BytesIO(stdout), "audio/wav", elapsed, int(target_sr), int(out_channels)
+                return (
+                    io.BytesIO(stdout),
+                    "audio/wav",
+                    elapsed,
+                    int(target_sr),
+                    int(out_channels),
+                )
         except Exception:
             pass
 
     # Final fallback: write WAV in Python using s16le; do safe clipping and keep given SR/channels
     np.nan_to_num(audio_concat, copy=False, nan=0.0, posinf=1.0, neginf=-1.0)
     f32_clamped = np.clip(audio_concat, -1.0, 1.0)
-    pcm = (f32_clamped * (2 ** 15 - 1)).astype(np.int16).tobytes()
+    pcm = (f32_clamped * (2**15 - 1)).astype(np.int16).tobytes()
     wav_buf = _build_wav_buf_from_pcm(pcm, in_channels, actual_sr)
     elapsed = (time.time() - t_start) * 1000.0
     return wav_buf, "audio/wav", elapsed, int(actual_sr), int(in_channels)
@@ -264,4 +326,3 @@ def preprocess_audio(audio_concat: np.ndarray) -> tuple[np.ndarray, int]:
 # Public helpers for orchestrator/debug
 def get_mp3_bitrate() -> str:
     return _mp3_bitrate()
-

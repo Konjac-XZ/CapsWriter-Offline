@@ -2,6 +2,7 @@
 
 Handlers should import these functions instead of duplicating logic.
 """
+
 from __future__ import annotations
 
 import os
@@ -84,7 +85,9 @@ def get_value(
         return default
 
 
-def get_str(key: str, env: str | Iterable[str] | None = None, default: Optional[str] = None) -> Optional[str]:
+def get_str(
+    key: str, env: str | Iterable[str] | None = None, default: Optional[str] = None
+) -> Optional[str]:
     val = get_value(key, env, default=None, cast=str)
     if val is None:
         return default
@@ -92,23 +95,31 @@ def get_str(key: str, env: str | Iterable[str] | None = None, default: Optional[
     return s if s else default
 
 
-def get_bool(key: str, env: str | Iterable[str] | None = None, default: bool = False) -> bool:
+def get_bool(
+    key: str, env: str | Iterable[str] | None = None, default: bool = False
+) -> bool:
     val = get_value(key, env, default=None, cast=bool)
     return default if val is None else bool(val)
 
 
-def get_float(key: str, env: str | Iterable[str] | None = None, default: float | None = None) -> float | None:
+def get_float(
+    key: str, env: str | Iterable[str] | None = None, default: float | None = None
+) -> float | None:
     val = get_value(key, env, default=None, cast=float)
     return default if val is None else float(val)
 
 
-def get_int(key: str, env: str | Iterable[str] | None = None, default: int | None = None) -> int | None:
+def get_int(
+    key: str, env: str | Iterable[str] | None = None, default: int | None = None
+) -> int | None:
     val = get_value(key, env, default=None, cast=int)
     return default if val is None else int(val)
 
 
 def get_prompt() -> str:
-    from src.infra.user_lexicon import get_hot_word_block  # local import to avoid circular deps
+    from src.infra.user_lexicon import (
+        get_hot_word_block,
+    )  # local import to avoid circular deps
 
     if provider_manager is not None:
         try:

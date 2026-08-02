@@ -95,7 +95,9 @@ class TrayService(QObject):
 
     def _add_action(self, label: str, action_name: str) -> None:
         action = QAction(label, self)
-        action.triggered.connect(lambda _checked=False, name=action_name: self._emit_event(name))
+        action.triggered.connect(
+            lambda _checked=False, name=action_name: self._emit_event(name)
+        )
         self._menu.addAction(action)
 
     def _emit_event(self, event: str, **details: Any) -> None:
@@ -113,7 +115,13 @@ class TrayService(QObject):
         try:
             payload = json.loads(self._command_path.read_text(encoding="utf-8"))
             serial = int(payload.get("serial", 0))
-        except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        except (
+            FileNotFoundError,
+            OSError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ):
             return
         if serial <= self._last_command_serial:
             return

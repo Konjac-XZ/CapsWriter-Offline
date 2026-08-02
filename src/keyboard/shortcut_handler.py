@@ -121,7 +121,9 @@ def _active_provider_uses_streaming_input() -> bool:
         provider_kind = provider_manager.get_active_provider_type()
         if not provider_kind:
             return False
-        return make_provider(str(provider_kind).strip().lower()).supports_streaming_input()
+        return make_provider(
+            str(provider_kind).strip().lower()
+        ).supports_streaming_input()
     except Exception:
         return False
 

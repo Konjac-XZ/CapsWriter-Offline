@@ -1,8 +1,7 @@
 from subprocess import Popen
-import wave 
+import wave
 import numpy as np
 from typing import BinaryIO, Union, cast
-
 
 
 def write_file(file: Union[Popen, wave.Wave_write], data: np.ndarray):

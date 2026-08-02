@@ -21,14 +21,19 @@ _HTTP2_ENABLED: bool = False
 
 
 def get_api_base() -> str:
-    base = ps_get_str("base_url", default="https://api.elevenlabs.io") or "https://api.elevenlabs.io"
+    base = (
+        ps_get_str("base_url", default="https://api.elevenlabs.io")
+        or "https://api.elevenlabs.io"
+    )
     return base.rstrip("/")
 
 
 def get_api_key() -> str:
     api_key = ps_get_str("api_key", env="ELEVENLABS_API_KEY", default=None)
     if not api_key:
-        raise RuntimeError("ELEVENLABS_API_KEY environment variable is required for provider=elevenlabs")
+        raise RuntimeError(
+            "ELEVENLABS_API_KEY environment variable is required for provider=elevenlabs"
+        )
     return api_key
 
 
@@ -230,7 +235,13 @@ async def transcribe_with_retries(
     t_submit = time.time()
     t_complete = t_submit
 
-    from httpx import ReadTimeout, ConnectTimeout, ConnectError, RemoteProtocolError, HTTPError
+    from httpx import (
+        ReadTimeout,
+        ConnectTimeout,
+        ConnectError,
+        RemoteProtocolError,
+        HTTPError,
+    )
 
     for attempt in range(max_retries):
         try:
@@ -257,7 +268,14 @@ async def transcribe_with_retries(
             if status_code >= 500 or status_code in (408, 429):
                 raise HTTPError("服务暂时不可用")
             break
-        except (ReadTimeout, ConnectTimeout, ConnectError, RemoteProtocolError, HTTPError, OSError) as e:
+        except (
+            ReadTimeout,
+            ConnectTimeout,
+            ConnectError,
+            RemoteProtocolError,
+            HTTPError,
+            OSError,
+        ) as e:
             t_complete = time.time()
             try:
                 console.print(
@@ -272,11 +290,14 @@ async def transcribe_with_retries(
                 pass
             if attempt + 1 >= max_retries:
                 try:
-                    console.print("已达到最大重试次数，返回当前结果（可能为空）", style="bright_red")
+                    console.print(
+                        "已达到最大重试次数，返回当前结果（可能为空）",
+                        style="bright_red",
+                    )
                 except Exception:
                     pass
                 break
-            delay = base_delay * (2 ** attempt) + random.uniform(0.0, 0.1)
+            delay = base_delay * (2**attempt) + random.uniform(0.0, 0.1)
             import asyncio
 
             await asyncio.sleep(delay)

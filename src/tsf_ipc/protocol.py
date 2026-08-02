@@ -54,21 +54,26 @@ def encode_frame(frame: Frame) -> bytes:
     text_bytes = frame.text.encode("utf-16-le")
     if len(text_bytes) > MAX_TEXT_BYTES:
         raise ValueError("TSF IPC text payload is too large")
-    return HEADER.pack(
-        MAGIC,
-        VERSION,
-        int(frame.operation),
-        int(frame.revision),
-        frame.session_id.bytes_le,
-        len(text_bytes),
-        int(frame.status),
-    ) + text_bytes
+    return (
+        HEADER.pack(
+            MAGIC,
+            VERSION,
+            int(frame.operation),
+            int(frame.revision),
+            frame.session_id.bytes_le,
+            len(text_bytes),
+            int(frame.status),
+        )
+        + text_bytes
+    )
 
 
 def decode_header(data: bytes) -> tuple[int, uuid.UUID, int, int, int]:
     if len(data) != HEADER.size:
         raise ValueError(f"expected {HEADER.size} header bytes, got {len(data)}")
-    magic, version, operation, revision, session_bytes, text_size, status = HEADER.unpack(data)
+    magic, version, operation, revision, session_bytes, text_size, status = (
+        HEADER.unpack(data)
+    )
     if magic != MAGIC:
         raise ValueError("invalid TSF IPC magic")
     if version != VERSION:

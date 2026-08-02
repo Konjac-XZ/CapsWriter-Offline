@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QDialog, QDialogButtonBox, QPlainTextEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QDialog,
+    QDialogButtonBox,
+    QPlainTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 
 class PromptEditDialog(QDialog):
@@ -23,7 +29,8 @@ class PromptEditDialog(QDialog):
         layout.addWidget(self.text_edit)
 
         buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel,
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel,
             parent=self,
         )
         buttons.accepted.connect(self.accept)

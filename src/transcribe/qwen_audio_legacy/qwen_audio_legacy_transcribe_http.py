@@ -1,4 +1,5 @@
 """Qwen Audio Legacy final-file integration."""
+
 import atexit
 import base64
 import io
@@ -228,7 +229,9 @@ async def _send_once(
 
     for endpoint in endpoints:
         t0 = time.time()
-        _log_request_event(request_id, "post_begin", client=client, endpoint=endpoint, attempt=attempt)
+        _log_request_event(
+            request_id, "post_begin", client=client, endpoint=endpoint, attempt=attempt
+        )
         try:
             response = await client.post(endpoint, json=request_body)
         except Exception as exc:
@@ -295,7 +298,13 @@ async def transcribe_with_retries(
     max_retries: int,
     base_delay: float,
 ) -> Tuple[str, int, float, float, Dict[str, Any]]:
-    from httpx import ConnectError, ConnectTimeout, HTTPError, ReadTimeout, RemoteProtocolError
+    from httpx import (
+        ConnectError,
+        ConnectTimeout,
+        HTTPError,
+        ReadTimeout,
+        RemoteProtocolError,
+    )
 
     text_result = ""
     status_code = 0
@@ -322,9 +331,13 @@ async def transcribe_with_retries(
                     attempt=attempt + 1,
                     detail=f"task_id={task_id} mime={payload_mime}",
                 )
-                text_result, status_code, t_complete, meta, err_text = await send_with_sdk(
-                    payload_buf, payload_mime
-                )
+                (
+                    text_result,
+                    status_code,
+                    t_complete,
+                    meta,
+                    err_text,
+                ) = await send_with_sdk(payload_buf, payload_mime)
             else:
                 client = await get_http_client()
                 close_after_request = not should_reuse_http_client()
@@ -340,12 +353,12 @@ async def transcribe_with_retries(
                 )
             transport_meta = {"http2": _HTTP2_ENABLED, **meta}
             if err_text and _should_retry(status_code):
-                if prefer_sdk and isinstance(meta, dict) and meta.get(
-                    "qwen_audio_legacy_sdk_import_error"
+                if (
+                    prefer_sdk
+                    and isinstance(meta, dict)
+                    and meta.get("qwen_audio_legacy_sdk_import_error")
                 ):
-                    import_error = str(
-                        meta.get("qwen_audio_legacy_sdk_import_error")
-                    )
+                    import_error = str(meta.get("qwen_audio_legacy_sdk_import_error"))
                     _log_request_event(
                         request_id,
                         "sdk_unavailable",
@@ -356,7 +369,13 @@ async def transcribe_with_retries(
                     )
                     client = await get_http_client()
                     close_after_request = not should_reuse_http_client()
-                    text_result, status_code, t_complete, meta, err_text = await _send_once(
+                    (
+                        text_result,
+                        status_code,
+                        t_complete,
+                        meta,
+                        err_text,
+                    ) = await _send_once(
                         client, payload_buf, payload_mime, request_id, attempt + 1
                     )
                     meta["qwen_audio_legacy_sdk_import_error"] = import_error
@@ -388,8 +407,10 @@ async def transcribe_with_retries(
                 elapsed_ms=(t_complete - t_submit) * 1000,
                 detail=success_detail,
             )
-            if not text_result and isinstance(meta, dict) and meta.get(
-                "qwen_audio_legacy_payload_preview"
+            if (
+                not text_result
+                and isinstance(meta, dict)
+                and meta.get("qwen_audio_legacy_payload_preview")
             ):
                 _log_request_event(
                     request_id,
@@ -401,7 +422,14 @@ async def transcribe_with_retries(
                     detail=str(meta.get("qwen_audio_legacy_payload_preview")),
                 )
             break
-        except (ReadTimeout, ConnectTimeout, ConnectError, RemoteProtocolError, HTTPError, OSError) as exc:
+        except (
+            ReadTimeout,
+            ConnectTimeout,
+            ConnectError,
+            RemoteProtocolError,
+            HTTPError,
+            OSError,
+        ) as exc:
             t_complete = time.time()
             _log_request_event(
                 request_id,
@@ -422,7 +450,9 @@ async def transcribe_with_retries(
                 pass
         finally:
             if not prefer_sdk and close_after_request and client is not None:
-                _log_request_event(request_id, "client_close", client=client, attempt=attempt + 1)
+                _log_request_event(
+                    request_id, "client_close", client=client, attempt=attempt + 1
+                )
                 try:
                     await client.aclose()
                 except Exception:
@@ -436,17 +466,18 @@ async def transcribe_with_retries(
             except Exception:
                 pass
             break
-        delay = base_delay * (2 ** attempt) + random.uniform(0.0, 0.1)
+        delay = base_delay * (2**attempt) + random.uniform(0.0, 0.1)
         import asyncio
 
         await asyncio.sleep(delay)
 
     if not text_result:
         try:
-            level = "bright_yellow" if status_code and status_code < 500 else "bright_red"
+            level = (
+                "bright_yellow" if status_code and status_code < 500 else "bright_red"
+            )
             console.print(
-                "qwen-audio-legacy returned empty transcript "
-                f"(status={status_code}).",
+                f"qwen-audio-legacy returned empty transcript (status={status_code}).",
                 style=level,
             )
         except Exception:

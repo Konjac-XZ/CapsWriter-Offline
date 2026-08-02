@@ -58,7 +58,9 @@ def _load_rules() -> list[tuple[re.Pattern, str]]:
             compiled = re.compile(pattern_str, flags=flags)
             rules.append((compiled, replacement))
         except re.error as e:
-            print(f"[regex_replace] 规则 #{idx} 正则编译失败: {e}  (pattern={pattern_str!r})")
+            print(
+                f"[regex_replace] 规则 #{idx} 正则编译失败: {e}  (pattern={pattern_str!r})"
+            )
 
     return rules
 

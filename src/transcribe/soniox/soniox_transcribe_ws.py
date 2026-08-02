@@ -11,13 +11,17 @@ from src.provider.provider_config import provider_manager
 
 
 def _get_ws_url() -> str:
-    return os.getenv("SONIOX_WS_URL", "wss://stt-rt.soniox.com/transcribe-websocket").strip()
+    return os.getenv(
+        "SONIOX_WS_URL", "wss://stt-rt.soniox.com/transcribe-websocket"
+    ).strip()
 
 
 def _get_api_key() -> str:
     key = os.getenv("SONIOX_API_KEY") or os.getenv("SONIOX_TEMP_API_KEY")
     if not key:
-        raise RuntimeError("SONIOX_API_KEY (or SONIOX_TEMP_API_KEY) is required for provider=soniox")
+        raise RuntimeError(
+            "SONIOX_API_KEY (or SONIOX_TEMP_API_KEY) is required for provider=soniox"
+        )
     return key
 
 
@@ -61,11 +65,19 @@ def _get_enable_non_final_tokens(enable_incremental_results: bool) -> bool:
 
 
 def _get_enable_endpoint_detection() -> bool:
-    return os.getenv("SONIOX_ENABLE_ENDPOINT_DETECTION", "1").strip() not in ("0", "false", "False")
+    return os.getenv("SONIOX_ENABLE_ENDPOINT_DETECTION", "1").strip() not in (
+        "0",
+        "false",
+        "False",
+    )
 
 
 def _get_enable_diarization() -> bool:
-    return os.getenv("SONIOX_ENABLE_DIARIZATION", "0").strip() not in ("0", "false", "False")
+    return os.getenv("SONIOX_ENABLE_DIARIZATION", "0").strip() not in (
+        "0",
+        "false",
+        "False",
+    )
 
 
 async def _ws_transcribe(
@@ -170,7 +182,10 @@ async def _ws_transcribe(
                         err = obj.get("error_message") or ""
                         if err:
                             try:
-                                console.print(f"Soniox 错误：{status_code} {err}", style="bright_red")
+                                console.print(
+                                    f"Soniox 错误：{status_code} {err}",
+                                    style="bright_red",
+                                )
                             except Exception:
                                 pass
                         break
@@ -186,7 +201,9 @@ async def _ws_transcribe(
                             # Fallback: stringify
                             parts = []
                             for t in tokens:
-                                if isinstance(t, dict) and isinstance(t.get("text"), str):
+                                if isinstance(t, dict) and isinstance(
+                                    t.get("text"), str
+                                ):
                                     parts.append(t["text"])
                             current_text = "".join(parts)
 
@@ -194,7 +211,13 @@ async def _ws_transcribe(
                             now = time.time()
                             if now - last_emit >= 0.05:
                                 last_emit = now
-                                await emit_transcript_delta(task_id, current_text, time_start, record_stop, t_submit)
+                                await emit_transcript_delta(
+                                    task_id,
+                                    current_text,
+                                    time_start,
+                                    record_stop,
+                                    t_submit,
+                                )
 
                     if obj.get("finished") is True:
                         break
@@ -240,7 +263,11 @@ async def transcribe_with_retries(
         try:
             t_submit = time.time()
             text_result, status_code, _, t_complete = await _ws_transcribe(
-                payload_buf, enable_incremental_results, task_id, time_start, record_stop
+                payload_buf,
+                enable_incremental_results,
+                task_id,
+                time_start,
+                record_stop,
             )
             # If success or client error, stop retrying
             if status_code < 500 and status_code not in (408, 429):
@@ -249,14 +276,15 @@ async def transcribe_with_retries(
             t_complete = time.time()
             try:
                 console.print(
-                    f"Soniox 重试（第 {attempt + 1}/{max_retries} 次）异常：{e}", style="bright_yellow"
+                    f"Soniox 重试（第 {attempt + 1}/{max_retries} 次）异常：{e}",
+                    style="bright_yellow",
                 )
             except Exception:
                 pass
 
         if attempt + 1 >= max_retries:
             break
-        delay = base_delay * (2 ** attempt) + random.uniform(0.0, 0.1)
+        delay = base_delay * (2**attempt) + random.uniform(0.0, 0.1)
         import asyncio
 
         await asyncio.sleep(delay)

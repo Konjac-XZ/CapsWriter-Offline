@@ -48,21 +48,29 @@ class StartupProfiler:
             if self.tool == "cprofile":
                 self._cprofile = cProfile.Profile()
                 self._cprofile.enable()
-                print(f"[startup-profiler] cProfile started -> {self.output_base.with_suffix('.pstats')}")
+                print(
+                    f"[startup-profiler] cProfile started -> {self.output_base.with_suffix('.pstats')}"
+                )
                 return
 
             if self.tool == "pyinstrument":
                 Profiler = importlib.import_module("pyinstrument").Profiler
                 self._pyinstrument = Profiler(async_mode="disabled")
                 self._pyinstrument.start()
-                print(f"[startup-profiler] pyinstrument started -> {self.output_base.with_suffix('.html')}")
+                print(
+                    f"[startup-profiler] pyinstrument started -> {self.output_base.with_suffix('.html')}"
+                )
                 return
 
             if self.tool == "viztracer":
                 VizTracer = importlib.import_module("viztracer").VizTracer
-                self._viztracer = VizTracer(output_file=str(self.output_base.with_suffix(".json")))
+                self._viztracer = VizTracer(
+                    output_file=str(self.output_base.with_suffix(".json"))
+                )
                 self._viztracer.start()
-                print(f"[startup-profiler] viztracer started -> {self.output_base.with_suffix('.json')}")
+                print(
+                    f"[startup-profiler] viztracer started -> {self.output_base.with_suffix('.json')}"
+                )
                 return
 
             if self.tool == "yappi":
@@ -70,15 +78,21 @@ class StartupProfiler:
                 self._yappi.clear_stats()
                 self._yappi.set_clock_type("wall")
                 self._yappi.start()
-                print(f"[startup-profiler] yappi started -> {self.output_base.with_suffix('.pstat')}")
+                print(
+                    f"[startup-profiler] yappi started -> {self.output_base.with_suffix('.pstat')}"
+                )
                 return
 
-            print(f"[startup-profiler] unknown tool '{self.tool}', fallback to cprofile")
+            print(
+                f"[startup-profiler] unknown tool '{self.tool}', fallback to cprofile"
+            )
             self.tool = "cprofile"
             self._cprofile = cProfile.Profile()
             self._cprofile.enable()
         except Exception as e:
-            print(f"[startup-profiler] failed to start '{self.tool}': {e}; fallback to cprofile")
+            print(
+                f"[startup-profiler] failed to start '{self.tool}': {e}; fallback to cprofile"
+            )
             self.tool = "cprofile"
             self._cprofile = cProfile.Profile()
             self._cprofile.enable()
@@ -111,7 +125,10 @@ class StartupProfiler:
                 html_path = self.output_base.with_suffix(".html")
                 self._pyinstrument.stop()
 
-                txt_path.write_text(self._pyinstrument.output_text(unicode=True, color=False), encoding="utf-8")
+                txt_path.write_text(
+                    self._pyinstrument.output_text(unicode=True, color=False),
+                    encoding="utf-8",
+                )
                 html_path.write_text(self._pyinstrument.output_html(), encoding="utf-8")
 
                 print(f"[startup-profiler] pyinstrument text: {txt_path}")

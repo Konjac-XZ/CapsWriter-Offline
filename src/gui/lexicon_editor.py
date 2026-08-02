@@ -43,7 +43,10 @@ class PlainYamlEditor(QPlainTextEdit):
         return self.toPlainText()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        if event.key() in {Qt.Key.Key_Return, Qt.Key.Key_Enter} and self._continue_yaml_list():
+        if (
+            event.key() in {Qt.Key.Key_Return, Qt.Key.Key_Enter}
+            and self._continue_yaml_list()
+        ):
             return
         super().keyPressEvent(event)
 
@@ -66,7 +69,10 @@ class PlainYamlEditor(QPlainTextEdit):
 class _MonacoKeyInterceptor(QObject):
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.Type.KeyPress and isinstance(event, QKeyEvent):
-            if event.key() == Qt.Key.Key_S and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if (
+                event.key() == Qt.Key.Key_S
+                and event.modifiers() & Qt.KeyboardModifier.ControlModifier
+            ):
                 dialog = self._find_dialog_ancestor(watched)
                 if dialog is not None:
                     dialog._handle_accept()
@@ -111,7 +117,7 @@ class MonacoYamlEditor(QWidget):
         page = getattr(editor, "page", None)
         if not callable(page):
             return
-        web_page = cast(Any, page())
+        web_page = page()
         if web_page is None:
             return
         web_page.runJavaScript(
@@ -248,7 +254,9 @@ class LexiconEditDialog(QDialog):
 
     initialized = Signal()
 
-    def __init__(self, parent: QWidget | None = None, *, initial_text: str = "") -> None:
+    def __init__(
+        self, parent: QWidget | None = None, *, initial_text: str = ""
+    ) -> None:
         super().__init__(parent)
         self._saved_text: str | None = None
         self.setWindowTitle("编辑用户词库")
@@ -269,7 +277,8 @@ class LexiconEditDialog(QDialog):
         layout.setStretchFactor(self.editor_widget, 1)
 
         buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel,
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel,
             parent=self,
         )
         buttons.accepted.connect(self._handle_accept)
@@ -294,7 +303,9 @@ class LexiconEditDialog(QDialog):
         try:
             normalized_text = normalize_lexicon_text(raw_text)
         except Exception as exc:
-            QMessageBox.critical(self, "YAML 格式错误", f"用户词库 YAML 格式错误，未保存：\n{exc}")
+            QMessageBox.critical(
+                self, "YAML 格式错误", f"用户词库 YAML 格式错误，未保存：\n{exc}"
+            )
             return
 
         try:

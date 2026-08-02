@@ -2,8 +2,23 @@ import time
 from typing import Callable
 
 from PySide6.QtCore import QPoint, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QCursor, QGuiApplication, QPainter, QPainterPath, QScreen
-from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QWidget
+from PySide6.QtGui import (
+    QColor,
+    QCursor,
+    QGuiApplication,
+    QPainter,
+    QPainterPath,
+    QScreen,
+)
+from PySide6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QWidget,
+)
 
 
 LONGEST_STATUS_PREFIX = "正在监听"
@@ -159,14 +174,22 @@ class StatusOverlay(QWidget):
         )
 
         self.prefix_label = QLabel(self._text_prefix, self)
-        self.prefix_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        self.prefix_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.prefix_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.prefix_label.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
         self.prefix_label.setStyleSheet(label_style)
         pane_layout.addWidget(self.prefix_label)
 
         self.timer_label = QLabel(self._format_elapsed(0), self)
-        self.timer_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.timer_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.timer_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.timer_label.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
         self.timer_label.setStyleSheet(label_style)
         pane_layout.addWidget(self.timer_label)
 
@@ -175,7 +198,9 @@ class StatusOverlay(QWidget):
         self.abandon_button = QPushButton("×", self)
         self.abandon_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.abandon_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.abandon_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.abandon_button.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
         self.abandon_button.setFixedSize(38, 38)
         self.abandon_button.setToolTip("放弃当前任务")
         self._set_abandon_button_color(STATUS_PANE_COLORS[self._state])
@@ -272,7 +297,10 @@ class StatusOverlay(QWidget):
         self.hide()
         self.timer_label.setText(self._format_elapsed(0))
         self.abandon_button.setEnabled(True)
-        self._log_slow_timing(f"hide_overlay total={_elapsed_ms(total_start):.1f}ms", _elapsed_ms(total_start))
+        self._log_slow_timing(
+            f"hide_overlay total={_elapsed_ms(total_start):.1f}ms",
+            _elapsed_ms(total_start),
+        )
 
     def last_position(self) -> QPoint | None:
         if self._last_pos is None:
@@ -291,7 +319,9 @@ class StatusOverlay(QWidget):
         self._reserve_stable_width()
         self.adjustSize()
         total_ms = _elapsed_ms(total_start)
-        self._log_slow_timing(f"set_text_prefix total={total_ms:.1f}ms state={self._state}", total_ms)
+        self._log_slow_timing(
+            f"set_text_prefix total={total_ms:.1f}ms state={self._state}", total_ms
+        )
 
     def set_abandon_callback(self, callback: Callable[[], None] | None) -> None:
         self._abandon_callback = callback
@@ -397,14 +427,18 @@ class StatusOverlay(QWidget):
         self.timer_label.ensurePolished()
         prefix_metrics = self.prefix_label.fontMetrics()
         timer_metrics = self.timer_label.fontMetrics()
-        prefix_width = max(prefix_metrics.horizontalAdvance(prefix) for prefix in STATUS_PREFIXES)
+        prefix_width = max(
+            prefix_metrics.horizontalAdvance(prefix) for prefix in STATUS_PREFIXES
+        )
         timer_width = timer_metrics.horizontalAdvance(f" {MAX_TIMER_TEXT}")
 
         # Leave a small cushion for platform font fallback and bold text rendering.
         self.prefix_label.setFixedWidth(prefix_width + 6)
         self.timer_label.setFixedWidth(timer_width + 6)
         pane_width = self.prefix_label.width() + self.timer_label.width() + 36
-        pane_height = max(self.abandon_button.height(), self.status_pane.sizeHint().height())
+        pane_height = max(
+            self.abandon_button.height(), self.status_pane.sizeHint().height()
+        )
         self.status_pane.setFixedWidth(pane_width)
         self.status_pane.setFixedHeight(pane_height)
         self.setFixedWidth(pane_width + 6 + self.abandon_button.width())

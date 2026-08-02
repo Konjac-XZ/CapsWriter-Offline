@@ -8,12 +8,17 @@ import os
 import tempfile
 from datetime import date
 from pathlib import Path
+from typing import Protocol
 
 from src.infra.runtime_logging import application_data_directory
 
 
 STATE_DIRECTORY_NAME = "State"
 STATE_FILE_NAME = "daily_input.json"
+
+
+class InfoLogger(Protocol):
+    def info(self, message: str, *args: object) -> None: ...
 
 
 def state_file_path() -> Path:
@@ -77,7 +82,7 @@ def record_input_characters(
     *,
     log_interval: int = 1000,
     today: date | None = None,
-    logger: logging.Logger | None = None,
+    logger: InfoLogger | None = None,
 ) -> int:
     """Add successfully input characters and log each crossed interval.
 

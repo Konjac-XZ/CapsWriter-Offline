@@ -43,15 +43,23 @@ def test_build_request_body_includes_openrouter_audio_shape(monkeypatch):
     }
 
 
-def test_build_request_body_sends_google_speech_v2_prompt_to_google_vertex_options(monkeypatch):
+def test_build_request_body_sends_google_speech_v2_prompt_to_google_vertex_options(
+    monkeypatch,
+):
     monkeypatch.setattr(openrouter, "get_model", lambda: "google/chirp-3")
     monkeypatch.setattr(openrouter, "get_language", lambda: "zh")
     monkeypatch.setattr(openrouter, "get_temperature", lambda: 0.0)
     monkeypatch.setattr(openrouter, "get_configured_audio_format", lambda: "auto")
     monkeypatch.setattr(openrouter, "should_send_prompt", lambda: True)
     monkeypatch.setattr(openrouter, "get_prompt_provider_slug", lambda: "google-vertex")
-    monkeypatch.setattr(openrouter, "get_prompt_option_shape", lambda: "google_speech_v2")
-    monkeypatch.setattr(openrouter, "ps_get_prompt", lambda: "Expected vocabulary: OpenRouter, API, transcription")
+    monkeypatch.setattr(
+        openrouter, "get_prompt_option_shape", lambda: "google_speech_v2"
+    )
+    monkeypatch.setattr(
+        openrouter,
+        "ps_get_prompt",
+        lambda: "Expected vocabulary: OpenRouter, API, transcription",
+    )
 
     audio_b64 = base64.b64encode(b"audio").decode("ascii")
     body = openrouter.build_request_body("audio/wav", audio_b64)
@@ -84,7 +92,11 @@ def test_build_request_body_auto_sends_openai_transcription_prompt(monkeypatch):
     monkeypatch.setattr(openrouter, "should_send_prompt", lambda: True)
     monkeypatch.setattr(openrouter, "get_prompt_provider_slug", lambda: "openai")
     monkeypatch.setattr(openrouter, "get_prompt_option_shape", lambda: "auto")
-    monkeypatch.setattr(openrouter, "ps_get_prompt", lambda: "Recent developments around OpenAI and GPT-4.5.")
+    monkeypatch.setattr(
+        openrouter,
+        "ps_get_prompt",
+        lambda: "Recent developments around OpenAI and GPT-4.5.",
+    )
 
     audio_b64 = base64.b64encode(b"audio").decode("ascii")
     body = openrouter.build_request_body("audio/mpeg", audio_b64)

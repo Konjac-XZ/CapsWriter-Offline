@@ -77,14 +77,23 @@ class OpenAIProvider(TranscriptionProvider):
         # Only include response_format if not explicitly omitted by provider configuration
         if not ps_get_bool("openai_omit_response_format", default=False):
             data_form_base["response_format"] = (
-                ps_get_str("response_format", env="OPENAI_TRANSCRIBE_FORMAT", default="text") or "text"
+                ps_get_str(
+                    "response_format", env="OPENAI_TRANSCRIBE_FORMAT", default="text"
+                )
+                or "text"
             )
         _temp = _get_temperature()
         if _temp is not None:
             data_form_base["temperature"] = _temp
         enable_incremental_results = _get_incremental_results_flag()
 
-        text_result, status_code, t_submit, t_complete, http2_flag = await _openai_transcribe_with_retries(
+        (
+            text_result,
+            status_code,
+            t_submit,
+            t_complete,
+            http2_flag,
+        ) = await _openai_transcribe_with_retries(
             payload_buf,
             payload_mime,
             data_form_base,
@@ -113,18 +122,25 @@ class ReplicateProvider(TranscriptionProvider):
         max_retries: int,
         base_delay: float,
     ) -> Tuple[str, int, float, float, Dict[str, Any]]:
-        from src.transcribe.replicate.replicate_transcribe_http import transcribe_with_retries as rep_transcribe
+        from src.transcribe.replicate.replicate_transcribe_http import (
+            transcribe_with_retries as rep_transcribe,
+        )
         from src.transcribe.openai.openai_transcribe_http import (
             is_incremental_results_enabled as _get_incremental_results_flag,
         )
 
         enable_incremental_results = _get_incremental_results_flag()
-        language = ps_get_str("language", env="OPENAI_TRANSCRIBE_LANGUAGE", default="zh") or "zh"
+        language = (
+            ps_get_str("language", env="OPENAI_TRANSCRIBE_LANGUAGE", default="zh")
+            or "zh"
+        )
         prompt = ps_get_str("prompt", env="TRANSCRIBE_PROMPT", default="") or ""
         # Parse numeric temperature
         temp = ps_get_str("temperature", env="TRANSCRIBE_TEMPERATURE", default=None)
         try:
-            temperature = float(temp) if temp is not None and str(temp).strip() != "" else None
+            temperature = (
+                float(temp) if temp is not None and str(temp).strip() != "" else None
+            )
         except Exception:
             temperature = None
 
@@ -162,7 +178,13 @@ class ElevenLabsProvider(TranscriptionProvider):
             transcribe_with_retries as elevenlabs_transcribe,
         )
 
-        text_result, status_code, t_submit, t_complete, http2_flag = await elevenlabs_transcribe(
+        (
+            text_result,
+            status_code,
+            t_submit,
+            t_complete,
+            http2_flag,
+        ) = await elevenlabs_transcribe(
             payload_buf,
             payload_mime,
             task_id,
@@ -295,7 +317,13 @@ class SonioxProvider(TranscriptionProvider):
             transcribe_with_retries as soniox_transcribe,
         )
 
-        text_result, status_code, t_submit, t_complete, http2_flag = await soniox_transcribe(
+        (
+            text_result,
+            status_code,
+            t_submit,
+            t_complete,
+            http2_flag,
+        ) = await soniox_transcribe(
             payload_buf,
             payload_mime,
             task_id,
@@ -325,7 +353,13 @@ class GeminiProvider(TranscriptionProvider):
             transcribe_with_retries as gemini_transcribe,
         )
 
-        text_result, status_code, t_submit, t_complete, http2_flag = await gemini_transcribe(
+        (
+            text_result,
+            status_code,
+            t_submit,
+            t_complete,
+            http2_flag,
+        ) = await gemini_transcribe(
             payload_buf,
             payload_mime,
             task_id,
@@ -355,7 +389,13 @@ class OpenRouterProvider(TranscriptionProvider):
             transcribe_with_retries as openrouter_transcribe,
         )
 
-        text_result, status_code, t_submit, t_complete, http2_flag = await openrouter_transcribe(
+        (
+            text_result,
+            status_code,
+            t_submit,
+            t_complete,
+            http2_flag,
+        ) = await openrouter_transcribe(
             payload_buf,
             payload_mime,
             task_id,
@@ -385,7 +425,13 @@ class XiaomiProvider(TranscriptionProvider):
             transcribe_with_retries as xiaomi_transcribe,
         )
 
-        text_result, status_code, t_submit, t_complete, http2_flag = await xiaomi_transcribe(
+        (
+            text_result,
+            status_code,
+            t_submit,
+            t_complete,
+            http2_flag,
+        ) = await xiaomi_transcribe(
             payload_buf,
             payload_mime,
             task_id,

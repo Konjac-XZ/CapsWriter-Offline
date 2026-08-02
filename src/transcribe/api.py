@@ -1,15 +1,16 @@
 import os
 import io
-from typing import Tuple, Dict, Any
+from typing import Any, Dict, Tuple, cast
 
 from src.transcribe.openai.openai_transcribe_http import (
     is_incremental_results_enabled as _get_incremental_results_flag,
 )
-from src.transcribe.providers import make_provider
+from src.transcribe.providers import QwenAudioProvider, make_provider
 
 # Import provider manager for dynamic configuration
 try:
     from src.provider.provider_config import provider_manager
+
     PROVIDER_MANAGER_AVAILABLE = True
 except ImportError:
     provider_manager: Any | None = None
@@ -39,7 +40,7 @@ def initialize_providers() -> None:
                 if provider.enabled:
                     provider_id = pid
                     break
-            
+
             if provider_id:
                 provider_manager.set_active_provider(provider_id)
 
@@ -114,7 +115,8 @@ async def transcribe_audio(
             "qwen_audio",
             "alibaba_qwen_audio_3",
         ):
-            return await prov.transcribe(
+            qwen_provider = cast(QwenAudioProvider, prov)
+            return await qwen_provider.transcribe(
                 payload_buf,
                 payload_mime,
                 task_id,
@@ -125,10 +127,22 @@ async def transcribe_audio(
                 request_context=request_context,
             )
         return await prov.transcribe(
-            payload_buf, payload_mime, task_id, time_start, record_stop, max_retries, base_delay
+            payload_buf,
+            payload_mime,
+            task_id,
+            time_start,
+            record_stop,
+            max_retries,
+            base_delay,
         )
     # Fallback to openai for unknown values
     prov = make_provider("openai")
     return await prov.transcribe(
-        payload_buf, payload_mime, task_id, time_start, record_stop, max_retries, base_delay
+        payload_buf,
+        payload_mime,
+        task_id,
+        time_start,
+        record_stop,
+        max_retries,
+        base_delay,
     )

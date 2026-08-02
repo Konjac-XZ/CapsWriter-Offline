@@ -17,8 +17,8 @@ from src.polish.textbox_context import TextBoxContext
 class _MockAsyncClient:
     created_count = 0
     closed_count = 0
-    sent_json = None
-    sent_stream_json = None
+    sent_json: dict | None = None
+    sent_stream_json: dict | None = None
     stream_lines = [
         'data: {"choices":[{"delta":{"content":"润色"}}]}',
         'data: {"choices":[{"delta":{"content":"后文本"}}]}',
@@ -85,7 +85,9 @@ class _MockStreamResponse:
 
 
 class TextboxContextFormattingTest(unittest.TestCase):
-    def test_remove_textbox_duplicate_prefix_strips_repeated_context_prefix(self) -> None:
+    def test_remove_textbox_duplicate_prefix_strips_repeated_context_prefix(
+        self,
+    ) -> None:
         captured = TextBoxContext(
             text="这比我们一开始讨论的那锅稀汤",
             source="uia_text",
@@ -194,7 +196,9 @@ class TextboxContextFormattingTest(unittest.TestCase):
         self.assertNotIn("<|caret|>", text)
 
     def test_plain_context_uses_legacy_prompt_without_caret_language(self) -> None:
-        with patch("src.infra.user_lexicon.get_lexicon_user_message", return_value=None):
+        with patch(
+            "src.infra.user_lexicon.get_lexicon_user_message", return_value=None
+        ):
             messages = _build_messages(
                 "",
                 "ASR",
@@ -259,8 +263,14 @@ class TextboxContextFormattingTest(unittest.TestCase):
         with (
             patch("src.polish.llm_polish._cfg", return_value=cfg),
             patch("src.polish.llm_polish._get_env") as get_env,
-            patch("src.polish.providers.openai_compatible.httpx.AsyncClient", _MockAsyncClient),
-            patch("src.polish.llm_polish.get_recent_vision_context_summary", return_value=None),
+            patch(
+                "src.polish.providers.openai_compatible.httpx.AsyncClient",
+                _MockAsyncClient,
+            ),
+            patch(
+                "src.polish.llm_polish.get_recent_vision_context_summary",
+                return_value=None,
+            ),
             patch("src.polish.llm_polish.get_finalized_history", return_value=[]),
             patch("src.infra.user_lexicon.get_lexicon_user_message", return_value=None),
         ):
@@ -272,11 +282,12 @@ class TextboxContextFormattingTest(unittest.TestCase):
             result = asyncio.run(polish_text("原文"))
 
         self.assertEqual(result, "润色后文本")
-        self.assertIsNotNone(_MockAsyncClient.sent_stream_json)
+        stream_json = _MockAsyncClient.sent_stream_json
+        assert stream_json is not None
         self.assertIsNone(_MockAsyncClient.sent_json)
-        self.assertTrue(_MockAsyncClient.sent_stream_json.get("stream"))
+        self.assertTrue(stream_json.get("stream"))
         self.assertEqual(
-            _MockAsyncClient.sent_stream_json.get("thinking"),
+            stream_json.get("thinking"),
             {"type": "disabled"},
         )
 
@@ -313,10 +324,19 @@ class TextboxContextFormattingTest(unittest.TestCase):
         with (
             patch("src.polish.llm_polish._cfg", return_value=cfg),
             patch("src.polish.llm_polish._get_env") as get_env,
-            patch("src.polish.providers.openai_compatible.httpx.AsyncClient", _MockAsyncClient),
-            patch("src.polish.llm_polish.get_recent_vision_context_summary", return_value=None),
+            patch(
+                "src.polish.providers.openai_compatible.httpx.AsyncClient",
+                _MockAsyncClient,
+            ),
+            patch(
+                "src.polish.llm_polish.get_recent_vision_context_summary",
+                return_value=None,
+            ),
             patch("src.polish.llm_polish.get_finalized_history", return_value=[]),
-            patch("src.polish.llm_polish.get_active_textbox_context", return_value=captured),
+            patch(
+                "src.polish.llm_polish.get_active_textbox_context",
+                return_value=captured,
+            ),
             patch("src.infra.user_lexicon.get_lexicon_user_message", return_value=None),
         ):
             get_env.side_effect = lambda name, default=None: {
@@ -356,8 +376,14 @@ class TextboxContextFormattingTest(unittest.TestCase):
         with (
             patch("src.polish.llm_polish._cfg", return_value=cfg),
             patch("src.polish.llm_polish._get_env") as get_env,
-            patch("src.polish.providers.openai_compatible.httpx.AsyncClient", _MockAsyncClient),
-            patch("src.polish.llm_polish.get_recent_vision_context_summary", return_value=None),
+            patch(
+                "src.polish.providers.openai_compatible.httpx.AsyncClient",
+                _MockAsyncClient,
+            ),
+            patch(
+                "src.polish.llm_polish.get_recent_vision_context_summary",
+                return_value=None,
+            ),
             patch("src.polish.llm_polish.get_finalized_history", return_value=[]),
             patch("src.infra.user_lexicon.get_lexicon_user_message", return_value=None),
         ):
@@ -404,8 +430,14 @@ class TextboxContextFormattingTest(unittest.TestCase):
         with (
             patch("src.polish.llm_polish._cfg", return_value=cfg),
             patch("src.polish.llm_polish._get_env") as get_env,
-            patch("src.polish.providers.openai_compatible.httpx.AsyncClient", _MockAsyncClient),
-            patch("src.polish.llm_polish.get_recent_vision_context_summary", return_value=None),
+            patch(
+                "src.polish.providers.openai_compatible.httpx.AsyncClient",
+                _MockAsyncClient,
+            ),
+            patch(
+                "src.polish.llm_polish.get_recent_vision_context_summary",
+                return_value=None,
+            ),
             patch("src.polish.llm_polish.get_finalized_history", return_value=[]),
             patch("src.infra.user_lexicon.get_lexicon_user_message", return_value=None),
         ):
@@ -417,10 +449,12 @@ class TextboxContextFormattingTest(unittest.TestCase):
             result = asyncio.run(polish_text("原文"))
 
         self.assertEqual(result, "回退文本")
-        self.assertIsNotNone(_MockAsyncClient.sent_stream_json)
-        self.assertTrue(_MockAsyncClient.sent_stream_json.get("stream"))
-        self.assertIsNotNone(_MockAsyncClient.sent_json)
-        self.assertFalse(_MockAsyncClient.sent_json.get("stream"))
+        stream_json = _MockAsyncClient.sent_stream_json
+        fallback_json = _MockAsyncClient.sent_json
+        assert stream_json is not None
+        assert fallback_json is not None
+        self.assertTrue(stream_json.get("stream"))
+        self.assertFalse(fallback_json.get("stream"))
 
     def test_polish_stream_accepts_simple_delta_shape(self) -> None:
         import asyncio
@@ -448,8 +482,14 @@ class TextboxContextFormattingTest(unittest.TestCase):
         with (
             patch("src.polish.llm_polish._cfg", return_value=cfg),
             patch("src.polish.llm_polish._get_env") as get_env,
-            patch("src.polish.providers.openai_compatible.httpx.AsyncClient", _MockAsyncClient),
-            patch("src.polish.llm_polish.get_recent_vision_context_summary", return_value=None),
+            patch(
+                "src.polish.providers.openai_compatible.httpx.AsyncClient",
+                _MockAsyncClient,
+            ),
+            patch(
+                "src.polish.llm_polish.get_recent_vision_context_summary",
+                return_value=None,
+            ),
             patch("src.polish.llm_polish.get_finalized_history", return_value=[]),
             patch("src.infra.user_lexicon.get_lexicon_user_message", return_value=None),
         ):
@@ -491,8 +531,14 @@ class TextboxContextFormattingTest(unittest.TestCase):
         with (
             patch("src.polish.llm_polish._cfg", return_value=cfg),
             patch("src.polish.llm_polish._get_env") as get_env,
-            patch("src.polish.providers.openai_compatible.httpx.AsyncClient", _MockAsyncClient),
-            patch("src.polish.llm_polish.get_recent_vision_context_summary", return_value=None),
+            patch(
+                "src.polish.providers.openai_compatible.httpx.AsyncClient",
+                _MockAsyncClient,
+            ),
+            patch(
+                "src.polish.llm_polish.get_recent_vision_context_summary",
+                return_value=None,
+            ),
             patch("src.polish.llm_polish.get_finalized_history", return_value=[]),
             patch("src.infra.user_lexicon.get_lexicon_user_message", return_value=None),
         ):
@@ -540,8 +586,14 @@ class TextboxContextFormattingTest(unittest.TestCase):
         with (
             patch("src.polish.llm_polish._cfg", return_value=cfg),
             patch("src.polish.llm_polish._get_env") as get_env,
-            patch("src.polish.providers.openai_compatible.httpx.AsyncClient", _MockAsyncClient),
-            patch("src.polish.llm_polish.get_recent_vision_context_summary", return_value=None),
+            patch(
+                "src.polish.providers.openai_compatible.httpx.AsyncClient",
+                _MockAsyncClient,
+            ),
+            patch(
+                "src.polish.llm_polish.get_recent_vision_context_summary",
+                return_value=None,
+            ),
             patch("src.polish.llm_polish.get_finalized_history", return_value=[]),
             patch("src.infra.user_lexicon.get_lexicon_user_message", return_value=None),
         ):

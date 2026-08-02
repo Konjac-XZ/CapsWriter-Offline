@@ -172,9 +172,7 @@ def test_sdk_start_passes_context_hotwords_and_official_model(monkeypatch):
             "context": [
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": "上一条输入"}
-                    ],
+                    "content": [{"type": "input_text", "text": "上一条输入"}],
                 }
             ]
         }
@@ -235,14 +233,10 @@ def test_sdk_callbacks_replace_partial_text_and_accumulate_sentences(monkeypatch
 
     def stop_hook(callback):
         callback.on_event(
-            FakeResult(
-                {"sentence_id": 1, "text": "Hel", "end_time": None}
-            )
+            FakeResult({"sentence_id": 1, "text": "Hel", "end_time": None})
         )
         callback.on_event(
-            FakeResult(
-                {"sentence_id": 1, "text": "Hello", "end_time": 500}
-            )
+            FakeResult({"sentence_id": 1, "text": "Hello", "end_time": 500})
         )
         callback.on_event(
             FakeResult(
@@ -253,9 +247,7 @@ def test_sdk_callbacks_replace_partial_text_and_accumulate_sentences(monkeypatch
             FakeResult({"sentence_id": 0, "text": "ignored", "heartbeat": True})
         )
         callback.on_event(
-            FakeResult(
-                {"sentence_id": 2, "text": "world", "end_time": 900}
-            )
+            FakeResult({"sentence_id": 2, "text": "world", "end_time": 900})
         )
 
     async def run_case():
@@ -330,7 +322,9 @@ def test_debug_config_keeps_context_and_hotwords_but_omits_secrets_and_audio(
     monkeypatch.setattr(streaming, "get_api_key", lambda: "sk-never-log-this")
     monkeypatch.setattr(streaming, "should_log_request_payload", lambda: True)
     logged = []
-    monkeypatch.setattr(streaming.console, "print", lambda *args, **kwargs: logged.append(args[0]))
+    monkeypatch.setattr(
+        streaming.console, "print", lambda *args, **kwargs: logged.append(args[0])
+    )
 
     async def fake_capture(self):
         return SimpleNamespace(asr_history=["QEMU context"])
@@ -509,7 +503,9 @@ def test_empty_streaming_result_continues_to_http_upload(monkeypatch):
         return True
 
     monkeypatch.setattr(send_audio_module, "_gather_audio_once", fake_gather)
-    monkeypatch.setattr(send_audio_module, "_cache_recording_for_retry", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        send_audio_module, "_cache_recording_for_retry", lambda **_kwargs: None
+    )
     monkeypatch.setattr(
         send_audio_module,
         "preprocess_audio",

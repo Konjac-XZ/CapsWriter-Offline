@@ -3,10 +3,10 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
-from typing import Callable
+from typing import BinaryIO, Callable
 
 
-_LOCK_HANDLES: dict[Path, object] = {}
+_LOCK_HANDLES: dict[Path, BinaryIO] = {}
 
 
 def _slot_path(root: Path, role: str) -> Path:

@@ -5,13 +5,18 @@ import time
 import uuid
 import wave
 from contextlib import contextmanager
+from typing import Any
 
 import numpy as np
 
 from src.infra.cosmic import Cosmic, console
 from src.audio.create_file import create_file
 from src.audio.finish_file import finish_file
-from src.audio.retry_cache import get_latest_audio_path, mime_for_path, write_retry_cache
+from src.audio.retry_cache import (
+    get_latest_audio_path,
+    mime_for_path,
+    write_retry_cache,
+)
 from src.audio.write_file import write_file
 from src.infra.config import ClientConfig as Config
 from src.infra.gui_output import gui_event
@@ -67,7 +72,11 @@ def _timed_realtime_step(name: str):
 def _payload_bytes(payload_buf) -> bytes:
     if hasattr(payload_buf, "getvalue"):
         return payload_buf.getvalue()
-    if hasattr(payload_buf, "tell") and hasattr(payload_buf, "seek") and hasattr(payload_buf, "read"):
+    if (
+        hasattr(payload_buf, "tell")
+        and hasattr(payload_buf, "seek")
+        and hasattr(payload_buf, "read")
+    ):
         pos = payload_buf.tell()
         payload_buf.seek(0)
         data = payload_buf.read()
@@ -83,7 +92,9 @@ def _encode_retry_wav(audio_concat: np.ndarray) -> bytes:
         audio_concat = audio_concat.reshape(-1, 1)
 
     channels = int(audio_concat.shape[1]) if audio_concat.ndim == 2 else 1
-    audio_safe = np.nan_to_num(audio_concat, copy=True, nan=0.0, posinf=1.0, neginf=-1.0)
+    audio_safe = np.nan_to_num(
+        audio_concat, copy=True, nan=0.0, posinf=1.0, neginf=-1.0
+    )
     pcm = (np.clip(audio_safe, -1.0, 1.0) * (2**15 - 1)).astype(np.int16).tobytes()
 
     wav_buf = io.BytesIO()
@@ -175,7 +186,13 @@ async def _submit_payload(
 
     t_presubmit = time.time()
     upload_buf = io.BytesIO(payload_bytes)
-    text_result, status_code, t_submit, t_complete, transport_info = await transcribe_audio(
+    (
+        text_result,
+        status_code,
+        t_submit,
+        t_complete,
+        transport_info,
+    ) = await transcribe_audio(
         upload_buf,
         payload_mime,
         task_id,
@@ -195,13 +212,15 @@ async def _submit_payload(
         queue_delay_ms = (t_finish_entry - record_stop) * 1000.0
         upload_s = t_complete - t_submit
         total_s = t_complete - record_stop
-        http2_flag = transport_info.get("http2") if isinstance(transport_info, dict) else None
+        http2_flag = (
+            transport_info.get("http2") if isinstance(transport_info, dict) else None
+        )
         console.print(
-            f"[debug] 阶段: 队列等待 {queue_delay_ms:.0f}ms | 编码 {encode_ms:.0f}ms | 准备发送 {pre_submit_ms:.0f}ms | 上传+服务 {upload_s:.2f}s | 自抬键总计 {total_s:.2f}s | 大小 {len(payload_bytes)/1024:.1f}KB @ {payload_sr}Hz/{payload_ch}ch [{payload_mime}] | http2={http2_flag}",
+            f"[debug] 阶段: 队列等待 {queue_delay_ms:.0f}ms | 编码 {encode_ms:.0f}ms | 准备发送 {pre_submit_ms:.0f}ms | 上传+服务 {upload_s:.2f}s | 自抬键总计 {total_s:.2f}s | 大小 {len(payload_bytes) / 1024:.1f}KB @ {payload_sr}Hz/{payload_ch}ch [{payload_mime}] | http2={http2_flag}",
             style="dim",
         )
 
-    message = {
+    message: dict[str, Any] = {
         "task_id": task_id,
         "is_final": True,
         "text": text_result,
@@ -227,7 +246,11 @@ async def _submit_payload(
             "http_status": int(status_code),
             "mime": payload_mime,
             "bitrate": get_mp3_bitrate() if payload_mime == "audio/mpeg" else None,
-            "http2": (transport_info.get("http2") if isinstance(transport_info, dict) else None),
+            "http2": (
+                transport_info.get("http2")
+                if isinstance(transport_info, dict)
+                else None
+            ),
         },
     }
     context_task_attached = False
@@ -235,7 +258,12 @@ async def _submit_payload(
         message["polish_prefetch_task"] = context_task
         context_task_attached = True
     await Cosmic.queue_out.put(message)
-    if owns_context_task and not context_task_attached and not context_task.done():
+    if (
+        owns_context_task
+        and context_task is not None
+        and not context_task_attached
+        and not context_task.done()
+    ):
         context_task.cancel()
     return True
 
@@ -290,7 +318,9 @@ async def _await_qwen_asr_context(
         return None, False
 
 
-def _create_streaming_session(task_id: str, time_start: float) -> StreamingTranscriptionSession | None:
+def _create_streaming_session(
+    task_id: str, time_start: float
+) -> StreamingTranscriptionSession | None:
     provider_kind = _active_provider_kind()
     provider = make_provider(provider_kind)
     if not provider.supports_streaming_input():
@@ -301,7 +331,10 @@ def _create_streaming_session(task_id: str, time_start: float) -> StreamingTrans
         )
 
         if should_show_realtime_logs():
-            console.print(f"启用实时转写链路：provider={provider.name()} task_id={task_id}", style="bright_black")
+            console.print(
+                f"启用实时转写链路：provider={provider.name()} task_id={task_id}",
+                style="bright_black",
+            )
     except Exception:
         pass
     return provider.create_streaming_session(task_id, time_start)
@@ -342,7 +375,9 @@ async def _gather_audio_once(
                     await streaming_session.start()
             except Exception as exc:
                 streaming_session = None
-                console.print(f"实时转写启动失败，回退到录完上传：{exc}", style="bright_yellow")
+                console.print(
+                    f"实时转写启动失败，回退到录完上传：{exc}", style="bright_yellow"
+                )
         elif ttype == "data":
             if task["time"] - time_start < Config.threshold:
                 cache.append(task["data"])
@@ -366,7 +401,9 @@ async def _gather_audio_once(
                             should_show_realtime_logs,
                         )
 
-                        if should_show_realtime_logs() and (streamed_chunks == 1 or streamed_chunks % 20 == 0):
+                        if should_show_realtime_logs() and (
+                            streamed_chunks == 1 or streamed_chunks % 20 == 0
+                        ):
                             console.print(
                                 f"实时转写已发送音频块：chunks={streamed_chunks} duration={duration:.2f}s",
                                 style="bright_black",
@@ -374,7 +411,10 @@ async def _gather_audio_once(
                     except Exception:
                         pass
                 except Exception as exc:
-                    console.print(f"实时转写发送失败，回退到录完上传：{exc}", style="bright_yellow")
+                    console.print(
+                        f"实时转写发送失败，回退到录完上传：{exc}",
+                        style="bright_yellow",
+                    )
                     try:
                         await streaming_session.cancel()
                     except Exception:
@@ -391,7 +431,15 @@ async def _gather_audio_once(
                 audio_concat = np.concatenate(all_data)
             else:
                 audio_concat = np.zeros((0, 1), dtype=np.float32)
-            return audio_concat, duration, time_start, record_stop, t_finish_entry, None, streaming_session
+            return (
+                audio_concat,
+                duration,
+                time_start,
+                record_stop,
+                t_finish_entry,
+                None,
+                streaming_session,
+            )
         elif ttype == "cancel":
             # no audio to upload; caller will emit blank result
             now = time.time()
@@ -400,7 +448,15 @@ async def _gather_audio_once(
                     await streaming_session.cancel()
                 except Exception:
                     pass
-            return np.zeros((0, 1), dtype=np.float32), duration, time_start, now, now, "cancel", None
+            return (
+                np.zeros((0, 1), dtype=np.float32),
+                duration,
+                time_start,
+                now,
+                now,
+                "cancel",
+                None,
+            )
 
     # Shouldn't reach here normally
     now = time.time()
@@ -409,7 +465,15 @@ async def _gather_audio_once(
             await streaming_session.cancel()
         except Exception:
             pass
-    return np.zeros((0, 1), dtype=np.float32), duration, time_start, now, now, "cancel", None
+    return (
+        np.zeros((0, 1), dtype=np.float32),
+        duration,
+        time_start,
+        now,
+        now,
+        "cancel",
+        None,
+    )
 
 
 async def send_audio():
@@ -467,15 +531,23 @@ async def send_audio():
         if streaming_session is not None:
             try:
                 with _timed_realtime_step("streaming_session.finish"):
-                    text_result, status_code, t_submit, t_complete, transport_info = await streaming_session.finish()
+                    (
+                        text_result,
+                        status_code,
+                        t_submit,
+                        t_complete,
+                        transport_info,
+                    ) = await streaming_session.finish()
             except Exception as exc:
-                console.print(f"实时转写结束失败，回退到录完上传：{exc}", style="bright_yellow")
+                console.print(
+                    f"实时转写结束失败，回退到录完上传：{exc}", style="bright_yellow"
+                )
             else:
                 if Cosmic.abandon_requested or task_id in Cosmic.abandoned_task_ids:
                     return
                 if text_result:
                     emitted_deltas = bool((transport_info or {}).get("emitted_deltas"))
-                    message = {
+                    message: dict[str, Any] = {
                         "task_id": task_id,
                         "is_final": True,
                         "text": text_result,
@@ -487,7 +559,9 @@ async def send_audio():
                         "has_incremental_transcript": emitted_deltas,
                         "stream": emitted_deltas,
                         "debug_timing": {
-                            "queue_delay_ms": max(0.0, (t_finish_entry - record_stop) * 1000.0),
+                            "queue_delay_ms": max(
+                                0.0, (t_finish_entry - record_stop) * 1000.0
+                            ),
                             "wav_ms": 0.0,
                             "pre_submit_ms": 0.0,
                             "upload_s": max(0.0, (t_complete - t_submit)),
@@ -496,7 +570,9 @@ async def send_audio():
                             "sr": int((transport_info or {}).get("sample_rate") or 0),
                             "channels": 1,
                             "record_duration_s": float(duration),
-                            "record_duration_by_key_s": max(0.0, record_stop - time_start),
+                            "record_duration_by_key_s": max(
+                                0.0, record_stop - time_start
+                            ),
                             "http_status": int(status_code),
                             "mime": "audio/pcm",
                             "bitrate": None,
@@ -522,7 +598,13 @@ async def send_audio():
         audio_proc, actual_sr = preprocess_audio(audio_concat)
 
         # Build payload
-        payload_buf, payload_mime, encode_ms, payload_sr, payload_ch = await make_audio_payload(audio_proc, actual_sr)
+        (
+            payload_buf,
+            payload_mime,
+            encode_ms,
+            payload_sr,
+            payload_ch,
+        ) = await make_audio_payload(audio_proc, actual_sr)
 
         message_queued = await _submit_payload(
             payload_buf=payload_buf,

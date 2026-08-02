@@ -55,6 +55,7 @@ _vision_config_mtime: float | None = None
 # Config loader
 # ---------------------------------------------------------------------------
 
+
 def _get_root_dir() -> Path:
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         return Path(sys.executable).resolve().parent
@@ -111,6 +112,7 @@ def _cfg() -> dict:
 # Env helpers
 # ---------------------------------------------------------------------------
 
+
 def _get_env(name: str, default: str | None = None) -> str | None:
     value = os.getenv(name)
     if value is None:
@@ -122,6 +124,7 @@ def _get_env(name: str, default: str | None = None) -> str | None:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def is_vision_context_enabled() -> bool:
     return bool(_cfg().get("enabled", False))
@@ -189,6 +192,7 @@ def get_recent_vision_context_summary() -> str | None:
 # Background loop
 # ---------------------------------------------------------------------------
 
+
 async def _vision_context_loop() -> None:
     global _feature_state_logged
 
@@ -246,7 +250,9 @@ async def _refresh_vision_context_once() -> None:
 
     capture = await asyncio.to_thread(_capture_active_window)
     if capture is None:
-        console.print("[视觉上下文] 未能捕获当前活动窗口，保留上次视觉摘要。", style="dim")
+        console.print(
+            "[视觉上下文] 未能捕获当前活动窗口，保留上次视觉摘要。", style="dim"
+        )
         return
 
     console.print(
@@ -258,7 +264,9 @@ async def _refresh_vision_context_once() -> None:
         style="dim",
     )
 
-    summary = await _request_vision_summary(capture, base_url, api_key, model, timeout_s)
+    summary = await _request_vision_summary(
+        capture, base_url, api_key, model, timeout_s
+    )
     if not summary:
         return
 
@@ -283,6 +291,7 @@ async def _refresh_vision_context_once() -> None:
 # ---------------------------------------------------------------------------
 # Vision request
 # ---------------------------------------------------------------------------
+
 
 def _build_url(base_url: str) -> str:
     base = base_url.rstrip("/")
@@ -383,7 +392,9 @@ async def _request_vision_summary(
                 detail_text = _extract_error_message(response.json())
             except Exception:
                 detail_text = response.text.strip() or None
-            Cosmic.vision_context_last_error = f"HTTP {response.status_code}: {detail_text or ''}".strip()
+            Cosmic.vision_context_last_error = (
+                f"HTTP {response.status_code}: {detail_text or ''}".strip()
+            )
             console.print(
                 f"[视觉上下文] 视觉摘要请求失败：{response.status_code} {detail_text or ''}".rstrip(),
                 style="yellow",
@@ -424,6 +435,7 @@ async def _request_vision_summary(
 # ---------------------------------------------------------------------------
 # Active-window capture
 # ---------------------------------------------------------------------------
+
 
 def _capture_active_window() -> ActiveWindowCapture | None:
     if platform.system() != "Windows":
@@ -524,7 +536,9 @@ def _capture_window_png(hwnd: int, width: int, height: int) -> bytes | None:
         mem_dc.SelectObject(bitmap)
 
         render_full_content_flag = 0x00000002
-        result = ctypes.windll.user32.PrintWindow(hwnd, mem_dc.GetSafeHdc(), render_full_content_flag)
+        result = ctypes.windll.user32.PrintWindow(
+            hwnd, mem_dc.GetSafeHdc(), render_full_content_flag
+        )
         if result != 1:
             mem_dc.BitBlt((0, 0), (width, height), src_dc, (0, 0), con.SRCCOPY)
 
@@ -561,11 +575,15 @@ def _capture_window_png(hwnd: int, width: int, height: int) -> bytes | None:
             pass
 
 
-def _bitmap_to_png(bitmap_bytes: bytes, width: int, height: int, bytes_per_line: int) -> bytes | None:
+def _bitmap_to_png(
+    bitmap_bytes: bytes, width: int, height: int, bytes_per_line: int
+) -> bytes | None:
     if not bitmap_bytes or width <= 0 or height <= 0 or bytes_per_line <= 0:
         return None
 
-    image = QImage(bitmap_bytes, width, height, bytes_per_line, QImage.Format.Format_ARGB32)
+    image = QImage(
+        bitmap_bytes, width, height, bytes_per_line, QImage.Format.Format_ARGB32
+    )
     if image.isNull():
         return None
 
@@ -581,6 +599,7 @@ def _bitmap_to_png(bitmap_bytes: bytes, width: int, height: int, bytes_per_line:
 # ---------------------------------------------------------------------------
 # Prompt helpers
 # ---------------------------------------------------------------------------
+
 
 def _to_data_url(image_bytes: bytes, mime_type: str) -> str:
     encoded = base64.b64encode(image_bytes).decode("ascii")

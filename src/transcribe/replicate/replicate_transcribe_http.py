@@ -15,7 +15,10 @@ from src.provider.provider_settings import (
 
 def _get_model() -> str:
     """Replicate model identifier sourced from provider settings."""
-    model = ps_get_str("model", default="gpt-4o-mini-transcribe") or "gpt-4o-mini-transcribe"
+    model = (
+        ps_get_str("model", default="gpt-4o-mini-transcribe")
+        or "gpt-4o-mini-transcribe"
+    )
     return "openai/" + model.strip()
 
 
@@ -28,7 +31,9 @@ def _get_input_key() -> str:
 def _ensure_token():
     token = ps_get_str("api_token", env="REPLICATE_API_TOKEN", default=None)
     if not token:
-        raise RuntimeError("REPLICATE_API_TOKEN environment variable is required for provider=replicate")
+        raise RuntimeError(
+            "REPLICATE_API_TOKEN environment variable is required for provider=replicate"
+        )
     # Replicate SDK expects REPLICATE_API_TOKEN in the process environment.
     os.environ["REPLICATE_API_TOKEN"] = token
 
@@ -46,7 +51,9 @@ def _get_audio_transport_mode() -> str:
     return mode
 
 
-def _log_send_info(model: str, input_key: str, audio_input, payload_mime: str | None = None):
+def _log_send_info(
+    model: str, input_key: str, audio_input, payload_mime: str | None = None
+):
     try:
         if not _replicate_debug():
             return
@@ -165,7 +172,9 @@ async def _incremental_results_run(
             now = time.time()
             if now - last_emit >= 0.05:
                 last_emit = now
-                await emit_transcript_delta(task_id, current, time_start, record_stop, t_submit)
+                await emit_transcript_delta(
+                    task_id, current, time_start, record_stop, t_submit
+                )
     except Exception as e:
         console.print(f"Replicate 增量转录结果异常：{e}", style="bright_yellow")
         # Treat as failure; caller may retry without incremental result delivery.
@@ -237,7 +246,9 @@ async def transcribe_with_retries(
 
     transport_mode = _get_audio_transport_mode()
     if _replicate_debug():
-        console.print(f"[Replicate Debug] Using transport mode: {transport_mode}", style="dim")
+        console.print(
+            f"[Replicate Debug] Using transport mode: {transport_mode}", style="dim"
+        )
     data_uri_cache: str | None = None
 
     def _build_audio_input():
@@ -254,7 +265,12 @@ async def transcribe_with_retries(
         try:
             if enable_incremental_results and attempt == 0:
                 incremental_input = _build_audio_input()
-                text_result, status_code, t_submit, t_complete = await _incremental_results_run(
+                (
+                    text_result,
+                    status_code,
+                    t_submit,
+                    t_complete,
+                ) = await _incremental_results_run(
                     incremental_input,
                     language,
                     task_id,
@@ -275,12 +291,13 @@ async def transcribe_with_retries(
         except Exception as e:
             t_complete = time.time()
             console.print(
-                f"Replicate 转录异常（第 {attempt + 1}/{max_retries} 次）：{e}", style="bright_yellow"
+                f"Replicate 转录异常（第 {attempt + 1}/{max_retries} 次）：{e}",
+                style="bright_yellow",
             )
 
         if attempt + 1 >= max_retries:
             break
-        delay = base_delay * (2 ** attempt) + random.uniform(0.0, 0.1)
+        delay = base_delay * (2**attempt) + random.uniform(0.0, 0.1)
         import asyncio
 
         await asyncio.sleep(delay)

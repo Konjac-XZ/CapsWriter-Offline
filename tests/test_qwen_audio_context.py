@@ -105,7 +105,9 @@ def test_shared_capture_keeps_asr_textbox_separate_from_polish_toggle(monkeypatc
         },
     )
     monkeypatch.setattr(llm_polish, "_qwen_asr_textbox_enabled", lambda: True)
-    monkeypatch.setattr(llm_polish, "get_active_textbox_context", lambda **kwargs: captured)
+    monkeypatch.setattr(
+        llm_polish, "get_active_textbox_context", lambda **kwargs: captured
+    )
     monkeypatch.setattr(llm_polish, "get_recent_vision_context_summary", lambda: None)
     monkeypatch.setattr(llm_polish, "get_finalized_history", lambda: [])
     monkeypatch.setattr(llm_polish, "get_asr_finalized_history", lambda: ["ASR 历史"])

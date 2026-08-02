@@ -107,9 +107,7 @@ def test_legacy_polish_config_defaults_to_openai_compatible(
     assert context.provider_name == "openai_compatible"
     assert context.base_url == "https://legacy.example/v1"
     assert context.api_key == "legacy-key"
-    assert context.provider_options["extra_body"] == {
-        "thinking": {"type": "disabled"}
-    }
+    assert context.provider_options["extra_body"] == {"thinking": {"type": "disabled"}}
 
 
 def test_openrouter_config_uses_provider_credentials_and_options(
@@ -150,7 +148,9 @@ def test_openrouter_config_uses_provider_credentials_and_options(
     assert context.provider_options["routing"] == routing
 
 
-def test_openrouter_provider_uses_official_sdk_routing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_openrouter_provider_uses_official_sdk_routing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import src.polish.providers.openrouter as openrouter_provider
 
     _FakeOpenRouter.instances = []

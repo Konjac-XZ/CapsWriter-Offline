@@ -18,6 +18,8 @@
 - Keep configuration keys lowercase_with_underscores to align with `config.Config` parsing.
 
 ## Testing Guidelines
+- Use `uv run ruff check .` frequently while editing Python, and run `uv run ruff format --check .` before committing; apply `uv run ruff format <paths>` when formatting is needed.
+- Use `uv run ty check` frequently to catch type regressions, especially after changing shared data structures, async task flow, provider interfaces, or test doubles.
 - Use `python test_replicate.py <audio>` to exercise external provider uploads; mock network calls when promoting these flows to automated tests.
 - Place new automated checks in `tests/` and target async flows with `pytest` plus `pytest-asyncio`; mirror filenames from `src/` for traceability.
 - Verify GUI edits by running `start_client_gui.py`, then capture before/after screenshots of modified dialogs.

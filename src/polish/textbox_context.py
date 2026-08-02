@@ -227,7 +227,9 @@ def _is_password_control(hwnd: int | None) -> bool:
     if not hwnd:
         return False
     try:
-        password_char = ctypes.windll.user32.SendMessageW(hwnd, EM_GETPASSWORDCHAR, 0, 0)
+        password_char = ctypes.windll.user32.SendMessageW(
+            hwnd, EM_GETPASSWORDCHAR, 0, 0
+        )
         return bool(password_char)
     except Exception:
         return False
@@ -270,7 +272,9 @@ def _read_text_via_uia(
                 return None, hwnd, class_name, is_password
 
             hwnd = _safe_int_property(element, "CurrentNativeWindowHandle") or hwnd
-            class_name = _safe_string_property(element, "CurrentClassName") or class_name
+            class_name = (
+                _safe_string_property(element, "CurrentClassName") or class_name
+            )
             if hwnd and not class_name:
                 class_name = _get_class_name(hwnd)
 

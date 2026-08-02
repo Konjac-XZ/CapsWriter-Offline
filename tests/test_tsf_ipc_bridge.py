@@ -7,6 +7,8 @@ from src.tsf_ipc.protocol import Frame, Operation, Status
 
 
 class FakeBroker:
+    startup_error: Exception | None = None
+
     def __init__(self, begin_status=Status.APPLIED):
         self.begin_status = begin_status
         self.frames: list[Frame] = []

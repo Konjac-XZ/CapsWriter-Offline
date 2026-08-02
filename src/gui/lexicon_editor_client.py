@@ -101,7 +101,13 @@ class LexiconEditorProcessClient:
         try:
             payload = json.loads(self._event_path.read_text(encoding="utf-8"))
             serial = int(payload.get("serial", -1))
-        except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        except (
+            FileNotFoundError,
+            OSError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ):
             return None
         if serial <= self._last_event_serial:
             return None

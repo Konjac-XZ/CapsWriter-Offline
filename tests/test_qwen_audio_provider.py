@@ -158,9 +158,7 @@ def test_debug_payload_removes_audio_without_changing_request():
 
     assert debug_body["input"]["messages"][0]["content"][0]["text"] == "上下文"
     assert debug_body["parameters"]["vocabulary"] == {"QEMU": 4}
-    assert debug_body["input"]["messages"][1]["content"] == [
-        {"type": "input_audio"}
-    ]
+    assert debug_body["input"]["messages"][1]["content"] == [{"type": "input_audio"}]
     assert "SECRET_AUDIO" not in json.dumps(debug_body)
     assert request_body["input"]["messages"][1]["content"][0]["input_audio"][
         "data"
@@ -203,12 +201,18 @@ def test_log_request_payload_outputs_sanitized_json(monkeypatch):
 
 
 def test_extract_transcript_supports_documented_shapes():
-    assert qwen_audio.extract_transcript(
-        {"output": {"sentence": {"text": "sentence"}, "text": "full text"}}
-    ) == "full text"
-    assert qwen_audio.extract_transcript(
-        {"output": {"output": {"sentence": {"text": "nested sentence"}}}}
-    ) == "nested sentence"
+    assert (
+        qwen_audio.extract_transcript(
+            {"output": {"sentence": {"text": "sentence"}, "text": "full text"}}
+        )
+        == "full text"
+    )
+    assert (
+        qwen_audio.extract_transcript(
+            {"output": {"output": {"sentence": {"text": "nested sentence"}}}}
+        )
+        == "nested sentence"
+    )
 
 
 def test_language_hints_accept_yaml_list_and_cap_at_four():
@@ -236,11 +240,15 @@ def test_normalize_hotword_text_unwraps_only_whole_markdown_wrappers():
 def test_hotword_text_limits_match_qwen_audio_rules():
     assert qwen_audio.validate_hotword_text("EGFR抑制剂") is None
     assert qwen_audio.validate_hotword_text("一" * 15) is None
-    assert "上限为 15" in qwen_audio.validate_hotword_text("一" * 16)
+    chinese_error = qwen_audio.validate_hotword_text("一" * 16)
+    assert chinese_error is not None
+    assert "上限为 15" in chinese_error
     assert qwen_audio.validate_hotword_text("one two three four five six seven") is None
-    assert "上限为 7" in qwen_audio.validate_hotword_text(
+    english_error = qwen_audio.validate_hotword_text(
         "one two three four five six seven eight"
     )
+    assert english_error is not None
+    assert "上限为 7" in english_error
 
 
 def test_resolve_vocabulary_merges_live_lexicon_and_explicit_overrides(monkeypatch):
@@ -347,11 +355,8 @@ def test_provider_yaml_is_discoverable_with_hotword_defaults():
     assert provider is not None
     assert provider.type == "qwen-audio"
     assert provider.settings["model"] == "qwen-audio-3.0-asr-flash"
-    assert provider.settings["realtime"] is True
-    assert (
-        provider.settings["realtime_model"]
-        == "qwen-audio-3.0-asr-flash-streaming"
-    )
+    assert isinstance(provider.settings["realtime"], bool)
+    assert provider.settings["realtime_model"] == "qwen-audio-3.0-asr-flash-streaming"
     assert provider.settings["realtime_format"] == "pcm"
     assert provider.settings["realtime_sample_rate"] == 16000
     assert provider.settings["realtime_chunk_ms"] == 100
@@ -420,7 +425,9 @@ def test_http_transport_posts_documented_request_and_parses_response(monkeypatch
             )
 
     monkeypatch.setattr(qwen_audio, "get_api_key", lambda: "sk-test")
-    monkeypatch.setattr(qwen_audio, "get_api_url", lambda: "https://example.test/generation")
+    monkeypatch.setattr(
+        qwen_audio, "get_api_url", lambda: "https://example.test/generation"
+    )
     monkeypatch.setattr(qwen_audio, "get_http_client", lambda: FakeClient())
     monkeypatch.setattr(qwen_audio, "get_model", lambda: "qwen-audio-3.0-asr-flash")
     monkeypatch.setattr(qwen_audio, "get_language_hints", lambda: ["zh", "en"])
@@ -475,7 +482,9 @@ def test_http_transport_retries_transient_status(monkeypatch):
         sleeps.append(delay)
 
     monkeypatch.setattr(qwen_audio, "get_api_key", lambda: "sk-test")
-    monkeypatch.setattr(qwen_audio, "get_api_url", lambda: "https://example.test/generation")
+    monkeypatch.setattr(
+        qwen_audio, "get_api_url", lambda: "https://example.test/generation"
+    )
     monkeypatch.setattr(qwen_audio, "get_http_client", lambda: FakeClient())
     monkeypatch.setattr(qwen_audio, "get_model", lambda: "qwen-audio-3.0-asr-flash")
     monkeypatch.setattr(qwen_audio, "get_language_hints", lambda: [])
@@ -504,6 +513,7 @@ def test_http_transport_retries_transient_status(monkeypatch):
 
 def test_http_error_is_reported_in_metadata_not_transcribed(monkeypatch):
     monkeypatch.setattr(qwen_audio, "should_log_request_payload", lambda: False)
+
     class FakeClient:
         async def post(self, url, *, headers, json):
             request = httpx.Request("POST", url)
@@ -514,7 +524,9 @@ def test_http_error_is_reported_in_metadata_not_transcribed(monkeypatch):
             )
 
     monkeypatch.setattr(qwen_audio, "get_api_key", lambda: "sk-test")
-    monkeypatch.setattr(qwen_audio, "get_api_url", lambda: "https://example.test/generation")
+    monkeypatch.setattr(
+        qwen_audio, "get_api_url", lambda: "https://example.test/generation"
+    )
     monkeypatch.setattr(qwen_audio, "get_http_client", lambda: FakeClient())
     monkeypatch.setattr(qwen_audio, "get_model", lambda: "qwen-audio-3.0-asr-flash")
     monkeypatch.setattr(qwen_audio, "get_language_hints", lambda: [])

@@ -8,7 +8,7 @@ import threading
 import time
 import traceback
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Sequence, cast
 
 import yaml
 
@@ -61,22 +61,40 @@ load_startup_env()
 from src.infra.config import ClientConfig as Config
 from src.infra.runtime_logging import configure_runtime_logging, record_console_message
 from src.infra.daily_input_stats import get_today_input_count
-from src.audio.control_requests import write_abandon_request, write_clear_history_request
-from src.audio.retry_cache import has_retry_audio, latest_audio_path_for_mime, write_retry_request
-from src.gui.app_startup import apply_theme_later, configure_app_locale_and_font, print_screen_scale
+from src.audio.control_requests import (
+    write_abandon_request,
+    write_clear_history_request,
+)
+from src.audio.retry_cache import (
+    has_retry_audio,
+    latest_audio_path_for_mime,
+    write_retry_request,
+)
+from src.gui.app_startup import (
+    apply_theme_later,
+    configure_app_locale_and_font,
+    print_screen_scale,
+)
 from src.gui.listening_overlay import StatusOverlayController
 from src.gui.lexicon_editor_client import LexiconEditorProcessClient
 from src.gui.prompt_editor import PromptEditDialog
 from src.gui.startup_profiler import StartupProfileOptions, StartupProfiler
 from src.gui.tray_process_client import TrayProcessClient
 from src.gui.worker_output_router import WorkerOutputRouter
-from src.polish.llm_polish import get_polish_prompt_text, reload_polish_config, update_polish_prompt_text
+from src.polish.llm_polish import (
+    get_polish_prompt_text,
+    reload_polish_config,
+    update_polish_prompt_text,
+)
 from src.system.process_cleanup import (
     terminate_executable_processes,
     terminate_python_script_basename_processes,
     terminate_python_script_processes,
 )
-from src.system.startup_replacement import prepare_replacement_startup, release_startup_slot
+from src.system.startup_replacement import (
+    prepare_replacement_startup,
+    release_startup_slot,
+)
 
 configure_runtime_logging("client_gui")
 
@@ -176,7 +194,7 @@ class GUI(QMainWindow):
         self._worker_restart_lock = threading.Lock()
         self._worker_restart_running = False
         self._worker_restart_pending = False
-        self._latest_wav_player: subprocess.Popen[str] | None = None
+        self._latest_wav_player: subprocess.Popen[bytes] | None = None
         self.core_client_process: subprocess.Popen[str] | None = None
         self.text_box_wordCountLabel: QLabel | None = None
         self.old_pos = QPoint()
@@ -217,12 +235,12 @@ class GUI(QMainWindow):
                 self.early_messages,
                 source=f"early lines={len(self.early_messages)}",
             )
-        self.early_messages = []
+        self.early_messages.clear()
 
     def log_message(self, message: str, color: str = "#000000"):
         """Log a message - stores early messages in queue if UI not ready."""
         record_console_message(message, style=color)
-        if hasattr(self, 'text_box_client'):
+        if hasattr(self, "text_box_client"):
             self.append_colored_line(message, color)
         else:
             self.early_messages.append((message, color))
@@ -232,14 +250,17 @@ class GUI(QMainWindow):
         try:
             self.log_message("正在加载转录服务商配置...")
             from src.provider.provider_config import provider_manager
+
             self.provider_manager = provider_manager
             self.provider_manager.load_providers()
 
             providers = self.provider_manager.list_providers()
             self.log_message(f"已加载 {len(providers)} 个转录服务商配置")
             for provider in providers:
-                status = "启用" if provider['enabled'] else "禁用"
-                self.log_message(f"  - {provider['name']} ({provider['type']}) [{status}]", "#888888")
+                status = "启用" if provider["enabled"] else "禁用"
+                self.log_message(
+                    f"  - {provider['name']} ({provider['type']}) [{status}]", "#888888"
+                )
 
             active = self.provider_manager.get_active_provider()
             if active:
@@ -253,6 +274,7 @@ class GUI(QMainWindow):
         except Exception as e:
             self.log_message(f"初始化转录服务商时出错: {e}", "#ff0000")
             import traceback
+
             self.log_message(f"错误详情: {traceback.format_exc()}", "#ff0000")
             self.provider_manager = None
 
@@ -302,7 +324,6 @@ class GUI(QMainWindow):
                 self._deferred_startup()
             except Exception:
                 pass
-        
 
     @staticmethod
     def _preferred_cn_font_family() -> str:
@@ -333,14 +354,17 @@ class GUI(QMainWindow):
         except Exception:
             pass
 
-
     # Removed custom title bar and its buttons; using native frame instead
 
     def create_text_box(self):
         self.text_box_client = QPlainTextEdit()
         _configure_log_document_retention(self.text_box_client.document())
-        self.text_box_client.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.text_box_client.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.text_box_client.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.text_box_client.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         # QPlainTextEdit is intrinsically plain text and avoids rich-document
         # parsing/layout work for the log console.
         self.text_box_client.setUndoRedoEnabled(False)
@@ -355,7 +379,9 @@ class GUI(QMainWindow):
         )
         # Wrap at widget width and allow wrapping anywhere to avoid mid-glyph clipping for long CJK strings
         self.text_box_client.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
-        self.text_box_client.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        self.text_box_client.setWordWrapMode(
+            QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere
+        )
 
     def create_daily_input_count_label(self) -> None:
         """Create the compact daily character counter below the output pane."""
@@ -376,16 +402,22 @@ class GUI(QMainWindow):
             count = 0
         self.daily_input_count_label.setText(f"今日已输入 {count} 字")
 
-    def _configure_collapsible_combo(self, combo: QComboBox, *, editable: bool = False) -> None:
+    def _configure_collapsible_combo(
+        self, combo: QComboBox, *, editable: bool = False
+    ) -> None:
         """Apply a unified style and sizing policy to combo boxes."""
         combo.setEditable(editable)
         combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         combo.setMinimumWidth(0)
-        combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
         combo.setMinimumContentsLength(0)
         combo.setStyleSheet("QComboBox { min-width: 0px; }")
 
-    def _build_combo_field(self, label_text: str, combo: QComboBox) -> tuple[QWidget, QLabel]:
+    def _build_combo_field(
+        self, label_text: str, combo: QComboBox
+    ) -> tuple[QWidget, QLabel]:
         """Wrap a label-combo pair so the group collapses gracefully."""
         container = QWidget()
         layout = QHBoxLayout(container)
@@ -415,7 +447,9 @@ class GUI(QMainWindow):
         checkbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         return checkbox
 
-    def _update_yaml_bool(self, path: Path, key_path: tuple[str, ...], value: bool) -> bool:
+    def _update_yaml_bool(
+        self, path: Path, key_path: tuple[str, ...], value: bool
+    ) -> bool:
         try:
             original = path.read_text(encoding="utf-8")
         except Exception:
@@ -435,8 +469,10 @@ class GUI(QMainWindow):
                 match = pattern.match(stripped)
                 if not match:
                     continue
-                newline = line[len(stripped):]
-                lines[idx] = f"{match.group('prefix')}{replacement}{match.group('suffix')}{newline}"
+                newline = line[len(stripped) :]
+                lines[idx] = (
+                    f"{match.group('prefix')}{replacement}{match.group('suffix')}{newline}"
+                )
                 try:
                     path.write_text("".join(lines), encoding="utf-8")
                 except Exception:
@@ -466,7 +502,7 @@ class GUI(QMainWindow):
                 if not match:
                     continue
 
-                newline = line[len(stripped):]
+                newline = line[len(stripped) :]
                 lines[idx] = (
                     f"{match.group('indent')}{match.group('prefix')}{replacement}"
                     f"{match.group('suffix')}{newline}"
@@ -480,7 +516,9 @@ class GUI(QMainWindow):
 
         return False
 
-    def _load_bool_from_yaml(self, path: Path, key_path: tuple[str, ...], default: bool) -> bool:
+    def _load_bool_from_yaml(
+        self, path: Path, key_path: tuple[str, ...], default: bool
+    ) -> bool:
         try:
             data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         except Exception:
@@ -498,13 +536,19 @@ class GUI(QMainWindow):
         self._syncing_context_toggle_states = True
         try:
             self.append_history_checkbox.setChecked(
-                self._load_bool_from_yaml(self._polish_config_path(), ("history", "enabled"), True)
+                self._load_bool_from_yaml(
+                    self._polish_config_path(), ("history", "enabled"), True
+                )
             )
             self.append_textbox_checkbox.setChecked(
-                self._load_bool_from_yaml(self._polish_config_path(), ("textbox_context", "enabled"), True)
+                self._load_bool_from_yaml(
+                    self._polish_config_path(), ("textbox_context", "enabled"), True
+                )
             )
             self.append_vision_checkbox.setChecked(
-                self._load_bool_from_yaml(self._vision_config_path(), ("enabled",), False)
+                self._load_bool_from_yaml(
+                    self._vision_config_path(), ("enabled",), False
+                )
             )
         finally:
             self._syncing_context_toggle_states = False
@@ -522,7 +566,9 @@ class GUI(QMainWindow):
             return
 
         if not self._update_yaml_bool(path, key_path, checked):
-            self.append_colored_line(f"保存{label}开关失败（请检查配置文件权限或格式）", "#ff5555")
+            self.append_colored_line(
+                f"保存{label}开关失败（请检查配置文件权限或格式）", "#ff5555"
+            )
             self._sync_context_toggle_states()
             return
 
@@ -536,7 +582,9 @@ class GUI(QMainWindow):
         self.append_colored_line(f"已{state_text}{label}。", "#888888")
 
         if restart_workers:
-            self.append_colored_line("正在重启录音进程以应用视觉上下文设置。", "#888888")
+            self.append_colored_line(
+                "正在重启录音进程以应用视觉上下文设置。", "#888888"
+            )
             self.restart_children_with_env()
 
     def on_append_history_toggled(self, checked: bool) -> None:
@@ -576,7 +624,9 @@ class GUI(QMainWindow):
 
         self.provider_combo = QComboBox()
         self._configure_collapsible_combo(self.provider_combo)
-        provider_field, self.provider_label = self._build_combo_field("转录服务商:", self.provider_combo)
+        provider_field, self.provider_label = self._build_combo_field(
+            "转录服务商:", self.provider_combo
+        )
         self.populate_provider_combo()
         self.provider_combo.currentTextChanged.connect(self.on_provider_changed)
         provider_row.addWidget(provider_field, 1)
@@ -584,7 +634,9 @@ class GUI(QMainWindow):
         self.modify_prompt_button = QPushButton("编辑 ASR 提示词")
         self.modify_prompt_button.setToolTip("编辑当前转录服务商的自定义提示词")
         self.modify_prompt_button.clicked.connect(self.show_modify_prompt_dialog)
-        self.modify_prompt_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.modify_prompt_button.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
         provider_row.addWidget(self.modify_prompt_button)
 
         prompt_action_row = QHBoxLayout()
@@ -606,9 +658,15 @@ class GUI(QMainWindow):
         prompt_action_row.addStretch()
 
         self.edit_polish_prompt_button = QPushButton("编辑 LLM 提示词")
-        self.edit_polish_prompt_button.setToolTip("编辑 config/polish/polish.yaml 中的 LLM 润色提示词")
-        self.edit_polish_prompt_button.clicked.connect(self.show_edit_polish_prompt_dialog)
-        self.edit_polish_prompt_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.edit_polish_prompt_button.setToolTip(
+            "编辑 config/polish/polish.yaml 中的 LLM 润色提示词"
+        )
+        self.edit_polish_prompt_button.clicked.connect(
+            self.show_edit_polish_prompt_dialog
+        )
+        self.edit_polish_prompt_button.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
         prompt_action_row.addWidget(self.edit_polish_prompt_button)
 
         action_row = QHBoxLayout()
@@ -618,31 +676,43 @@ class GUI(QMainWindow):
         self.clear_history_button = QPushButton("清除最近上屏")
         self.clear_history_button.setToolTip("暂时清除 LLM 润色使用的最近上屏消息记录")
         self.clear_history_button.clicked.connect(self.clear_recent_output_history)
-        self.clear_history_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.clear_history_button.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
         action_row.addWidget(self.clear_history_button)
 
         self.retry_latest_button = QPushButton("重试最近请求")
-        self.retry_latest_button.setToolTip("重新发送最近一次录音缓存，并将结果照常上屏")
+        self.retry_latest_button.setToolTip(
+            "重新发送最近一次录音缓存，并将结果照常上屏"
+        )
         self.retry_latest_button.clicked.connect(self.retry_latest_request)
-        self.retry_latest_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.retry_latest_button.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
         action_row.addWidget(self.retry_latest_button)
 
         self.clear_screen_button = QPushButton("清屏")
         self.clear_screen_button.setToolTip("清空当前 GUI 日志")
         self.clear_screen_button.clicked.connect(self.clear_text_box)
-        self.clear_screen_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.clear_screen_button.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
         action_row.addWidget(self.clear_screen_button)
 
         self.play_latest_wav_button = QPushButton()
         self.play_latest_wav_button.setToolTip("播放最近一次录音 WAV")
         self.play_latest_wav_button.clicked.connect(self.toggle_latest_wav_playback)
-        self.play_latest_wav_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.play_latest_wav_button.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
         self.play_latest_wav_button.setFixedSize(28, 28)
         self.play_latest_wav_button.setIconSize(QSize(16, 16))
         action_row.addWidget(self.play_latest_wav_button)
 
         self.latest_wav_playback_timer = QTimer(self)
-        self.latest_wav_playback_timer.timeout.connect(self._refresh_latest_wav_playback_state)
+        self.latest_wav_playback_timer.timeout.connect(
+            self._refresh_latest_wav_playback_state
+        )
         self.latest_wav_playback_timer.start(250)
         self._update_latest_wav_playback_button(False)
 
@@ -673,15 +743,21 @@ class GUI(QMainWindow):
 
         context_toggle_container = QWidget()
         context_toggle_container.setLayout(context_toggle_row)
-        context_toggle_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        context_toggle_container.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
         action_row.addSpacing(8)
         action_row.addWidget(context_toggle_container, 1)
         action_row.addSpacing(8)
 
         self.edit_lexicon_button = QPushButton("编辑词库")
-        self.edit_lexicon_button.setToolTip("编辑用户自定义词库（config/user_lexicon.yaml）")
+        self.edit_lexicon_button.setToolTip(
+            "编辑用户自定义词库（config/user_lexicon.yaml）"
+        )
         self.edit_lexicon_button.clicked.connect(self.show_edit_lexicon_dialog)
-        self.edit_lexicon_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.edit_lexicon_button.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
         action_row.addWidget(self.edit_lexicon_button)
 
         uniform_button_width = 144
@@ -703,7 +779,9 @@ class GUI(QMainWindow):
         self.model_row.setContentsMargins(0, 0, 0, 0)
         self.model_combo = QComboBox()
         self._configure_collapsible_combo(self.model_combo, editable=True)
-        model_field, self.model_label = self._build_combo_field("模型:", self.model_combo)
+        model_field, self.model_label = self._build_combo_field(
+            "模型:", self.model_combo
+        )
         self.model_combo.currentTextChanged.connect(self.on_model_changed)
         self.model_row.addWidget(model_field, 1)
         self.model_row.addStretch()
@@ -767,7 +845,10 @@ class GUI(QMainWindow):
 
         try:
             active_id = getattr(self.provider_manager, "active_provider", None)
-            if active_id is not None and str(active_id).strip() == str(provider_id).strip():
+            if (
+                active_id is not None
+                and str(active_id).strip() == str(provider_id).strip()
+            ):
                 prompt = self.provider_manager.get_provider_prompt()
                 if isinstance(prompt, str):
                     return prompt
@@ -791,14 +872,20 @@ class GUI(QMainWindow):
             self.append_colored_line("转录服务商配置系统未初始化", "#ff5555")
             return
 
-        provider_id = self.provider_combo.currentData() if hasattr(self, "provider_combo") else None
+        provider_id = (
+            self.provider_combo.currentData()
+            if hasattr(self, "provider_combo")
+            else None
+        )
         if not provider_id:
             self.append_colored_line("请先选择转录服务商", "#ff5555")
             return
 
         initial_text = self._resolve_prompt_text_for_provider(provider_id)
 
-        dialog = PromptEditDialog(self, initial_text=initial_text, window_title="编辑 ASR 提示词")
+        dialog = PromptEditDialog(
+            self, initial_text=initial_text, window_title="编辑 ASR 提示词"
+        )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
@@ -807,14 +894,20 @@ class GUI(QMainWindow):
 
         try:
             if new_prompt_trimmed:
-                updated = self.provider_manager.update_provider_prompt(provider_id, prompt=new_prompt_raw)
+                updated = self.provider_manager.update_provider_prompt(
+                    provider_id, prompt=new_prompt_raw
+                )
             else:
-                updated = self.provider_manager.update_provider_prompt(provider_id, prompt=None)
+                updated = self.provider_manager.update_provider_prompt(
+                    provider_id, prompt=None
+                )
         except Exception:
             updated = False
 
         if not updated:
-            self.append_colored_line("保存 ASR 提示词失败（请检查配置文件权限或格式）", "#ff5555")
+            self.append_colored_line(
+                "保存 ASR 提示词失败（请检查配置文件权限或格式）", "#ff5555"
+            )
             return
 
         self.restart_children_with_env()
@@ -832,7 +925,9 @@ class GUI(QMainWindow):
             self.append_colored_line(f"读取 LLM 提示词失败：{exc}", "#ff5555")
             return
 
-        dialog = PromptEditDialog(self, initial_text=initial_text, window_title="编辑 LLM 提示词")
+        dialog = PromptEditDialog(
+            self, initial_text=initial_text, window_title="编辑 LLM 提示词"
+        )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
@@ -842,7 +937,10 @@ class GUI(QMainWindow):
             updated = False
 
         if not updated:
-            self.append_colored_line("保存 LLM 提示词失败（请检查 config/polish/polish.yaml 权限或格式）", "#ff5555")
+            self.append_colored_line(
+                "保存 LLM 提示词失败（请检查 config/polish/polish.yaml 权限或格式）",
+                "#ff5555",
+            )
             return
 
         self.restart_children_with_env()
@@ -928,7 +1026,11 @@ class GUI(QMainWindow):
         """Persist the selected Qwen Audio realtime/file upload mode."""
         if not self.provider_manager:
             return
-        current_data = self.provider_combo.currentData() if hasattr(self, "provider_combo") else None
+        current_data = (
+            self.provider_combo.currentData()
+            if hasattr(self, "provider_combo")
+            else None
+        )
         if current_data is None:
             return
         provider = self.provider_manager.get_provider(current_data)
@@ -941,7 +1043,9 @@ class GUI(QMainWindow):
 
         ok = False
         try:
-            ok = self.provider_manager.update_provider_setting(current_data, "realtime", bool(checked))
+            ok = self.provider_manager.update_provider_setting(
+                current_data, "realtime", bool(checked)
+            )
         except Exception:
             ok = False
 
@@ -978,7 +1082,9 @@ class GUI(QMainWindow):
             try:
                 active_id_raw = getattr(self.provider_manager, "active_provider", None)
                 active_id_norm = (
-                    str(active_id_raw).strip().lower() if active_id_raw is not None else None
+                    str(active_id_raw).strip().lower()
+                    if active_id_raw is not None
+                    else None
                 )
             except Exception:
                 active_id_norm = None
@@ -986,8 +1092,8 @@ class GUI(QMainWindow):
             active_index: int | None = None
 
             for i, provider_info in enumerate(providers):
-                display_name = provider_info['name']
-                pid = provider_info.get('id')
+                display_name = provider_info["name"]
+                pid = provider_info.get("id")
                 self.provider_combo.addItem(display_name, pid)
 
                 if active_id_norm is not None and pid is not None:
@@ -1003,9 +1109,7 @@ class GUI(QMainWindow):
                 if self.provider_combo.currentIndex() != active_index:
                     self.provider_combo.setCurrentIndex(active_index)
 
-            self.log_message(
-                f"转录服务商选择器已准备就绪，共 {len(providers)} 个选项"
-            )
+            self.log_message(f"转录服务商选择器已准备就绪，共 {len(providers)} 个选项")
         finally:
             self.provider_combo.blockSignals(False)
 
@@ -1021,7 +1125,10 @@ class GUI(QMainWindow):
         # Skip if selection equals current active provider (avoid redundant switches on startup)
         try:
             active_id = getattr(self.provider_manager, "active_provider", None)
-            if active_id is not None and str(current_data).strip().lower() == str(active_id).strip().lower():
+            if (
+                active_id is not None
+                and str(current_data).strip().lower() == str(active_id).strip().lower()
+            ):
                 return
         except Exception:
             pass
@@ -1050,7 +1157,11 @@ class GUI(QMainWindow):
             if self.provider_manager:
                 for p in self.provider_manager.providers.values():
                     if getattr(p, "type", "").lower() == "openai":
-                        m = (p.settings or {}).get("model") if hasattr(p, "settings") else None
+                        m = (
+                            (p.settings or {}).get("model")
+                            if hasattr(p, "settings")
+                            else None
+                        )
                         if isinstance(m, str) and m.strip():
                             models.append(m.strip())
         except Exception:
@@ -1063,11 +1174,13 @@ class GUI(QMainWindow):
         except Exception:
             pass
         # Sensible defaults
-        models.extend([
-            "gpt-4o-transcribe",
-            "gpt-4o-mini-transcribe",
-            "whisper-1",
-        ])
+        models.extend(
+            [
+                "gpt-4o-transcribe",
+                "gpt-4o-mini-transcribe",
+                "whisper-1",
+            ]
+        )
         # De-duplicate while preserving order
         seen = set()
         uniq: list[str] = []
@@ -1151,7 +1264,9 @@ class GUI(QMainWindow):
             # Restart workers to apply model change
             self.restart_children_with_env()
         else:
-            self.append_colored_line("更新模型失败（请检查配置文件权限或格式）", "#ff5555")
+            self.append_colored_line(
+                "更新模型失败（请检查配置文件权限或格式）", "#ff5555"
+            )
 
     def scroll_to_bottom(self):
         """Pin the console view to the latest line after text changes."""
@@ -1190,15 +1305,19 @@ class GUI(QMainWindow):
     def append_plain_line(self, text: str) -> None:
         self.append_colored_line(text, "#000000")
 
-    def append_colored_lines(self, lines: list[str], color: QColor | str = "green") -> None:
+    def append_colored_lines(
+        self, lines: list[str], color: QColor | str = "green"
+    ) -> None:
         if not lines:
             return
         text = "\n".join(str(line) for line in lines)
-        self.append_colored_line(text, color, source=f"batch lines={len(lines)} chars={len(text)}")
+        self.append_colored_line(
+            text, color, source=f"batch lines={len(lines)} chars={len(text)}"
+        )
 
     def _append_colored_entries(
         self,
-        entries: list[tuple[str, QColor | str]],
+        entries: Sequence[tuple[str, QColor | str]],
         *,
         source: str,
     ) -> None:
@@ -1211,8 +1330,7 @@ class GUI(QMainWindow):
             document = self.text_box_client.document()
             block_count_before = document.blockCount()
             resolved = [
-                (str(text), self._resolve_gui_color(color))
-                for text, color in entries
+                (str(text), self._resolve_gui_color(color)) for text, color in entries
             ]
             _append_log_document_entries(document, resolved)
             self.scroll_to_bottom()
@@ -1276,7 +1394,9 @@ class GUI(QMainWindow):
             self._watchdog_reports += 1
             frame = sys._current_frames().get(self._gui_thread_id)
             if frame is None:
-                self._emit_watchdog_timing(f"gui heartbeat gap {gap_ms:.1f}ms; no gui frame")
+                self._emit_watchdog_timing(
+                    f"gui heartbeat gap {gap_ms:.1f}ms; no gui frame"
+                )
             else:
                 stack = "".join(traceback.format_stack(frame, limit=12)).strip()
                 self._emit_watchdog_timing(f"gui heartbeat gap {gap_ms:.1f}ms\n{stack}")
@@ -1302,14 +1422,23 @@ class GUI(QMainWindow):
     def _update_latest_wav_playback_button(self, playing: bool) -> None:
         style = self.style()
         icon = style.standardIcon(
-            QStyle.StandardPixmap.SP_MediaStop if playing else QStyle.StandardPixmap.SP_MediaVolume
+            QStyle.StandardPixmap.SP_MediaStop
+            if playing
+            else QStyle.StandardPixmap.SP_MediaVolume
         )
         self.play_latest_wav_button.setIcon(icon)
-        self.play_latest_wav_button.setToolTip("停止播放最近一次录音 WAV" if playing else "播放最近一次录音 WAV")
-        self.play_latest_wav_button.setAccessibleName("停止播放最近录音" if playing else "播放最近录音")
+        self.play_latest_wav_button.setToolTip(
+            "停止播放最近一次录音 WAV" if playing else "播放最近一次录音 WAV"
+        )
+        self.play_latest_wav_button.setAccessibleName(
+            "停止播放最近录音" if playing else "播放最近录音"
+        )
 
     def _refresh_latest_wav_playback_state(self) -> None:
-        if self._latest_wav_player is not None and self._latest_wav_player.poll() is not None:
+        if (
+            self._latest_wav_player is not None
+            and self._latest_wav_player.poll() is not None
+        ):
             self._latest_wav_player = None
         self._update_latest_wav_playback_button(self._is_latest_wav_playing())
 
@@ -1333,7 +1462,11 @@ class GUI(QMainWindow):
             return
 
         wav_path = self._latest_wav_path()
-        if not wav_path.exists() or not wav_path.is_file() or wav_path.stat().st_size <= 0:
+        if (
+            not wav_path.exists()
+            or not wav_path.is_file()
+            or wav_path.stat().st_size <= 0
+        ):
             self.append_colored_line("没有可播放的 latest.wav。", "#ff8800")
             self._update_latest_wav_playback_button(False)
             return
@@ -1389,7 +1522,7 @@ class GUI(QMainWindow):
             self.append_plain_line(f"转录服务提供商: {active.name} ({active.type})")
 
             # Show provider-specific settings
-            if hasattr(active, 'settings') and active.settings:
+            if hasattr(active, "settings") and active.settings:
                 if active.type.lower() == "openai":
                     base_url = active.settings.get("base_url", "(none)")
                     model = active.settings.get("model", "(none)")
@@ -1401,16 +1534,21 @@ class GUI(QMainWindow):
                     # Show resolved prompt (inline, preset, or global default)
                     try:
                         from src.provider.provider_config import provider_manager as _pm
+
                         resolved_prompt = _pm.get_provider_prompt()
                     except Exception:
                         resolved_prompt = active.settings.get("prompt")
                     if resolved_prompt:
                         prompt_normalized = " ".join(
-                            line.strip() for line in str(resolved_prompt).splitlines() if line.strip()
+                            line.strip()
+                            for line in str(resolved_prompt).splitlines()
+                            if line.strip()
                         )
                         max_len = 1000
                         prompt_to_show = (
-                            prompt_normalized if len(prompt_normalized) <= max_len else prompt_normalized[: max_len - 3] + "..."
+                            prompt_normalized
+                            if len(prompt_normalized) <= max_len
+                            else prompt_normalized[: max_len - 3] + "..."
                         )
                         self.append_plain_line(f"转录提示: {prompt_to_show}")
                     else:
@@ -1419,7 +1557,6 @@ class GUI(QMainWindow):
             self.append_plain_line("转录服务提供商: 未配置")
 
         self.append_plain_line("================")
-
 
     def create_systray_icon(self):
         """Start the independent process that owns the tray icon and menu."""
@@ -1459,7 +1596,11 @@ class GUI(QMainWindow):
             CREATE_NEW_PROCESS_GROUP = 0x00000200
             subprocess.Popen(
                 [exe, str(restart_script_path())],
-                creationflags=(subprocess.CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP),
+                creationflags=(
+                    subprocess.CREATE_NO_WINDOW
+                    | DETACHED_PROCESS
+                    | CREATE_NEW_PROCESS_GROUP
+                ),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
@@ -1472,11 +1613,9 @@ class GUI(QMainWindow):
             except Exception:
                 pass
 
-
     def clear_text_box(self):
         # Clear the content of the client text box
         self.text_box_client.clear()
-
 
     def on_monitor_toggled(self, state):
         # 检查复选框的选中状态
@@ -1534,7 +1673,9 @@ class GUI(QMainWindow):
         current_directory = str(ROOT)
         vscode_exe_path = Config.vscode_exe_path
         try:
-            subprocess.Popen([vscode_exe_path, current_directory], cwd=current_directory)
+            subprocess.Popen(
+                [vscode_exe_path, current_directory], cwd=current_directory
+            )
         except Exception as e:
             try:
                 self.append_plain_line(f"启动 VSCode 失败: {e}")
@@ -1574,7 +1715,9 @@ class GUI(QMainWindow):
         exe = resolve_pythonw_client()
         if exe is None:
             try:
-                self.append_plain_line("未找到可用的 Python 运行时。请确保已运行 'uv sync' 安装依赖。")
+                self.append_plain_line(
+                    "未找到可用的 Python 运行时。请确保已运行 'uv sync' 安装依赖。"
+                )
             except Exception:
                 pass
             return
@@ -1723,7 +1866,9 @@ class GUI(QMainWindow):
         except Exception:
             pass
 
-    def _start_worker(self, script_rel_path: str, attr_name: str, *, log_errors: bool = True) -> bool:
+    def _start_worker(
+        self, script_rel_path: str, attr_name: str, *, log_errors: bool = True
+    ) -> bool:
         exe = resolve_pythonw_client()
         if exe is None:
             if log_errors:
@@ -1775,7 +1920,9 @@ class GUI(QMainWindow):
         try:
             while True:
                 self._stop_core_client_processes()
-                if not self._start_worker("core_client.py", "core_client_process", log_errors=False):
+                if not self._start_worker(
+                    "core_client.py", "core_client_process", log_errors=False
+                ):
                     self._log_queue_from_thread("启动子进程失败(core_client.py)。")
                     with self._worker_restart_lock:
                         self._worker_restart_running = False
@@ -1792,8 +1939,6 @@ class GUI(QMainWindow):
             with self._worker_restart_lock:
                 self._worker_restart_running = False
                 self._worker_restart_pending = False
-
-
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -1845,27 +1990,27 @@ class GUI(QMainWindow):
     def apply_scale_factor(self):
         # 应用缩放因子
         widgets: list[QWidget] = [self.text_box_client]
-        if hasattr(self, 'daily_input_count_label'):
+        if hasattr(self, "daily_input_count_label"):
             widgets.append(self.daily_input_count_label)
-        if hasattr(self, 'provider_combo'):
+        if hasattr(self, "provider_combo"):
             widgets.append(self.provider_combo)
-        if hasattr(self, 'modify_prompt_button'):
+        if hasattr(self, "modify_prompt_button"):
             widgets.append(self.modify_prompt_button)
-        if hasattr(self, 'edit_polish_prompt_button'):
+        if hasattr(self, "edit_polish_prompt_button"):
             widgets.append(self.edit_polish_prompt_button)
-        if hasattr(self, 'edit_lexicon_button'):
+        if hasattr(self, "edit_lexicon_button"):
             widgets.append(self.edit_lexicon_button)
-        if hasattr(self, 'clear_history_button'):
+        if hasattr(self, "clear_history_button"):
             widgets.append(self.clear_history_button)
-        if hasattr(self, 'retry_latest_button'):
+        if hasattr(self, "retry_latest_button"):
             widgets.append(self.retry_latest_button)
-        if hasattr(self, 'clear_screen_button'):
+        if hasattr(self, "clear_screen_button"):
             widgets.append(self.clear_screen_button)
-        if hasattr(self, 'play_latest_wav_button'):
+        if hasattr(self, "play_latest_wav_button"):
             widgets.append(self.play_latest_wav_button)
-        if hasattr(self, 'model_combo'):
+        if hasattr(self, "model_combo"):
             widgets.append(self.model_combo)
-        if hasattr(self, 'model_label'):
+        if hasattr(self, "model_label"):
             widgets.append(self.model_label)
 
         for widget in widgets:
@@ -1879,12 +2024,22 @@ class GUI(QMainWindow):
 
 def start_client_gui(profile_options: StartupProfileOptions | None = None):
     def replace_existing_gui() -> None:
-        terminate_python_script_basename_processes(ROOT / "start_client_gui.py", exclude_pid=os.getpid())
-        terminate_executable_processes(ROOT / "start_client_gui.exe", exclude_pid=os.getpid())
-        terminate_executable_processes(ROOT / "start_client_gui_admin.exe", exclude_pid=os.getpid())
-        terminate_python_script_processes(core_client_script_path(), exclude_pid=os.getpid())
+        terminate_python_script_basename_processes(
+            ROOT / "start_client_gui.py", exclude_pid=os.getpid()
+        )
+        terminate_executable_processes(
+            ROOT / "start_client_gui.exe", exclude_pid=os.getpid()
+        )
+        terminate_executable_processes(
+            ROOT / "start_client_gui_admin.exe", exclude_pid=os.getpid()
+        )
+        terminate_python_script_processes(
+            core_client_script_path(), exclude_pid=os.getpid()
+        )
 
-    startup_slot_acquired = prepare_replacement_startup(ROOT, "client_gui", replace_existing_gui)
+    startup_slot_acquired = prepare_replacement_startup(
+        ROOT, "client_gui", replace_existing_gui
+    )
     if not startup_slot_acquired:
         print("无法完成 CapsWriter GUI 替换，本次启动已退出。")
         return
@@ -1908,8 +2063,12 @@ def start_client_gui(profile_options: StartupProfileOptions | None = None):
             gui.show()
         try:
             if startup_profiler.enabled:
-                delay = max(100, int((profile_options.duration_ms if profile_options else 5000)))
-                QTimer.singleShot(delay, lambda: startup_profiler.stop("startup window"))
+                delay = max(
+                    100, int((profile_options.duration_ms if profile_options else 5000))
+                )
+                QTimer.singleShot(
+                    delay, lambda: startup_profiler.stop("startup window")
+                )
         except Exception:
             startup_profiler.stop("timer schedule failed")
         sys.exit(app.exec())
@@ -1954,9 +2113,13 @@ if __name__ == "__main__":
         from src.gui.lexicon_editor_process import run_lexicon_editor_process
 
         if args.lexicon_parent_pid is None:
-            parser.error("--lexicon-parent-pid is required with --lexicon-editor-process")
+            parser.error(
+                "--lexicon-parent-pid is required with --lexicon-editor-process"
+            )
         raise SystemExit(
-            run_lexicon_editor_process(args.lexicon_editor_process, args.lexicon_parent_pid)
+            run_lexicon_editor_process(
+                args.lexicon_editor_process, args.lexicon_parent_pid
+            )
         )
 
     if args.tray_process is not None:
@@ -1979,7 +2142,9 @@ if __name__ == "__main__":
         or "cprofile"
     )
     profile_output_env = os.getenv("CW_PROFILE_OUTPUT", "").strip()
-    profile_output = args.profile_output or (Path(profile_output_env) if profile_output_env else None)
+    profile_output = args.profile_output or (
+        Path(profile_output_env) if profile_output_env else None
+    )
     profile_options = StartupProfileOptions(
         enabled=profile_enabled,
         tool=profile_tool,

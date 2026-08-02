@@ -97,7 +97,10 @@ async def recv_result():
                 Cosmic.active_task_id = current_tid
             if _is_abandoned(current_tid):
                 await tsf_bridge.cancel(current_tid)
-                if isinstance(polish_prefetch_task, asyncio.Task) and not polish_prefetch_task.done():
+                if (
+                    isinstance(polish_prefetch_task, asyncio.Task)
+                    and not polish_prefetch_task.done()
+                ):
                     polish_prefetch_task.cancel()
                 _clear_abandoned_task(current_tid)
                 if hide_status_overlay_when_done:
@@ -196,7 +199,7 @@ async def recv_result():
                             f" 阶段: 队列等待 {dbg.get('queue_delay_ms', 0):.0f}ms | "
                             f"WAV {dbg.get('wav_ms', 0):.0f}ms | 准备发送 {dbg.get('pre_submit_ms', 0):.0f}ms | "
                             f"上传+服务 {dbg.get('upload_s', 0):.2f}s | 自抬键总计 {dbg.get('total_since_keyup_s', 0):.2f}s | "
-                            f"大小 {dbg.get('wav_bytes', 0)/1024:.1f}KB @ {dbg.get('sr')}Hz/{dbg.get('channels')}ch"
+                            f"大小 {dbg.get('wav_bytes', 0) / 1024:.1f}KB @ {dbg.get('sr')}Hz/{dbg.get('channels')}ch"
                         ),
                         style="dim",
                     )
@@ -216,6 +219,7 @@ async def recv_result():
             # 打字：增量转录结果用"模拟键入"，最终结果才使用剪贴板粘贴（以减少光标跳动）
             async def type_transcript_delta(s: str):
                 import keyboard as _kb
+
                 # 仅增量字符，避免重复：比较上次输出长度
                 last_len = getattr(Cosmic, "_last_transcript_delta_len", 0)
                 inc = s[last_len:]
@@ -266,7 +270,9 @@ async def recv_result():
                         record_input_characters(
                             text, log_interval=Config.daily_input_log_interval
                         )
-                elif has_incremental_transcript and getattr(Cosmic, "_transcript_had_deltas", False):
+                elif has_incremental_transcript and getattr(
+                    Cosmic, "_transcript_had_deltas", False
+                ):
                     # 完结时重置计数与标记
                     if hasattr(Cosmic, "_last_transcript_delta_len"):
                         Cosmic._last_transcript_delta_len = 0

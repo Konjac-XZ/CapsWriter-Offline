@@ -106,7 +106,9 @@ def get_asr_history_max_messages() -> int:
 
 def get_asr_history_max_chars() -> int:
     history = get_asr_context_settings().get("history", {})
-    raw = history.get("max_chars_per_message", 400) if isinstance(history, dict) else 400
+    raw = (
+        history.get("max_chars_per_message", 400) if isinstance(history, dict) else 400
+    )
     try:
         return max(1, min(400, int(raw)))
     except Exception:
@@ -142,12 +144,18 @@ def get_api_url() -> str:
     if endpoint:
         return endpoint.rstrip("/")
 
-    workspace_id = ps_get_str("workspace_id", env="DASHSCOPE_WORKSPACE_ID", default=None)
+    workspace_id = ps_get_str(
+        "workspace_id", env="DASHSCOPE_WORKSPACE_ID", default=None
+    )
     if workspace_id:
         region = (
-            ps_get_str("region", env="DASHSCOPE_REGION", default="cn-beijing")
-            or "cn-beijing"
-        ).strip().lower()
+            (
+                ps_get_str("region", env="DASHSCOPE_REGION", default="cn-beijing")
+                or "cn-beijing"
+            )
+            .strip()
+            .lower()
+        )
         region_domains = {
             "cn-beijing": "cn-beijing.maas.aliyuncs.com",
             "beijing": "cn-beijing.maas.aliyuncs.com",
@@ -376,7 +384,9 @@ def _provider_vocabulary_with_issues() -> tuple[dict[str, int], list[str]]:
             issues.append(f"{word!r}：{violation}")
             continue
         if word in vocabulary:
-            issues.append(f"供应商 vocabulary 中的 {word!r} 规范化后重复，已使用最后一个权重")
+            issues.append(
+                f"供应商 vocabulary 中的 {word!r} 规范化后重复，已使用最后一个权重"
+            )
         vocabulary[word] = weight
     return vocabulary, issues
 
@@ -444,8 +454,12 @@ def _summarize_vocabulary_issues(issues: list[str]) -> str:
         "长度超限": sum(
             "上限为 15" in issue or "上限为 7" in issue for issue in issues
         ),
-        "超级热词超限": sum("超级热词" in issue and "上限" in issue for issue in issues),
-        "总数截断": sum("合并后共有" in issue and "已截断" in issue for issue in issues),
+        "超级热词超限": sum(
+            "超级热词" in issue and "上限" in issue for issue in issues
+        ),
+        "总数截断": sum(
+            "合并后共有" in issue and "已截断" in issue for issue in issues
+        ),
     }
     summarized = sum(counts.values())
     if summarized < len(issues):
@@ -529,10 +543,14 @@ def build_asr_context_messages(request_context: Any) -> list[dict[str, Any]]:
     max_history = get_asr_history_max_messages()
     if textbox_text:
         max_history = min(max_history, 4)
-    history_texts = [
-        _truncate_context_text(item, get_asr_history_max_chars())
-        for item in history_values[-max_history:]
-    ] if max_history > 0 else []
+    history_texts = (
+        [
+            _truncate_context_text(item, get_asr_history_max_chars())
+            for item in history_values[-max_history:]
+        ]
+        if max_history > 0
+        else []
+    )
     history_texts = [text for text in history_texts if text]
 
     context_texts = history_texts
@@ -658,7 +676,9 @@ def extract_transcript(payload: Any) -> str:
     return ""
 
 
-def _response_metadata(payload: Any, *, audio_bytes: int, audio_format: str) -> dict[str, Any]:
+def _response_metadata(
+    payload: Any, *, audio_bytes: int, audio_format: str
+) -> dict[str, Any]:
     meta: dict[str, Any] = {
         "provider": "qwen-audio",
         "audio_bytes": audio_bytes,
@@ -750,11 +770,17 @@ async def transcribe_with_retries(
     except ValueError as exc:
         error = str(exc)
         _report_error(error)
-        return "", 0, now, time.time(), {
-            "provider": "qwen-audio",
-            "http2": False,
-            "error": error,
-        }
+        return (
+            "",
+            0,
+            now,
+            time.time(),
+            {
+                "provider": "qwen-audio",
+                "http2": False,
+                "error": error,
+            },
+        )
 
     _log_request_payload(request_body)
     headers = build_headers(api_key)
@@ -767,7 +793,9 @@ async def transcribe_with_retries(
         "audio_bytes": audio_bytes,
         "encoded_audio_bytes": encoded_audio_bytes,
         "audio_format": audio_format,
-        "vocabulary_count": len(request_body.get("parameters", {}).get("vocabulary", {})),
+        "vocabulary_count": len(
+            request_body.get("parameters", {}).get("vocabulary", {})
+        ),
         "asr_context_messages": max(
             0, len(request_body.get("input", {}).get("messages", [])) - 1
         ),
@@ -783,7 +811,9 @@ async def transcribe_with_retries(
         response: Optional[httpx.Response] = None
         t_submit = time.time()
         try:
-            response = await get_http_client().post(url, headers=headers, json=request_body)
+            response = await get_http_client().post(
+                url, headers=headers, json=request_body
+            )
             t_complete = time.time()
             last_status = response.status_code
             meta["http2"] = response.http_version == "HTTP/2"

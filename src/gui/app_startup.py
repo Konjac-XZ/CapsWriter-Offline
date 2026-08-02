@@ -53,12 +53,16 @@ def configure_app_locale_and_font(app: QApplication, font_family: str) -> None:
     try:
         app_font = QFont(font_family)
         qfont_type: Any = QFont
-        if hasattr(qfont_type, "StyleStrategy") and hasattr(qfont_type.StyleStrategy, "PreferAntialias"):
+        if hasattr(qfont_type, "StyleStrategy") and hasattr(
+            qfont_type.StyleStrategy, "PreferAntialias"
+        ):
             app_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
         elif hasattr(qfont_type, "PreferAntialias"):
             app_font.setStyleStrategy(qfont_type.PreferAntialias)
 
-        if hasattr(qfont_type, "HintingPreference") and hasattr(qfont_type.HintingPreference, "PreferFullHinting"):
+        if hasattr(qfont_type, "HintingPreference") and hasattr(
+            qfont_type.HintingPreference, "PreferFullHinting"
+        ):
             app_font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
         elif hasattr(qfont_type, "PreferFullHinting"):
             app_font.setHintingPreference(qfont_type.PreferFullHinting)
@@ -78,8 +82,12 @@ def print_screen_scale() -> tuple[float, float]:
     logical_height = int(vrect.height())
     print(f"逻辑尺寸(虚拟桌面): {logical_width}x{logical_height}")
 
-    dpi_x = float(getattr(screen, "logicalDotsPerInchX", lambda: screen.logicalDotsPerInch())())
-    dpi_y = float(getattr(screen, "logicalDotsPerInchY", lambda: screen.logicalDotsPerInch())())
+    dpi_x = float(
+        getattr(screen, "logicalDotsPerInchX", lambda: screen.logicalDotsPerInch())()
+    )
+    dpi_y = float(
+        getattr(screen, "logicalDotsPerInchY", lambda: screen.logicalDotsPerInch())()
+    )
 
     scale_x = dpi_x / 96.0 if dpi_x else 1.0
     scale_y = dpi_y / 96.0 if dpi_y else 1.0

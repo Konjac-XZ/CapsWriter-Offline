@@ -129,7 +129,10 @@ def _log_provider_keys(
             if k.endswith("_API_KEY") and len(v) > 6:
                 return v[:4] + "****" + v[-2:]
             return v
+
         pairs = ", ".join(f"{k}={_mask(k)}" for k in cred_keys)
         print(f"[env_loader] {label}凭据：{pairs}（其他配置见 {config_path}）")
     else:
-        print(f"[env_loader] 未检测到 {prefix}_BASE_URL / {prefix}_API_KEY（{label}功能不可用）。")
+        print(
+            f"[env_loader] 未检测到 {prefix}_BASE_URL / {prefix}_API_KEY（{label}功能不可用）。"
+        )

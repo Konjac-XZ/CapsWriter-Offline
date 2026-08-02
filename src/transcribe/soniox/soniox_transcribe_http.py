@@ -20,14 +20,21 @@ _HTTP2_ENABLED: bool = False
 
 
 def get_api_base() -> str:
-    base = ps_get_str("base_url", env="SONIOX_BASE_URL", default="https://api.soniox.com") or "https://api.soniox.com"
+    base = (
+        ps_get_str("base_url", env="SONIOX_BASE_URL", default="https://api.soniox.com")
+        or "https://api.soniox.com"
+    )
     return base.rstrip("/")
 
 
 def get_api_key() -> str:
-    key = ps_get_str("api_key", env=["SONIOX_API_KEY", "SONIOX_TEMP_API_KEY"], default=None)
+    key = ps_get_str(
+        "api_key", env=["SONIOX_API_KEY", "SONIOX_TEMP_API_KEY"], default=None
+    )
     if not key:
-        raise RuntimeError("SONIOX_API_KEY (or SONIOX_TEMP_API_KEY) is required for provider=soniox")
+        raise RuntimeError(
+            "SONIOX_API_KEY (or SONIOX_TEMP_API_KEY) is required for provider=soniox"
+        )
     return key
 
 
@@ -58,11 +65,17 @@ def get_context() -> str | None:
 
 
 def get_enable_diarization() -> bool:
-    return ps_get_bool("enable_diarization", env="SONIOX_ENABLE_DIARIZATION", default=False)
+    return ps_get_bool(
+        "enable_diarization", env="SONIOX_ENABLE_DIARIZATION", default=False
+    )
 
 
 def get_enable_language_identification() -> bool:
-    return ps_get_bool("enable_language_identification", env="SONIOX_ENABLE_LANGUAGE_IDENTIFICATION", default=False)
+    return ps_get_bool(
+        "enable_language_identification",
+        env="SONIOX_ENABLE_LANGUAGE_IDENTIFICATION",
+        default=False,
+    )
 
 
 def build_limits() -> httpx.Limits:
@@ -156,7 +169,9 @@ def _guess_filename(payload_mime: str) -> str:
     return "mic.wav"
 
 
-async def _upload_audio_file(client: httpx.AsyncClient, payload_buf: io.BytesIO, payload_mime: str) -> tuple[str | None, int]:
+async def _upload_audio_file(
+    client: httpx.AsyncClient, payload_buf: io.BytesIO, payload_mime: str
+) -> tuple[str | None, int]:
     """Upload audio bytes to Soniox Files API and return (file_id, status).
 
     Primary endpoint: POST /v1/files (multipart with field 'file').
@@ -191,7 +206,9 @@ async def _upload_audio_file(client: httpx.AsyncClient, payload_buf: io.BytesIO,
                 continue
             if status >= 400:
                 try:
-                    console.print(f"Soniox 上传文件失败：{status} {resp.text}", style="bright_red")
+                    console.print(
+                        f"Soniox 上传文件失败：{status} {resp.text}", style="bright_red"
+                    )
                 except Exception:
                     pass
                 return None, status
@@ -219,12 +236,14 @@ async def _upload_audio_file(client: httpx.AsyncClient, payload_buf: io.BytesIO,
         return None, 503
 
 
-async def _create_transcription(client: httpx.AsyncClient, file_id: str, task_id: str | None) -> tuple[str | None, int, str | None]:
+async def _create_transcription(
+    client: httpx.AsyncClient, file_id: str, task_id: str | None
+) -> tuple[str | None, int, str | None]:
     url = f"{get_api_base()}/v1/transcriptions"
     body: dict = {
         "model": get_model(),
-    "file_id": file_id,
-    "client_reference_id": task_id,
+        "file_id": file_id,
+        "client_reference_id": task_id,
         "enable_speaker_diarization": get_enable_diarization(),
         "enable_language_identification": get_enable_language_identification(),
     }
@@ -239,7 +258,9 @@ async def _create_transcription(client: httpx.AsyncClient, file_id: str, task_id
     status = resp.status_code
     if status >= 400:
         try:
-            console.print(f"Soniox REST 创建任务失败：{status} {resp.text}", style="bright_red")
+            console.print(
+                f"Soniox REST 创建任务失败：{status} {resp.text}", style="bright_red"
+            )
         except Exception:
             pass
         return None, status, None
@@ -250,7 +271,9 @@ async def _create_transcription(client: httpx.AsyncClient, file_id: str, task_id
     return obj.get("id"), status, obj.get("status")
 
 
-async def _get_transcription_status(client: httpx.AsyncClient, t_id: str) -> tuple[str | None, int, str | None]:
+async def _get_transcription_status(
+    client: httpx.AsyncClient, t_id: str
+) -> tuple[str | None, int, str | None]:
     url = f"{get_api_base()}/v1/transcriptions/{t_id}"
     resp = await client.get(url)
     status = resp.status_code
@@ -296,7 +319,13 @@ async def transcribe_with_retries(
     t_submit = time.time()
     t_complete = t_submit
 
-    from httpx import ReadTimeout, ConnectTimeout, ConnectError, RemoteProtocolError, HTTPError
+    from httpx import (
+        ReadTimeout,
+        ConnectTimeout,
+        ConnectError,
+        RemoteProtocolError,
+        HTTPError,
+    )
 
     for attempt in range(max_retries):
         # Reset buffer
@@ -315,7 +344,9 @@ async def transcribe_with_retries(
 
         try:
             # 1) Upload to Soniox Files service
-            file_id, up_status = await _upload_audio_file(client, payload_buf, payload_mime)
+            file_id, up_status = await _upload_audio_file(
+                client, payload_buf, payload_mime
+            )
             if not file_id:
                 status_code = up_status
                 if status_code >= 500 or status_code in (408, 429):
@@ -324,7 +355,9 @@ async def transcribe_with_retries(
 
             # 2) Create transcription
             t_submit = time.time()
-            t_id, create_status, init_state = await _create_transcription(client, file_id, task_id)
+            t_id, create_status, init_state = await _create_transcription(
+                client, file_id, task_id
+            )
             if not t_id:
                 status_code = create_status
                 if status_code >= 500 or status_code in (408, 429):
@@ -371,7 +404,14 @@ async def transcribe_with_retries(
             else:
                 break
 
-        except (ReadTimeout, ConnectTimeout, ConnectError, RemoteProtocolError, HTTPError, OSError) as e:
+        except (
+            ReadTimeout,
+            ConnectTimeout,
+            ConnectError,
+            RemoteProtocolError,
+            HTTPError,
+            OSError,
+        ) as e:
             t_complete = time.time()
             try:
                 console.print(
@@ -384,11 +424,13 @@ async def transcribe_with_retries(
         # Retry backoff
         if attempt + 1 >= max_retries:
             try:
-                console.print("已达到最大重试次数，返回当前结果（可能为空）", style="bright_red")
+                console.print(
+                    "已达到最大重试次数，返回当前结果（可能为空）", style="bright_red"
+                )
             except Exception:
                 pass
             break
-        delay = base_delay * (2 ** attempt) + random.uniform(0.0, 0.1)
+        delay = base_delay * (2**attempt) + random.uniform(0.0, 0.1)
         await _sleep(delay)
 
     return text_result, status_code, t_submit, t_complete, _HTTP2_ENABLED

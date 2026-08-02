@@ -13,14 +13,26 @@ class _Logger:
         self.messages.append((message, args))
 
 
-def test_record_input_characters_persists_today_and_logs_each_interval(monkeypatch, tmp_path: Path) -> None:
+def test_record_input_characters_persists_today_and_logs_each_interval(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_path = tmp_path / "State" / "daily_input.json"
     monkeypatch.setattr(daily_input_stats, "state_file_path", lambda: state_path)
     logger = _Logger()
     today = date(2026, 7, 15)
 
-    assert daily_input_stats.record_input_characters("你好ab", log_interval=3, today=today, logger=logger) == 4
-    assert daily_input_stats.record_input_characters("cde", log_interval=3, today=today, logger=logger) == 7
+    assert (
+        daily_input_stats.record_input_characters(
+            "你好ab", log_interval=3, today=today, logger=logger
+        )
+        == 4
+    )
+    assert (
+        daily_input_stats.record_input_characters(
+            "cde", log_interval=3, today=today, logger=logger
+        )
+        == 7
+    )
     assert daily_input_stats.get_today_input_count(today=today) == 7
     assert [args for _, args in logger.messages] == [(3,), (6,)]
     assert json.loads(state_path.read_text(encoding="utf-8"))["character_count"] == 7

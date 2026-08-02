@@ -99,7 +99,10 @@ def stream_reopen():
     with _timed_step("reopen:stream_open"):
         Cosmic.stream = stream_open()
     total_ms = (time.perf_counter() - total_start) * 1000.0
-    _debug_log(f"reopen#{_debug_stream_ops} end total={total_ms:.1f}ms", force=total_ms >= _DEBUG_SLOW_MS)
+    _debug_log(
+        f"reopen#{_debug_stream_ops} end total={total_ms:.1f}ms",
+        force=total_ms >= _DEBUG_SLOW_MS,
+    )
 
 
 def stream_open():

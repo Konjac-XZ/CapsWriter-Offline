@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 
 from PySide6.QtGui import QColor, QTextCursor, QTextDocument
 from PySide6.QtWidgets import QApplication, QPlainTextEdit
@@ -16,7 +17,7 @@ def test_log_widget_uses_plain_text_engine_without_undo_history() -> None:
     app = QApplication.instance() or QApplication([])
     owner = SimpleNamespace()
 
-    GUI.create_text_box(owner)
+    GUI.create_text_box(cast(GUI, owner))
 
     assert isinstance(owner.text_box_client, QPlainTextEdit)
     assert owner.text_box_client.isUndoRedoEnabled() is False

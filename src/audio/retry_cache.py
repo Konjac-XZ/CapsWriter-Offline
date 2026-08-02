@@ -113,7 +113,9 @@ def has_retry_audio() -> bool:
     return get_latest_audio_path() is not None
 
 
-def write_retry_cache(audio_bytes: bytes, mime: str, metadata: dict[str, Any] | None = None) -> Path:
+def write_retry_cache(
+    audio_bytes: bytes, mime: str, metadata: dict[str, Any] | None = None
+) -> Path:
     RETRY_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
     target = latest_audio_path_for_mime(mime)
@@ -130,7 +132,7 @@ def write_retry_cache(audio_bytes: bytes, mime: str, metadata: dict[str, Any] | 
         # keeping a stale WAV next to the current retry audio.
         _remove_file(latest_audio_path_for_mime("audio/wav"))
 
-    metadata_payload = {
+    metadata_payload: dict[str, Any] = {
         "audio_path": str(target),
         "mime": mime_for_path(target),
         "created_at": time.time(),
@@ -140,13 +142,19 @@ def write_retry_cache(audio_bytes: bytes, mime: str, metadata: dict[str, Any] | 
             {
                 "source_wav_path": str(source_wav_path),
                 "source_wav_mime": "audio/wav",
-                "mp3_bitrate": RETRY_MP3_BITRATE if target.suffix.lower() == ".mp3" else None,
+                "mp3_bitrate": RETRY_MP3_BITRATE
+                if target.suffix.lower() == ".mp3"
+                else None,
             }
         )
     if metadata:
         metadata_payload.update(metadata)
-    tmp_meta = RETRY_METADATA_PATH.with_name(f".{RETRY_METADATA_PATH.name}.{time.time_ns()}.tmp")
-    tmp_meta.write_text(json.dumps(metadata_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_meta = RETRY_METADATA_PATH.with_name(
+        f".{RETRY_METADATA_PATH.name}.{time.time_ns()}.tmp"
+    )
+    tmp_meta.write_text(
+        json.dumps(metadata_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     tmp_meta.replace(RETRY_METADATA_PATH)
     return target
 
@@ -163,7 +171,9 @@ def read_retry_request() -> dict[str, Any] | None:
 def write_retry_request() -> dict[str, Any]:
     TMP_DIR.mkdir(parents=True, exist_ok=True)
     payload = {"request_id": time.time_ns(), "created_at": time.time()}
-    tmp = RETRY_REQUEST_PATH.with_name(f".{RETRY_REQUEST_PATH.name}.{time.time_ns()}.tmp")
+    tmp = RETRY_REQUEST_PATH.with_name(
+        f".{RETRY_REQUEST_PATH.name}.{time.time_ns()}.tmp"
+    )
     tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     tmp.replace(RETRY_REQUEST_PATH)
     return payload

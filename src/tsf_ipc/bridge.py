@@ -4,11 +4,25 @@ import asyncio
 import platform
 import uuid
 from dataclasses import dataclass
+from typing import Protocol
 
 from src.infra.config import ClientConfig as Config
 
 from .protocol import Frame, Operation, Status
 from .windows_pipe import WindowsNamedPipeBroker
+
+
+class SpeechTipBroker(Protocol):
+    @property
+    def startup_error(self) -> Exception | None: ...
+
+    def start(self, loop: asyncio.AbstractEventLoop | None = None) -> bool: ...
+
+    def stop(self) -> None: ...
+
+    async def request(self, frame: Frame, timeout: float) -> Frame | None: ...
+
+    def broadcast(self, frame: Frame) -> int: ...
 
 
 @dataclass(slots=True)
@@ -20,7 +34,7 @@ class _CompositionState:
 
 
 class TsfSpeechTipBridge:
-    def __init__(self, broker: WindowsNamedPipeBroker | None = None) -> None:
+    def __init__(self, broker: SpeechTipBroker | None = None) -> None:
         self._broker = broker or WindowsNamedPipeBroker()
         self._state: _CompositionState | None = None
         self._lock = asyncio.Lock()
@@ -70,7 +84,11 @@ class TsfSpeechTipBridge:
 
             if self._state is not None and self._state.captured:
                 self._broker.broadcast(
-                    Frame(Operation.CANCEL, self._state.session_id, self._state.revision + 1)
+                    Frame(
+                        Operation.CANCEL,
+                        self._state.session_id,
+                        self._state.revision + 1,
+                    )
                 )
 
             session_id = uuid.uuid4()
@@ -102,7 +120,9 @@ class TsfSpeechTipBridge:
             if final_text is not None:
                 state.revision += 1
                 self._broker.broadcast(
-                    Frame(Operation.REVISE, state.session_id, state.revision, final_text)
+                    Frame(
+                        Operation.REVISE, state.session_id, state.revision, final_text
+                    )
                 )
             state.revision += 1
             self._broker.broadcast(

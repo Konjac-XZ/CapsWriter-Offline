@@ -50,7 +50,9 @@ def test_windows_parent_probe_never_calls_os_kill(monkeypatch) -> None:
         "kill",
         lambda pid, signal: kill_calls.append((pid, signal)),
     )
-    monkeypatch.setattr(lexicon_editor_process, "_windows_process_exists", lambda pid: pid == 42)
+    monkeypatch.setattr(
+        lexicon_editor_process, "_windows_process_exists", lambda pid: pid == 42
+    )
 
     assert lexicon_editor_process._process_exists(42) is True
     assert lexicon_editor_process._process_exists(41) is False
@@ -63,9 +65,13 @@ def test_windows_process_probe_reports_current_process_alive() -> None:
     assert lexicon_editor_process._windows_process_exists(os.getpid()) is True
 
 
-def test_each_show_command_refreshes_latest_disk_text(monkeypatch, tmp_path: Path) -> None:
+def test_each_show_command_refreshes_latest_disk_text(
+    monkeypatch, tmp_path: Path
+) -> None:
     disk_texts = iter(("words:\n- first\n", "words:\n- second\n"))
-    monkeypatch.setattr(lexicon_editor_process, "read_lexicon_text", lambda: next(disk_texts))
+    monkeypatch.setattr(
+        lexicon_editor_process, "read_lexicon_text", lambda: next(disk_texts)
+    )
     dialog = _DialogStub()
     service = lexicon_editor_process.LexiconEditorService.__new__(
         lexicon_editor_process.LexiconEditorService
@@ -78,19 +84,27 @@ def test_each_show_command_refreshes_latest_disk_text(monkeypatch, tmp_path: Pat
     service._dialog_ready = True
     service._idle_timer = _TimerStub()
 
-    service._command_path.write_text('{"serial": 1, "command": "show"}', encoding="utf-8")
+    service._command_path.write_text(
+        '{"serial": 1, "command": "show"}', encoding="utf-8"
+    )
     service._poll_command()
     dialog.visible = False
-    service._command_path.write_text('{"serial": 2, "command": "show"}', encoding="utf-8")
+    service._command_path.write_text(
+        '{"serial": 2, "command": "show"}', encoding="utf-8"
+    )
     service._poll_command()
 
     assert dialog.prepared_texts == ["words:\n- first\n", "words:\n- second\n"]
     assert dialog.open_count == 2
     assert service._active_serial == 2
-    assert json.loads(service._event_path.read_text(encoding="utf-8"))["event"] == "opened"
+    assert (
+        json.loads(service._event_path.read_text(encoding="utf-8"))["event"] == "opened"
+    )
 
 
-def test_first_show_schedules_lazy_editor_initialization(monkeypatch, tmp_path: Path) -> None:
+def test_first_show_schedules_lazy_editor_initialization(
+    monkeypatch, tmp_path: Path
+) -> None:
     scheduled_callbacks: list[object] = []
     monkeypatch.setattr(
         lexicon_editor_process.QTimer,
@@ -108,7 +122,9 @@ def test_first_show_schedules_lazy_editor_initialization(monkeypatch, tmp_path: 
     service._dialog = None
     service._dialog_ready = False
     service._idle_timer = _TimerStub()
-    service._command_path.write_text('{"serial": 1, "command": "show"}', encoding="utf-8")
+    service._command_path.write_text(
+        '{"serial": 1, "command": "show"}', encoding="utf-8"
+    )
 
     service._poll_command()
 
@@ -117,7 +133,9 @@ def test_first_show_schedules_lazy_editor_initialization(monkeypatch, tmp_path: 
     assert scheduled_callbacks == [(0, service._initialize_dialog)]
 
 
-def test_visible_editor_is_not_overwritten_by_second_show(monkeypatch, tmp_path: Path) -> None:
+def test_visible_editor_is_not_overwritten_by_second_show(
+    monkeypatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(
         lexicon_editor_process,
         "read_lexicon_text",
@@ -134,12 +152,17 @@ def test_visible_editor_is_not_overwritten_by_second_show(monkeypatch, tmp_path:
     service._active_serial = 1
     service._dialog = dialog
     service._idle_timer = _TimerStub()
-    service._command_path.write_text('{"serial": 2, "command": "show"}', encoding="utf-8")
+    service._command_path.write_text(
+        '{"serial": 2, "command": "show"}', encoding="utf-8"
+    )
 
     service._poll_command()
 
     assert dialog.prepared_texts == []
-    assert json.loads(service._event_path.read_text(encoding="utf-8"))["event"] == "already_open"
+    assert (
+        json.loads(service._event_path.read_text(encoding="utf-8"))["event"]
+        == "already_open"
+    )
 
 
 def test_dialog_finish_starts_five_minute_idle_timer(tmp_path: Path) -> None:

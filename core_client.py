@@ -33,10 +33,16 @@ from src.audio.send_audio import retry_latest_audio
 from src.audio.level_publisher import publish_overlay_levels
 from src.audio.stream import stream_close, stream_open
 from src.polish.llm_polish import clear_finalized_history
-from src.polish.vision_context import start_vision_context_service, stop_vision_context_service
+from src.polish.vision_context import (
+    start_vision_context_service,
+    stop_vision_context_service,
+)
 from src.system.empty_working_set import empty_current_working_set
 from src.system.process_cleanup import terminate_python_script_processes
-from src.system.startup_replacement import prepare_replacement_startup, release_startup_slot
+from src.system.startup_replacement import (
+    prepare_replacement_startup,
+    release_startup_slot,
+)
 from src.tsf_ipc import get_tsf_speech_tip_bridge
 
 Cosmic.transcribe_subtitles = bool(sys.argv[1:])
@@ -71,7 +77,9 @@ async def watch_retry_requests():
     while True:
         try:
             payload = read_retry_request()
-            request_id = payload.get("request_id") if isinstance(payload, dict) else None
+            request_id = (
+                payload.get("request_id") if isinstance(payload, dict) else None
+            )
 
             if request_id is not None and request_id != last_request_id:
                 last_request_id = request_id
@@ -102,7 +110,9 @@ async def watch_abandon_requests():
     while True:
         try:
             payload = read_abandon_request()
-            request_id = payload.get("request_id") if isinstance(payload, dict) else None
+            request_id = (
+                payload.get("request_id") if isinstance(payload, dict) else None
+            )
 
             if request_id is not None and request_id != last_request_id:
                 last_request_id = request_id
@@ -126,7 +136,9 @@ async def watch_clear_history_requests():
     while True:
         try:
             payload = read_clear_history_request()
-            request_id = payload.get("request_id") if isinstance(payload, dict) else None
+            request_id = (
+                payload.get("request_id") if isinstance(payload, dict) else None
+            )
 
             if request_id is not None and request_id != last_request_id:
                 last_request_id = request_id
@@ -221,7 +233,10 @@ def init_mic():
             ),
         )
         if not startup_slot_acquired:
-            console.print("无法完成 CapsWriter 后台录音进程替换，本次启动已退出。", style="bright_red")
+            console.print(
+                "无法完成 CapsWriter 后台录音进程替换，本次启动已退出。",
+                style="bright_red",
+            )
             return
     try:
         asyncio.run(main_mic())
