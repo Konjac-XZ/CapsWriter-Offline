@@ -71,7 +71,6 @@ def stop_client():
     exe_name_list = [
         "start_client_gui_admin.exe",
         "start_client_gui.exe",
-        "hint_while_recording.exe",
     ]
 
     for exe_name in exe_name_list:

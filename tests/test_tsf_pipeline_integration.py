@@ -53,6 +53,7 @@ def test_final_asr_and_llm_full_text_revisions_commit_without_legacy_paste(monke
     bridge = FakeTsfBridge()
     typed = []
     finalized = []
+    recorded = []
 
     async def fake_polish(text, *, on_text=None, **_kwargs):
         assert text == "ASR full text"
@@ -86,7 +87,11 @@ def test_final_asr_and_llm_full_text_revisions_commit_without_legacy_paste(monke
     monkeypatch.setattr(pipeline.pangu, "spacing_text", lambda text: text)
     monkeypatch.setattr(pipeline, "type_result", fake_type_result)
     monkeypatch.setattr(pipeline, "record_finalized_text", finalized.append)
-    monkeypatch.setattr(pipeline, "record_input_characters", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        pipeline,
+        "record_input_characters",
+        lambda text, **_kwargs: recorded.append(text),
+    )
     monkeypatch.setattr("src.keyboard.play_music.play_completion_sound", lambda: None)
     monkeypatch.setattr(pipeline.Config, "save_audio", False)
     monkeypatch.setattr(pipeline.Config, "save_markdown", False)
@@ -100,12 +105,14 @@ def test_final_asr_and_llm_full_text_revisions_commit_without_legacy_paste(monke
     assert bridge.commits == [("task-1", "LLM final full text")]
     assert typed == []
     assert finalized == ["LLM final full text"]
+    assert recorded == ["LLM final full text"]
 
 
 def test_full_text_asr_revision_is_not_sent_to_append_only_keyboard_fallback(
     monkeypatch,
 ):
     bridge = RejectingTsfBridge()
+    recorded = []
     message = {
         "task_id": "task-realtime",
         "is_final": False,
@@ -127,9 +134,14 @@ def test_full_text_asr_revision_is_not_sent_to_append_only_keyboard_fallback(
     monkeypatch.setattr(pipeline, "get_tsf_speech_tip_bridge", lambda: bridge)
     monkeypatch.setattr(pipeline, "is_llm_polish_enabled", lambda: True)
     monkeypatch.setattr(pipeline, "regex_replace", lambda text: text)
-    monkeypatch.setattr(pipeline, "record_input_characters", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        pipeline,
+        "record_input_characters",
+        lambda text, **_kwargs: recorded.append(text),
+    )
 
     asyncio.run(pipeline.recv_result())
 
     assert bridge.revisions == [("task-realtime", "已稳定前缀加暂存尾部")]
     assert Cosmic._transcript_had_deltas is False
+    assert recorded == []

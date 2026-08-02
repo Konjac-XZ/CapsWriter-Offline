@@ -54,6 +54,19 @@ def _is_abandoned(task_id: str | None) -> bool:
     )
 
 
+def _transcription_delay(message: dict) -> float:
+    """Return ASR latency after recording stops, excluding recording time."""
+    time_complete = message.get("time_complete", 0)
+    time_stop = message.get("time_stop")
+    time_submit = message.get("time_submit", 0)
+    delay_start = time_stop if time_stop is not None else time_submit
+    delay = time_complete - delay_start
+    if delay < 0 or delay > 600:
+        # 防御性：若时间源混乱，避免显示荒谬时延
+        delay = max(0.0, delay)
+    return delay
+
+
 async def recv_result():
     # 直接从本地结果队列读取（由 send_audio 推送），不再依赖远程 websocket
     try:
@@ -62,10 +75,7 @@ async def recv_result():
             Cosmic.queue_out.task_done()
             text = message.get("text", "")
             raw_asr = text  # ← 保存 ASR 接口返回的原始文本（润色前）
-            delay = message.get("time_complete", 0) - message.get("time_submit", 0)
-            if delay < 0 or delay > 600:
-                # 防御性：若时间源混乱，避免显示荒谬时延
-                delay = max(0.0, delay)
+            delay = _transcription_delay(message)
 
             # 基本标记
             is_final = bool(message.get("is_final"))
@@ -250,7 +260,12 @@ async def recv_result():
                 # 最终：按原逻辑输出，但走剪贴板粘贴
                 # 若此前已有增量转录结果输出，则不再进行最终粘贴，避免重复
                 if current_tid is not None and tsf_bridge.owns_task(current_tid):
-                    await tsf_bridge.commit(current_tid, text)
+                    if await tsf_bridge.commit(current_tid, text):
+                        # TSF 的流式 revision 只是在更新 composition；等最终
+                        # 后处理文本提交成功后再一次性计入，避免重复统计。
+                        record_input_characters(
+                            text, log_interval=Config.daily_input_log_interval
+                        )
                 elif has_incremental_transcript and getattr(Cosmic, "_transcript_had_deltas", False):
                     # 完结时重置计数与标记
                     if hasattr(Cosmic, "_last_transcript_delta_len"):

@@ -10,7 +10,7 @@ def test_qwen_audio_provider_display_names():
     current = manager.get_provider("qwen_audio_3")
 
     assert legacy is not None
-    assert (legacy.name, legacy.type) == ("Qwen Audio Legacy", "qwen-audio-legacy")
+    assert (legacy.name, legacy.type) == ("阿里百炼兼容", "qwen-audio-legacy")
     assert current is not None
     assert (current.name, current.type) == ("阿里百炼", "qwen-audio")
 

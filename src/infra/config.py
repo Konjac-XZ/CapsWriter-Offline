@@ -97,9 +97,6 @@ class ClientConfig:
     play_stop_music: bool = bool(client_cfg.get("play_stop_music", False))
     stop_music_path: Path = Path(str(client_cfg.get("stop_music_path", "")))
     stop_music_volume: str = str(client_cfg.get("stop_music_volume", ""))
-    hint_while_recording_at_edit_position_powered_by_ahk: bool = bool(
-        client_cfg.get("hint_while_recording_at_edit_position_powered_by_ahk", False)
-    )
     show_listening_overlay: bool = bool(client_cfg.get("show_listening_overlay", True))
     daily_input_log_interval: int = max(
         1, int(client_cfg.get("daily_input_log_interval", 1000))

@@ -986,7 +986,7 @@ class GUI(QMainWindow):
             active_index: int | None = None
 
             for i, provider_info in enumerate(providers):
-                display_name = f"{provider_info['name']} ({provider_info['type']})"
+                display_name = provider_info['name']
                 pid = provider_info.get('id')
                 self.provider_combo.addItem(display_name, pid)
 
