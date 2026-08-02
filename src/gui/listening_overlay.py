@@ -12,6 +12,11 @@ STATUS_PREFIXES = ("正在监听", "转录中", "润色中")
 LEVEL_METER_ANIMATION_INTERVAL_MS = 16
 OVERLAY_TIMING_SLOW_MS = 100.0
 OVERLAY_TIMER_GAP_MS = 500.0
+STATUS_PANE_COLORS = {
+    "listening": (20, 24, 28, 230),
+    "transcribing": (166, 111, 0, 235),
+    "polishing": (24, 121, 78, 235),
+}
 
 
 def _elapsed_ms(start: float) -> float:
@@ -21,6 +26,7 @@ def _elapsed_ms(start: float) -> float:
 class LevelMeterFrame(QFrame):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
+        self._background_color = QColor(*STATUS_PANE_COLORS["listening"])
         self._meter_enabled = False
         self._target_level = 0.0
         self._display_level = 0.0
@@ -29,6 +35,10 @@ class LevelMeterFrame(QFrame):
         self._animation_timer = QTimer(self)
         self._animation_timer.timeout.connect(self._tick_level_animation)
         self._animation_timer.setInterval(LEVEL_METER_ANIMATION_INTERVAL_MS)
+
+    def set_background_color(self, color: tuple[int, int, int, int]) -> None:
+        self._background_color = QColor(*color)
+        self.update()
 
     def set_meter_enabled(self, enabled: bool) -> None:
         self._meter_enabled = enabled
@@ -83,7 +93,7 @@ class LevelMeterFrame(QFrame):
 
         rect, pane_path = self._pane_geometry()
 
-        painter.fillPath(pane_path, QColor(20, 24, 28, 230))
+        painter.fillPath(pane_path, self._background_color)
 
         if self._meter_enabled and self._display_level > 0.001:
             fill_rect = QRectF(rect)
@@ -168,10 +178,22 @@ class StatusOverlay(QWidget):
         self.abandon_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.abandon_button.setFixedSize(38, 38)
         self.abandon_button.setToolTip("放弃当前任务")
+        self._set_abandon_button_color(STATUS_PANE_COLORS[self._state])
+        self.abandon_button.clicked.connect(self._request_abandon)
+        layout.addWidget(self.abandon_button)
+
+        self._reserve_stable_width()
+
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._update_elapsed)
+
+    def _set_abandon_button_color(self, color: tuple[int, int, int, int]) -> None:
+        red, green, blue, alpha = color
+        state_background = f"rgba({red}, {green}, {blue}, {alpha})"
         self.abandon_button.setStyleSheet(
             "QPushButton {"
             "color: #ffffff;"
-            "background: rgba(20, 24, 28, 230);"
+            f"background: {state_background};"
             "border: 1px solid rgba(255, 255, 255, 55);"
             "border-radius: 18px;"
             "font-size: 16px;"
@@ -189,17 +211,10 @@ class StatusOverlay(QWidget):
             "}"
             "QPushButton:disabled {"
             "color: #ffffff;"
-            "background: rgba(20, 24, 28, 230);"
+            f"background: {state_background};"
             "border-color: rgba(255, 255, 255, 55);"
             "}"
         )
-        self.abandon_button.clicked.connect(self._request_abandon)
-        layout.addWidget(self.abandon_button)
-
-        self._reserve_stable_width()
-
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._update_elapsed)
 
     def paintEvent(self, event) -> None:
         super().paintEvent(event)
@@ -295,6 +310,8 @@ class StatusOverlay(QWidget):
             return
         previous_state = self._state
         self._state = state
+        self.status_pane.set_background_color(STATUS_PANE_COLORS[state])
+        self._set_abandon_button_color(STATUS_PANE_COLORS[state])
         step_start = time.perf_counter()
         self.set_text_prefix(self._STATE_LABELS[state])
         text_ms = _elapsed_ms(step_start)
