@@ -280,7 +280,7 @@ class TextboxContextFormattingTest(unittest.TestCase):
             {"type": "disabled"},
         )
 
-    def test_polish_text_strips_duplicate_prefix_from_textbox_context(self) -> None:
+    def test_polish_text_keeps_duplicate_prefix_while_removal_is_disabled(self) -> None:
         import asyncio
 
         from src.polish.llm_polish import polish_text
@@ -326,7 +326,7 @@ class TextboxContextFormattingTest(unittest.TestCase):
 
             result = asyncio.run(polish_text("一开始讨论的那锅稀汤好太多了。"))
 
-        self.assertEqual(result, "一开始讨论的那锅稀汤好太多了。")
+        self.assertEqual(result, "这比我们一开始讨论的那锅稀汤好太多了。")
 
     def test_polish_stream_callbacks_receive_delta_and_accumulated_text(self) -> None:
         import asyncio

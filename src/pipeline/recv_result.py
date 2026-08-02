@@ -3,7 +3,11 @@ import os
 import time
 import pangu
 from src.infra.cosmic import Cosmic, console
-from src.polish.llm_polish import polish_text, record_finalized_text
+from src.polish.llm_polish import (
+    is_llm_polish_enabled,
+    polish_text,
+    record_finalized_text,
+)
 from src.pipeline.regex_replace import regex_replace
 from src.audio.rename_audio import rename_audio
 from src.pipeline.strip_punc import strip_punc
@@ -13,6 +17,7 @@ from src.infra.config import ClientConfig as Config
 from src.infra.gui_output import gui_event
 from src.infra.daily_input_stats import record_input_characters
 from src.polish.llm_polish import should_polish_text
+from src.tsf_ipc import get_tsf_speech_tip_bridge
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -65,6 +70,9 @@ async def recv_result():
             # 基本标记
             is_final = bool(message.get("is_final"))
             is_transcript_delta = bool(message.get("is_transcript_delta", False))
+            is_full_text_revision = (
+                message.get("transcript_revision_mode") == "full_text"
+            )
             has_incremental_transcript = bool(
                 message.get("has_incremental_transcript", message.get("stream", False))
             )
@@ -73,10 +81,12 @@ async def recv_result():
             if current_tid is not None:
                 current_tid = str(current_tid)
             polish_prefetch_task = message.get("polish_prefetch_task")
+            tsf_bridge = get_tsf_speech_tip_bridge()
 
             if current_tid is not None:
                 Cosmic.active_task_id = current_tid
             if _is_abandoned(current_tid):
+                await tsf_bridge.cancel(current_tid)
                 if isinstance(polish_prefetch_task, asyncio.Task) and not polish_prefetch_task.done():
                     polish_prefetch_task.cancel()
                 _clear_abandoned_task(current_tid)
@@ -93,10 +103,22 @@ async def recv_result():
             if is_final:
                 console.print(f"转录原文：{raw_asr}", soft_wrap=True)
                 _t_polish = time.monotonic()
-                if should_polish_text(text):
+                polish_enabled_for_text = should_polish_text(text)
+                if polish_enabled_for_text:
                     _emit_status_overlay("show", "polishing")
+                if current_tid is not None and is_llm_polish_enabled():
+                    await tsf_bridge.begin_or_revise(current_tid, text)
+
+                async def on_polished_text(revised_text: str) -> None:
+                    if current_tid is not None and tsf_bridge.owns_task(current_tid):
+                        await tsf_bridge.begin_or_revise(current_tid, revised_text)
+
                 polish_task = asyncio.create_task(
-                    polish_text(text, prepared_context=polish_prefetch_task)
+                    polish_text(
+                        text,
+                        on_text=on_polished_text if polish_enabled_for_text else None,
+                        prepared_context=polish_prefetch_task,
+                    )
                 )
                 Cosmic.active_polish_task = polish_task
                 try:
@@ -116,6 +138,7 @@ async def recv_result():
                 _polish_elapsed = 0.0
 
             if _is_abandoned(current_tid):
+                await tsf_bridge.cancel(current_tid)
                 _clear_abandoned_task(current_tid)
                 if hide_status_overlay_when_done:
                     _emit_status_overlay("hide")
@@ -168,8 +191,10 @@ async def recv_result():
                         style="dim",
                     )
                 console.line()
-            else:
-                # 轻量日志：帮助定位增量转录结果过程中是否有数据
+            elif os.getenv("CAPSWRITER_DEBUG_TRANSCRIPT_DELTA"):
+                # Opt-in diagnostics only. Realtime providers send cumulative
+                # full-text hypotheses, so logging each event can copy and
+                # render the entire growing transcript repeatedly.
                 try:
                     last_len_dbg = getattr(Cosmic, "_last_transcript_delta_len", 0)
                     inc_dbg = text[last_len_dbg:]
@@ -210,12 +235,23 @@ async def recv_result():
                 Cosmic._transcript_had_deltas = False
 
             if is_transcript_delta:
-                # 增量：直接键入原文增量
-                await type_transcript_delta(text)
+                # 润色开启时，优先由 TSF Composition 承载可修订的 full text。
+                # BEGIN 未获得前台 TIP 的 APPLIED ACK 时保留旧的键入回退。
+                tsf_owned = False
+                if current_tid is not None and is_llm_polish_enabled():
+                    tsf_owned = await tsf_bridge.begin_or_revise(current_tid, text)
+                if not tsf_owned:
+                    # A full-text hypothesis may revise its unstable suffix.
+                    # The legacy keyboard fallback can only append, so suppress
+                    # intermediate updates and let the final result paste once.
+                    if not is_full_text_revision:
+                        await type_transcript_delta(text)
             else:
                 # 最终：按原逻辑输出，但走剪贴板粘贴
                 # 若此前已有增量转录结果输出，则不再进行最终粘贴，避免重复
-                if has_incremental_transcript and getattr(Cosmic, "_transcript_had_deltas", False):
+                if current_tid is not None and tsf_bridge.owns_task(current_tid):
+                    await tsf_bridge.commit(current_tid, text)
+                elif has_incremental_transcript and getattr(Cosmic, "_transcript_had_deltas", False):
                     # 完结时重置计数与标记
                     if hasattr(Cosmic, "_last_transcript_delta_len"):
                         Cosmic._last_transcript_delta_len = 0

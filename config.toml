@@ -68,6 +68,13 @@ restore_clipboard_after_paste = false
 # 模拟粘贴后是否恢复剪贴板
 # 设为 false 时，识别结果会保留在剪贴板中，Ditto 可捕捉，之后 Ctrl+V 也能继续粘贴
 
+# 实验功能：把润色开启时的 ASR/LLM full-text revision 发送给 TSF Speech TIP，
+# 由目标文本框中的 Composition 承载临时文本。必须先构建、注册并启用原生 TIP。
+tsf_speech_tip_enabled = true
+
+# 首次 BEGIN 等待前台 TIP 确认接管的时间；超时后该次输入安全回退到现有键盘/粘贴路径。
+tsf_speech_tip_ack_timeout_ms = 150
+
 daily_input_log_interval = 1000
 # 今日累计上屏字符数每达到此值时写入一条诊断日志；最小值为 1
 

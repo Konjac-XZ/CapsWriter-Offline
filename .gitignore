@@ -45,6 +45,11 @@ config_backup.toml
 config
 
 build/
+native/tsf_speech_tip/build-*/
+native/tsf_speech_tip/installed/
+native/tsf_speech_tip/signing/*.cer
+native/tsf_speech_tip/signing/*.pfx
+native/tsf_speech_tip/signing/*.p12
 start_client_gui.exe
 
 site-packages/

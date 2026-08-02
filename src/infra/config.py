@@ -66,6 +66,12 @@ class ClientConfig:
     restore_clipboard_after_paste: bool = bool(
         client_cfg.get("restore_clipboard_after_paste", False)
     )
+    tsf_speech_tip_enabled: bool = bool(
+        client_cfg.get("tsf_speech_tip_enabled", False)
+    )
+    tsf_speech_tip_ack_timeout_ms: int = max(
+        10, int(client_cfg.get("tsf_speech_tip_ack_timeout_ms", 150))
+    )
     save_audio: bool = bool(client_cfg.get("save_audio", False))
     save_markdown: bool = bool(client_cfg.get("save_markdown", False))
     audio_name_len: int = int(client_cfg.get("audio_name_len", 0))

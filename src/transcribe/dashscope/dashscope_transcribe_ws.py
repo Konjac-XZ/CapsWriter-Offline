@@ -400,6 +400,11 @@ class DashScopeRealtimeSession(StreamingTranscriptionSession):
                 "time_complete": time.time(),
                 "source": "mic",
                 "stream": True,
+                # Qwen-ASR Realtime returns a finalized prefix in `text` and a
+                # revisable tail in `stash`. `_extract_text_fragment` combines
+                # them into the current full hypothesis, not an append-only
+                # character delta.
+                "transcript_revision_mode": "full_text",
             }
         )
 

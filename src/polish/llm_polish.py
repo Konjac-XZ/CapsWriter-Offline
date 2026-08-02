@@ -954,10 +954,10 @@ async def polish_text(
             polished_text = polished.strip()
             if is_smart_quotes_enabled():
                 polished_text = normalize_zh_cn_smart_quotes(polished_text)
-            polished_text = remove_textbox_duplicate_prefix(
-                polished_text,
-                context.captured_textbox_context,
-            )
+            # TODO: Re-enable duplicate-prefix removal only after it uses a
+            # pre-TSF-composition textbox snapshot. Capturing context after TSF
+            # inserts the current ASR text can remove the entire polished result
+            # and leave only newly added punctuation.
             # console.print(
             #     f"[LLM 润色] 润色完成，HTTP 耗时={_http_elapsed:.2f}s  输入长度={len(text)}  输出长度={len(polished.strip())}",
             #     style="dim",

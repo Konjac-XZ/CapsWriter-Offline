@@ -37,6 +37,7 @@ from src.polish.vision_context import start_vision_context_service, stop_vision_
 from src.system.empty_working_set import empty_current_working_set
 from src.system.process_cleanup import terminate_python_script_processes
 from src.system.startup_replacement import prepare_replacement_startup, release_startup_slot
+from src.tsf_ipc import get_tsf_speech_tip_bridge
 
 Cosmic.transcribe_subtitles = bool(sys.argv[1:])
 
@@ -153,6 +154,7 @@ async def main_mic():
     abandon_watcher_task = None
     clear_history_watcher_task = None
     level_publisher_task = None
+    tsf_bridge = get_tsf_speech_tip_bridge()
 
     # 打开音频流
     Cosmic.stream = stream_open()
@@ -172,12 +174,21 @@ async def main_mic():
     abandon_watcher_task = asyncio.create_task(watch_abandon_requests())
     clear_history_watcher_task = asyncio.create_task(watch_clear_history_requests())
     level_publisher_task = asyncio.create_task(publish_overlay_levels())
+    if tsf_bridge.enabled:
+        if tsf_bridge.start(Cosmic.loop):
+            console.print("TSF Speech TIP 实验 IPC 已启动", style="bright_black")
+        else:
+            console.print(
+                f"TSF Speech TIP 实验 IPC 启动失败：{tsf_bridge.startup_error}",
+                style="bright_yellow",
+            )
     console.print("已就绪", style="green")
 
     try:
         while True:
             await recv_result()
     finally:
+        tsf_bridge.stop()
         if level_publisher_task is not None:
             level_publisher_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):

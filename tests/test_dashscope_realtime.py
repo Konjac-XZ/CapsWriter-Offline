@@ -1,6 +1,9 @@
+import asyncio
+
 from src.transcribe.dashscope import settings
 from src.transcribe.dashscope import dashscope_transcribe_ws as realtime
-from src.transcribe.providers import DashScopeProvider
+from src.infra.cosmic import Cosmic
+from src.transcribe.providers import DashScopeProvider, make_provider
 
 
 def test_realtime_model_defaults_from_qwen3_flash(monkeypatch):
@@ -106,6 +109,32 @@ def test_extract_text_combines_realtime_text_and_stash():
     }
 
     assert realtime._extract_text_fragment(message) == "临时识别"
+
+
+def test_extract_text_combines_finalized_prefix_and_revisable_stash():
+    message = {
+        "type": "conversation.item.input_audio_transcription.delta",
+        "text": "这是已经稳定的",
+        "stash": "暂存为本",
+    }
+
+    assert realtime._extract_text_fragment(message) == "这是已经稳定的暂存为本"
+
+
+def test_realtime_delta_is_marked_as_full_text_revision(monkeypatch):
+    async def run_case():
+        queue = asyncio.Queue()
+        monkeypatch.setattr(Cosmic, "queue_out", queue, raising=False)
+        session = realtime.DashScopeRealtimeSession("task", 1.0)
+
+        await session._emit_delta("累计全文")
+        return await queue.get()
+
+    message = asyncio.run(run_case())
+
+    assert message["text"] == "累计全文"
+    assert message["is_transcript_delta"] is True
+    assert message["transcript_revision_mode"] == "full_text"
 
 
 def test_realtime_finish_sends_commit_and_session_finish(monkeypatch):
@@ -260,3 +289,7 @@ def test_dashscope_streaming_input_requires_realtime_enabled(monkeypatch):
     monkeypatch.setattr(settings, "should_use_realtime", lambda: False)
 
     assert DashScopeProvider().supports_streaming_input() is False
+
+
+def test_make_provider_supports_qwen_audio_legacy_name():
+    assert isinstance(make_provider("qwen-audio-legacy"), DashScopeProvider)
