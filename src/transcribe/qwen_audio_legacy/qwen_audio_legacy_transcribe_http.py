@@ -1,4 +1,4 @@
-"""DashScope Qwen ASR HTTP integration."""
+"""Qwen Audio Legacy final-file integration."""
 import atexit
 import base64
 import io
@@ -9,14 +9,14 @@ from typing import Any, Dict, Tuple
 import httpx
 
 from src.infra.cosmic import console
-from src.transcribe.dashscope import settings
-from src.transcribe.dashscope.response_parser import (
+from src.transcribe.qwen_audio_legacy import settings
+from src.transcribe.qwen_audio_legacy.response_parser import (
     extract_transcript,
     payload_preview,
     sdk_response_preview,
 )
-from src.transcribe.dashscope.sdk_transport import send_with_sdk
-from src.transcribe.dashscope.settings import (
+from src.transcribe.qwen_audio_legacy.sdk_transport import send_with_sdk
+from src.transcribe.qwen_audio_legacy.settings import (
     build_headers,
     build_limits,
     build_messages,
@@ -92,7 +92,7 @@ def _log_request_event(
     if not should_show_debug_logs():
         return
 
-    parts = [f"[dashscope:{request_id}]", event]
+    parts = [f"[qwen-audio-legacy:{request_id}]", event]
     if attempt is not None:
         parts.append(f"attempt={attempt}")
     if client is not None:
@@ -116,7 +116,7 @@ async def close_http_client(reason: str = "manual") -> None:
         return
     try:
         if should_show_debug_logs():
-            console.print(f"DashScope persistent session closed: {reason}")
+            console.print(f"qwen-audio-legacy persistent session closed: {reason}")
     except Exception:
         pass
     try:
@@ -143,13 +143,20 @@ async def get_http_client() -> httpx.AsyncClient:
         _HTTP_CLIENT = client
         try:
             if should_show_debug_logs():
-                console.print(f"DashScope persistent session ready; HTTP/2={'ON' if http2 else 'OFF'}")
+                console.print(
+                    "qwen-audio-legacy persistent session ready; "
+                    f"HTTP/2={'ON' if http2 else 'OFF'}"
+                )
         except Exception:
             pass
     else:
         try:
             if should_show_debug_logs():
-                console.print(f"DashScope one-shot session mode; HTTP/2={'ON' if http2 else 'OFF'}", style="bright_yellow")
+                console.print(
+                    "qwen-audio-legacy one-shot session mode; "
+                    f"HTTP/2={'ON' if http2 else 'OFF'}",
+                    style="bright_yellow",
+                )
         except Exception:
             pass
     return client
@@ -169,7 +176,7 @@ def _atexit_close_client() -> None:
             loop = None
         try:
             if should_show_debug_logs():
-                console.print("DashScope persistent session closed: atexit")
+                console.print("qwen-audio-legacy persistent session closed: atexit")
         except Exception:
             pass
         if loop and loop.is_running():
@@ -261,9 +268,15 @@ async def _send_once(
             except Exception:
                 payload_data = response.text
             transcript, meta = extract_transcript(payload_data)
-            meta["dashscope_endpoint"] = endpoint
+            meta["qwen_audio_legacy_endpoint"] = endpoint
             return transcript, response.status_code, t_complete, meta, None
-    return "", last_status, t_complete, {"dashscope_error": last_error}, last_error
+    return (
+        "",
+        last_status,
+        t_complete,
+        {"qwen_audio_legacy_error": last_error},
+        last_error,
+    )
 
 
 async def _send_with_sdk(
@@ -327,8 +340,12 @@ async def transcribe_with_retries(
                 )
             transport_meta = {"http2": _HTTP2_ENABLED, **meta}
             if err_text and _should_retry(status_code):
-                if prefer_sdk and isinstance(meta, dict) and meta.get("dashscope_sdk_import_error"):
-                    import_error = str(meta.get("dashscope_sdk_import_error"))
+                if prefer_sdk and isinstance(meta, dict) and meta.get(
+                    "qwen_audio_legacy_sdk_import_error"
+                ):
+                    import_error = str(
+                        meta.get("qwen_audio_legacy_sdk_import_error")
+                    )
                     _log_request_event(
                         request_id,
                         "sdk_unavailable",
@@ -342,8 +359,8 @@ async def transcribe_with_retries(
                     text_result, status_code, t_complete, meta, err_text = await _send_once(
                         client, payload_buf, payload_mime, request_id, attempt + 1
                     )
-                    meta["dashscope_sdk_import_error"] = import_error
-                    meta["dashscope_sdk_fallback"] = "http"
+                    meta["qwen_audio_legacy_sdk_import_error"] = import_error
+                    meta["qwen_audio_legacy_sdk_fallback"] = "http"
                     transport_meta = {"http2": _HTTP2_ENABLED, **meta}
                 if err_text and _should_retry(status_code):
                     raise HTTPError(err_text)
@@ -361,21 +378,27 @@ async def transcribe_with_retries(
                 request_id,
                 "success",
                 client=client,
-                endpoint=meta.get("dashscope_endpoint") if isinstance(meta, dict) else None,
+                endpoint=(
+                    meta.get("qwen_audio_legacy_endpoint")
+                    if isinstance(meta, dict)
+                    else None
+                ),
                 attempt=attempt + 1,
                 status=status_code,
                 elapsed_ms=(t_complete - t_submit) * 1000,
                 detail=success_detail,
             )
-            if not text_result and isinstance(meta, dict) and meta.get("dashscope_payload_preview"):
+            if not text_result and isinstance(meta, dict) and meta.get(
+                "qwen_audio_legacy_payload_preview"
+            ):
                 _log_request_event(
                     request_id,
                     "empty_payload",
                     client=client,
-                    endpoint=meta.get("dashscope_endpoint"),
+                    endpoint=meta.get("qwen_audio_legacy_endpoint"),
                     attempt=attempt + 1,
                     status=status_code,
-                    detail=str(meta.get("dashscope_payload_preview")),
+                    detail=str(meta.get("qwen_audio_legacy_payload_preview")),
                 )
             break
         except (ReadTimeout, ConnectTimeout, ConnectError, RemoteProtocolError, HTTPError, OSError) as exc:
@@ -391,7 +414,8 @@ async def transcribe_with_retries(
             )
             try:
                 console.print(
-                    f"DashScope network issue (attempt {attempt + 1}/{max_retries}): {exc}",
+                    "qwen-audio-legacy network issue "
+                    f"(attempt {attempt + 1}/{max_retries}): {exc}",
                     style="bright_yellow",
                 )
             except Exception:
@@ -405,7 +429,10 @@ async def transcribe_with_retries(
                     pass
         if attempt + 1 >= max_retries:
             try:
-                console.print("DashScope reached max retry count", style="bright_red")
+                console.print(
+                    "qwen-audio-legacy reached max retry count",
+                    style="bright_red",
+                )
             except Exception:
                 pass
             break
@@ -418,7 +445,8 @@ async def transcribe_with_retries(
         try:
             level = "bright_yellow" if status_code and status_code < 500 else "bright_red"
             console.print(
-                f"DashScope returned empty transcript (status={status_code}).",
+                "qwen-audio-legacy returned empty transcript "
+                f"(status={status_code}).",
                 style=level,
             )
         except Exception:

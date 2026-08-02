@@ -149,7 +149,7 @@ def _qwen_asr_context_enabled() -> bool:
             "alibaba_qwen_audio_3",
         }:
             return False
-        from src.transcribe.qwen_audio_3.qwen_audio_3_transcribe_http import (
+        from src.transcribe.qwen_audio.qwen_audio_transcribe_http import (
             should_use_asr_context,
         )
 
@@ -162,7 +162,7 @@ def _qwen_asr_history_settings() -> tuple[bool, int]:
     if not _qwen_asr_context_enabled():
         return False, 0
     try:
-        from src.transcribe.qwen_audio_3.qwen_audio_3_transcribe_http import (
+        from src.transcribe.qwen_audio.qwen_audio_transcribe_http import (
             get_asr_history_max_messages,
             should_use_asr_history,
         )
@@ -176,7 +176,7 @@ def _qwen_asr_textbox_enabled() -> bool:
     if not _qwen_asr_context_enabled():
         return False
     try:
-        from src.transcribe.qwen_audio_3.qwen_audio_3_transcribe_http import (
+        from src.transcribe.qwen_audio.qwen_audio_transcribe_http import (
             should_use_asr_textbox,
         )
 

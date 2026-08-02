@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from src.audio import send_audio
 from src.polish import llm_polish
 from src.polish.textbox_context import TextBoxContext
-from src.transcribe.qwen_audio_3 import qwen_audio_3_transcribe_http as qwen_audio
+from src.transcribe.qwen_audio import qwen_audio_transcribe_http as qwen_audio
 
 
 def _enable_context(monkeypatch):
@@ -136,7 +136,7 @@ def test_asr_history_records_even_when_polish_history_is_disabled(monkeypatch):
 
 
 def test_asr_context_timeout_does_not_cancel_shared_capture(monkeypatch):
-    monkeypatch.setattr(send_audio, "_is_qwen_audio_3_provider", lambda: True)
+    monkeypatch.setattr(send_audio, "_is_qwen_audio_provider", lambda: True)
     monkeypatch.setattr(qwen_audio, "should_use_asr_context", lambda: True)
     monkeypatch.setattr(
         qwen_audio,
@@ -167,7 +167,7 @@ def test_submit_payload_passes_shared_context_to_qwen(monkeypatch):
     marker = object()
     received = {}
 
-    monkeypatch.setattr(send_audio, "_is_qwen_audio_3_provider", lambda: True)
+    monkeypatch.setattr(send_audio, "_is_qwen_audio_provider", lambda: True)
     monkeypatch.setattr(
         send_audio,
         "_await_qwen_asr_context",

@@ -28,7 +28,7 @@ dependencies = [
     "pangu==4.0.6.1",
     "replicate==0.31.0",
     "PyYAML==6.0.2",
-    "dashscope>=1.25.3",
+    "dashscope==1.26.5",
     "cn2an>=0.5.23",
     "ruff>=0.15.10",
     "ty>=0.0.29",

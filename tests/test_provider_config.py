@@ -3,14 +3,14 @@ import yaml
 from src.provider.provider_config import ProviderManager
 
 
-def test_renamed_alibaba_provider_display_names():
+def test_qwen_audio_provider_display_names():
     manager = ProviderManager()
 
     legacy = manager.get_provider("alibabacloud")
     current = manager.get_provider("qwen_audio_3")
 
     assert legacy is not None
-    assert (legacy.name, legacy.type) == ("阿里百炼兼容", "qwen-audio-legacy")
+    assert (legacy.name, legacy.type) == ("Qwen Audio Legacy", "qwen-audio-legacy")
     assert current is not None
     assert (current.name, current.type) == ("阿里百炼", "qwen-audio")
 
@@ -59,7 +59,7 @@ def test_update_provider_setting_persists_yaml_and_memory(tmp_path):
             {
                 "name": "阿里百炼",
                 "type": "dashscope",
-                "description": "DashScope test provider",
+                "description": "Qwen Audio Legacy test provider",
                 "enabled": True,
                 "settings": {
                     "model": "qwen3-asr-flash",

@@ -624,7 +624,7 @@ def _log_request_payload(request_body: dict[str, Any]) -> None:
             indent=2,
         )
         console.print(
-            f"[qwen-audio-3][request-payload; audio omitted]\n{payload_text}",
+            f"[qwen-audio][request-payload; audio omitted]\n{payload_text}",
             style="bright_black",
         )
     except Exception:
@@ -660,7 +660,7 @@ def extract_transcript(payload: Any) -> str:
 
 def _response_metadata(payload: Any, *, audio_bytes: int, audio_format: str) -> dict[str, Any]:
     meta: dict[str, Any] = {
-        "provider": "qwen_audio_3",
+        "provider": "qwen-audio",
         "audio_bytes": audio_bytes,
         "audio_format": audio_format,
     }
@@ -731,7 +731,7 @@ async def transcribe_with_retries(
             0,
             now,
             now,
-            {"provider": "qwen_audio_3", "http2": False, "error": error},
+            {"provider": "qwen-audio", "http2": False, "error": error},
         )
 
     try:
@@ -751,7 +751,7 @@ async def transcribe_with_retries(
         error = str(exc)
         _report_error(error)
         return "", 0, now, time.time(), {
-            "provider": "qwen_audio_3",
+            "provider": "qwen-audio",
             "http2": False,
             "error": error,
         }
@@ -763,7 +763,7 @@ async def transcribe_with_retries(
     t_submit = now
     t_complete = now
     meta: dict[str, Any] = {
-        "provider": "qwen_audio_3",
+        "provider": "qwen-audio",
         "audio_bytes": audio_bytes,
         "encoded_audio_bytes": encoded_audio_bytes,
         "audio_format": audio_format,

@@ -40,7 +40,9 @@ def _emit_status_overlay(action: str, state: str | None = None) -> None:
 
 def _realtime_debug_enabled() -> bool:
     try:
-        from src.transcribe.dashscope.settings import should_show_realtime_logs
+        from src.transcribe.qwen_audio_legacy.settings import (
+            should_show_realtime_logs,
+        )
 
         return should_show_realtime_logs()
     except Exception:
@@ -163,7 +165,7 @@ async def _submit_payload(
 
     context_task = polish_prefetch_task
     owns_context_task = False
-    if _is_qwen_audio_3_provider() and context_task is None:
+    if _is_qwen_audio_provider() and context_task is None:
         context_task = asyncio.create_task(
             prefetch_request_context(),
             name=f"request_context:{task_id}",
@@ -250,7 +252,7 @@ def _active_provider_kind() -> str:
     return os.getenv("TRANSCRIBE_PROVIDER", "openai").strip().lower()
 
 
-def _is_qwen_audio_3_provider() -> bool:
+def _is_qwen_audio_provider() -> bool:
     return _active_provider_kind() in {
         "qwen-audio",
         "qwen_audio_3",
@@ -263,10 +265,10 @@ def _is_qwen_audio_3_provider() -> bool:
 async def _await_qwen_asr_context(
     context_task: asyncio.Task | None,
 ) -> tuple[object | None, bool]:
-    if not _is_qwen_audio_3_provider() or context_task is None:
+    if not _is_qwen_audio_provider() or context_task is None:
         return None, False
     try:
-        from src.transcribe.qwen_audio_3.qwen_audio_3_transcribe_http import (
+        from src.transcribe.qwen_audio.qwen_audio_transcribe_http import (
             get_asr_context_capture_timeout_seconds,
             should_use_asr_context,
         )
@@ -294,7 +296,9 @@ def _create_streaming_session(task_id: str, time_start: float) -> StreamingTrans
     if not provider.supports_streaming_input():
         return None
     try:
-        from src.transcribe.dashscope.settings import should_show_realtime_logs
+        from src.transcribe.qwen_audio_legacy.settings import (
+            should_show_realtime_logs,
+        )
 
         if should_show_realtime_logs():
             console.print(f"启用实时转写链路：provider={provider.name()} task_id={task_id}", style="bright_black")
@@ -358,7 +362,9 @@ async def _gather_audio_once(
                     await streaming_session.send_audio(data)
                     streamed_chunks += 1
                     try:
-                        from src.transcribe.dashscope.settings import should_show_realtime_logs
+                        from src.transcribe.qwen_audio_legacy.settings import (
+                            should_show_realtime_logs,
+                        )
 
                         if should_show_realtime_logs() and (streamed_chunks == 1 or streamed_chunks % 20 == 0):
                             console.print(

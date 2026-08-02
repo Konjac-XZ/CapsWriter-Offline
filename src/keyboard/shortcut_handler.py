@@ -30,7 +30,9 @@ def _debug_enabled(force: bool = False) -> bool:
     if force:
         return True
     try:
-        from src.transcribe.dashscope.settings import should_show_realtime_logs
+        from src.transcribe.qwen_audio_legacy.settings import (
+            should_show_realtime_logs,
+        )
 
         return should_show_realtime_logs()
     except Exception:

@@ -1,4 +1,4 @@
-"""DashScope response parsing helpers."""
+"""Qwen Audio Legacy response parsing helpers."""
 import json
 from typing import Any, Dict, List, Tuple
 
@@ -133,11 +133,11 @@ def extract_transcript(payload: Any) -> Tuple[str, Dict[str, Any]]:
     else:
         text = ""
 
-    meta = {"dashscope_request_id": request_id}
+    meta = {"qwen_audio_legacy_request_id": request_id}
     if message:
-        meta["dashscope_message"] = message
+        meta["qwen_audio_legacy_message"] = message
     if not text:
         preview = payload_preview(payload)
         if preview:
-            meta["dashscope_payload_preview"] = preview
+            meta["qwen_audio_legacy_payload_preview"] = preview
     return text, meta

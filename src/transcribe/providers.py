@@ -174,12 +174,12 @@ class ElevenLabsProvider(TranscriptionProvider):
         return text_result, status_code, t_submit, t_complete, {"http2": http2_flag}
 
 
-class DashScopeProvider(TranscriptionProvider):
+class QwenAudioLegacyProvider(TranscriptionProvider):
     def name(self) -> str:
-        return "dashscope"
+        return "qwen-audio-legacy"
 
     def supports_streaming_input(self) -> bool:
-        from src.transcribe.dashscope.settings import should_use_realtime
+        from src.transcribe.qwen_audio_legacy.settings import should_use_realtime
 
         return should_use_realtime()
 
@@ -188,9 +188,11 @@ class DashScopeProvider(TranscriptionProvider):
         task_id: str,
         time_start: float,
     ) -> StreamingTranscriptionSession:
-        from src.transcribe.dashscope.dashscope_transcribe_ws import DashScopeRealtimeSession
+        from src.transcribe.qwen_audio_legacy.qwen_audio_legacy_transcribe_sdk import (
+            QwenAudioLegacyRealtimeSession,
+        )
 
-        return DashScopeRealtimeSession(task_id, time_start)
+        return QwenAudioLegacyRealtimeSession(task_id, time_start)
 
     async def transcribe(
         self,
@@ -202,11 +204,17 @@ class DashScopeProvider(TranscriptionProvider):
         max_retries: int,
         base_delay: float,
     ) -> Tuple[str, int, float, float, Dict[str, Any]]:
-        from src.transcribe.dashscope.dashscope_transcribe_http import (
-            transcribe_with_retries as dashscope_transcribe,
+        from src.transcribe.qwen_audio_legacy.qwen_audio_legacy_transcribe_http import (
+            transcribe_with_retries as qwen_audio_legacy_transcribe,
         )
 
-        text_result, status_code, t_submit, t_complete, transport_meta = await dashscope_transcribe(
+        (
+            text_result,
+            status_code,
+            t_submit,
+            t_complete,
+            transport_meta,
+        ) = await qwen_audio_legacy_transcribe(
             payload_buf,
             payload_mime,
             task_id,
@@ -218,11 +226,29 @@ class DashScopeProvider(TranscriptionProvider):
         return text_result, status_code, t_submit, t_complete, transport_meta
 
 
-class QwenAudio3Provider(TranscriptionProvider):
-    """Qwen Audio 3.0 synchronous HTTP transcription provider."""
+class QwenAudioProvider(TranscriptionProvider):
+    """Qwen Audio 3.0 streaming SDK provider with HTTP fallback."""
 
     def name(self) -> str:
-        return "qwen_audio_3"
+        return "qwen-audio"
+
+    def supports_streaming_input(self) -> bool:
+        from src.transcribe.qwen_audio.qwen_audio_transcribe_sdk import (
+            should_use_realtime,
+        )
+
+        return should_use_realtime()
+
+    def create_streaming_session(
+        self,
+        task_id: str,
+        time_start: float,
+    ) -> StreamingTranscriptionSession:
+        from src.transcribe.qwen_audio.qwen_audio_transcribe_sdk import (
+            QwenAudioStreamingSession,
+        )
+
+        return QwenAudioStreamingSession(task_id, time_start)
 
     async def transcribe(
         self,
@@ -235,7 +261,7 @@ class QwenAudio3Provider(TranscriptionProvider):
         base_delay: float,
         request_context: Any = None,
     ) -> Tuple[str, int, float, float, Dict[str, Any]]:
-        from src.transcribe.qwen_audio_3.qwen_audio_3_transcribe_http import (
+        from src.transcribe.qwen_audio.qwen_audio_transcribe_http import (
             transcribe_with_retries,
         )
 
@@ -380,7 +406,7 @@ def make_provider(kind: str) -> TranscriptionProvider:
     if kind in ("elevenlabs", "eleven-labs", "xi"):
         return ElevenLabsProvider()
     if kind in ("qwen-audio-legacy", "dashscope", "alibabacloud"):
-        return DashScopeProvider()
+        return QwenAudioLegacyProvider()
     if kind in (
         "qwen-audio",
         "qwen_audio_3",
@@ -388,7 +414,7 @@ def make_provider(kind: str) -> TranscriptionProvider:
         "qwen_audio",
         "alibaba_qwen_audio_3",
     ):
-        return QwenAudio3Provider()
+        return QwenAudioProvider()
     if kind in ("soniox", "soniox-rest", "soniox_http"):
         return SonioxProvider()
     if kind in ("gemini", "google-gemini", "google"):

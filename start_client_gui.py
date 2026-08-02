@@ -329,7 +329,7 @@ class GUI(QMainWindow):
         try:
             self.populate_provider_combo()
             self.populate_model_combo()
-            self.sync_dashscope_realtime_control()
+            self.sync_qwen_audio_realtime_control()
         except Exception:
             pass
         # Start background workers (core first, helpers staggered)
@@ -597,11 +597,18 @@ class GUI(QMainWindow):
         prompt_action_row.setSpacing(6)
         prompt_action_row.setContentsMargins(0, 0, 0, 0)
 
-        self.dashscope_realtime_checkbox = QCheckBox("流式音频")
-        self.dashscope_realtime_checkbox.setToolTip("DashScope 使用录音时实时发送音频；关闭后改为录音结束后上传文件")
-        self.dashscope_realtime_checkbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.dashscope_realtime_checkbox.toggled.connect(self.on_dashscope_realtime_toggled)
-        prompt_action_row.addWidget(self.dashscope_realtime_checkbox)
+        self.qwen_audio_realtime_checkbox = QCheckBox("流式音频")
+        self.qwen_audio_realtime_checkbox.setToolTip(
+            "支持的语音识别服务会在录音时实时发送音频；关闭后改为录音结束后上传文件"
+        )
+        self.qwen_audio_realtime_checkbox.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed,
+        )
+        self.qwen_audio_realtime_checkbox.toggled.connect(
+            self.on_qwen_audio_realtime_toggled
+        )
+        prompt_action_row.addWidget(self.qwen_audio_realtime_checkbox)
         prompt_action_row.addStretch()
 
         self.edit_polish_prompt_button = QPushButton("编辑 LLM 提示词")
@@ -716,11 +723,11 @@ class GUI(QMainWindow):
 
         # Populate initial lists according to active provider
         self.populate_model_combo()
-        self.sync_dashscope_realtime_control()
+        self.sync_qwen_audio_realtime_control()
 
-    def sync_dashscope_realtime_control(self):
-        """Show and sync the DashScope realtime/file mode switch."""
-        if not hasattr(self, "dashscope_realtime_checkbox"):
+    def sync_qwen_audio_realtime_control(self):
+        """Show and sync the Qwen Audio realtime/file mode switch."""
+        if not hasattr(self, "qwen_audio_realtime_checkbox"):
             return
 
         visible = False
@@ -731,18 +738,19 @@ class GUI(QMainWindow):
                 provider = self.provider_manager.get_provider(provider_id)
                 if provider and getattr(provider, "type", "").lower() in {
                     "qwen-audio-legacy",
+                    "qwen-audio",
                     "dashscope",
                 }:
                     visible = True
                     settings = provider.settings or {}
                     checked = bool(settings.get("realtime", False))
 
-        self.dashscope_realtime_checkbox.blockSignals(True)
+        self.qwen_audio_realtime_checkbox.blockSignals(True)
         try:
-            self.dashscope_realtime_checkbox.setChecked(checked)
-            self.dashscope_realtime_checkbox.setVisible(visible)
+            self.qwen_audio_realtime_checkbox.setChecked(checked)
+            self.qwen_audio_realtime_checkbox.setVisible(visible)
         finally:
-            self.dashscope_realtime_checkbox.blockSignals(False)
+            self.qwen_audio_realtime_checkbox.blockSignals(False)
 
     def _resolve_prompt_text_for_provider(self, provider_id: str) -> str:
         """Determine the prompt text to show in the editor for the given provider."""
@@ -890,8 +898,8 @@ class GUI(QMainWindow):
 
         self.append_colored_line("已请求清除最近上屏消息记录。", "#008000")
 
-    def on_dashscope_realtime_toggled(self, checked: bool):
-        """Persist DashScope realtime/file upload mode."""
+    def on_qwen_audio_realtime_toggled(self, checked: bool):
+        """Persist the selected Qwen Audio realtime/file upload mode."""
         if not self.provider_manager:
             return
         current_data = self.provider_combo.currentData() if hasattr(self, "provider_combo") else None
@@ -900,6 +908,7 @@ class GUI(QMainWindow):
         provider = self.provider_manager.get_provider(current_data)
         if not provider or getattr(provider, "type", "").lower() not in {
             "qwen-audio-legacy",
+            "qwen-audio",
             "dashscope",
         }:
             return
@@ -912,11 +921,14 @@ class GUI(QMainWindow):
 
         if ok:
             mode = "流式音频" if checked else "录音文件"
-            self.append_colored_line(f"DashScope 已切换为{mode}模式")
+            self.append_colored_line(f"语音识别已切换为{mode}模式")
             self.restart_children_with_env()
         else:
-            self.append_colored_line("更新 DashScope 音频模式失败（请检查配置文件权限或格式）", "#ff5555")
-            self.sync_dashscope_realtime_control()
+            self.append_colored_line(
+                "更新语音识别音频模式失败（请检查配置文件权限或格式）",
+                "#ff5555",
+            )
+            self.sync_qwen_audio_realtime_control()
 
     def populate_provider_combo(self):
         """Populate the provider combo box with available providers."""
@@ -998,7 +1010,7 @@ class GUI(QMainWindow):
                 # Refresh model selector visibility and values
                 self.populate_model_combo()
                 # Refresh provider-specific controls
-                self.sync_dashscope_realtime_control()
+                self.sync_qwen_audio_realtime_control()
 
     def _collect_known_openai_models(self) -> list[str]:
         """Collect a reasonable list of model options for OpenAI-compatible providers.
@@ -1525,7 +1537,7 @@ class GUI(QMainWindow):
                 self.provider_manager.load_providers()
                 self.populate_provider_combo()
                 self.populate_model_combo()
-                self.sync_dashscope_realtime_control()
+                self.sync_qwen_audio_realtime_control()
                 self.log_message("已重新加载转录服务商配置")
 
                 # Restart workers to apply any changes

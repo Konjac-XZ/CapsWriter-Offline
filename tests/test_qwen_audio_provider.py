@@ -7,11 +7,11 @@ import httpx
 
 from src.provider.provider_config import ProviderManager
 from src.transcribe import api as transcribe_api
-from src.transcribe.providers import QwenAudio3Provider, make_provider
-from src.transcribe.qwen_audio_3 import qwen_audio_3_transcribe_http as qwen_audio
+from src.transcribe.providers import QwenAudioProvider, make_provider
+from src.transcribe.qwen_audio import qwen_audio_transcribe_http as qwen_audio
 
 
-def test_make_provider_supports_qwen_audio_3_aliases():
+def test_make_provider_supports_qwen_audio_aliases():
     for provider_type in (
         "qwen-audio",
         "qwen_audio_3",
@@ -20,8 +20,7 @@ def test_make_provider_supports_qwen_audio_3_aliases():
         "alibaba_qwen_audio_3",
     ):
         provider = make_provider(provider_type)
-        assert isinstance(provider, QwenAudio3Provider)
-        assert provider.supports_streaming_input() is False
+        assert isinstance(provider, QwenAudioProvider)
 
 
 def test_workspace_endpoint_uses_beijing_dedicated_domain(monkeypatch):
@@ -348,6 +347,14 @@ def test_provider_yaml_is_discoverable_with_hotword_defaults():
     assert provider is not None
     assert provider.type == "qwen-audio"
     assert provider.settings["model"] == "qwen-audio-3.0-asr-flash"
+    assert provider.settings["realtime"] is True
+    assert (
+        provider.settings["realtime_model"]
+        == "qwen-audio-3.0-asr-flash-streaming"
+    )
+    assert provider.settings["realtime_format"] == "pcm"
+    assert provider.settings["realtime_sample_rate"] == 16000
+    assert provider.settings["realtime_chunk_ms"] == 100
     assert provider.settings["use_user_lexicon"] is True
     assert provider.settings["user_lexicon_weight"] == 4
     assert isinstance(provider.settings["debug"], bool)
@@ -363,7 +370,7 @@ def test_transcribe_api_dispatches_qwen_audio_3_provider(monkeypatch):
     class FakeProvider:
         async def transcribe(self, *args, **kwargs):
             assert kwargs["request_context"] is None
-            return "已接入", 200, 1.0, 2.0, {"provider": "qwen_audio_3"}
+            return "已接入", 200, 1.0, 2.0, {"provider": "qwen-audio"}
 
     selected = []
 
@@ -388,7 +395,7 @@ def test_transcribe_api_dispatches_qwen_audio_3_provider(monkeypatch):
 
     assert selected == ["qwen-audio"]
     assert result[0] == "已接入"
-    assert result[4]["provider"] == "qwen_audio_3"
+    assert result[4]["provider"] == "qwen-audio"
 
 
 def test_http_transport_posts_documented_request_and_parses_response(monkeypatch):

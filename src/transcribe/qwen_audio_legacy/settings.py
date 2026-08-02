@@ -1,4 +1,4 @@
-"""DashScope provider settings and request construction."""
+"""Qwen Audio Legacy provider settings and request construction."""
 import os
 from typing import Any, Dict, List
 
@@ -69,7 +69,10 @@ def get_api_base() -> str:
 def get_api_key() -> str:
     key = clean_str(ps_get_str("api_key", env="DASHSCOPE_API_KEY", default=None))
     if not key:
-        raise RuntimeError("DASHSCOPE_API_KEY environment variable is required for provider=dashscope")
+        raise RuntimeError(
+            "DASHSCOPE_API_KEY environment variable is required for "
+            "provider=qwen-audio-legacy"
+        )
     return key
 
 
@@ -134,11 +137,46 @@ def get_realtime_model() -> str:
     return base_model
 
 
+def get_workspace_id() -> str | None:
+    return clean_str(
+        ps_get_str(
+            "workspace_id",
+            env="DASHSCOPE_WORKSPACE_ID",
+            default=None,
+        )
+    )
+
+
+def get_region() -> str:
+    return (
+        clean_str(ps_get_str("region", env="DASHSCOPE_REGION", default=None))
+        or "cn-beijing"
+    ).lower()
+
+
 def get_realtime_url() -> str:
     url = clean_str(ps_get_str("realtime_url", env="DASHSCOPE_REALTIME_URL", default=None))
     if url:
         return url
-    return "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+    workspace_id = get_workspace_id()
+    region = get_region()
+    if region in {"cn-beijing", "beijing"}:
+        if workspace_id:
+            return (
+                f"wss://{workspace_id}.cn-beijing.maas.aliyuncs.com"
+                "/api-ws/v1/realtime"
+            )
+        return "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+    if region in {"ap-southeast-1", "singapore"}:
+        if workspace_id:
+            return (
+                f"wss://{workspace_id}.ap-southeast-1.maas.aliyuncs.com"
+                "/api-ws/v1/realtime"
+            )
+        return "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime"
+    raise ValueError(
+        "qwen-audio-legacy realtime region must be cn-beijing or ap-southeast-1"
+    )
 
 
 def get_realtime_format() -> str:
@@ -151,14 +189,6 @@ def get_realtime_sample_rate() -> int:
         return int(raw or "16000")
     except Exception:
         return 16000
-
-
-def get_realtime_channels() -> int:
-    raw = ps_get_str("realtime_channels", env="DASHSCOPE_REALTIME_CHANNELS", default="1")
-    try:
-        return max(1, int(raw or "1"))
-    except Exception:
-        return 1
 
 
 def get_realtime_enable_vad() -> bool:
@@ -270,55 +300,6 @@ def build_asr_options() -> Dict[str, Any]:
     return asr_options
 
 
-def build_realtime_parameters() -> Dict[str, Any]:
-    parameters: Dict[str, Any] = {
-        "format": get_realtime_format(),
-        "sample_rate": get_realtime_sample_rate(),
-    }
-    channels = get_realtime_channels()
-    if channels > 1:
-        parameters["channels"] = channels
-    language = get_language()
-    if language:
-        parameters["language"] = language
-    if get_enable_lid():
-        parameters["enable_lid"] = True
-    if get_enable_itn():
-        parameters["enable_itn"] = True
-    context = get_context_text()
-    if context:
-        parameters["context"] = context
-    return parameters
-
-
-def build_realtime_session_update() -> Dict[str, Any]:
-    transcription: Dict[str, Any] = {}
-    language = get_language()
-    if language:
-        transcription["language"] = language
-    context = get_context_text()
-    if context:
-        transcription["corpus"] = {"text": context}
-
-    session: Dict[str, Any] = {
-        "input_audio_format": get_realtime_format(),
-        "sample_rate": get_realtime_sample_rate(),
-        "input_audio_transcription": transcription or {},
-        "turn_detection": None,
-    }
-    if get_realtime_enable_vad():
-        session["turn_detection"] = {
-            "type": "server_vad",
-            "threshold": get_realtime_vad_threshold(),
-            "silence_duration_ms": get_realtime_vad_silence_ms(),
-        }
-    return {
-        "event_id": "event_session_update",
-        "type": "session.update",
-        "session": session,
-    }
-
-
 def build_messages(audio_payload: str, audio_format: str | None = None) -> List[Dict[str, Any]]:
     messages: List[Dict[str, Any]] = []
     context = get_context_text()
@@ -378,7 +359,8 @@ def build_request_body(audio_payload: str, audio_format: str) -> Dict[str, Any]:
         if not _STREAM_WARNED:
             try:
                 console.print(
-                    "DashScope incremental results not yet supported; falling back to final-only results",
+                    "qwen-audio-legacy incremental results are not supported "
+                    "for file upload; falling back to final-only results",
                     style="bright_yellow",
                 )
             except Exception:

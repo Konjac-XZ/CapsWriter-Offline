@@ -1,4 +1,4 @@
-"""DashScope SDK transport."""
+"""Qwen Audio Legacy official SDK transport."""
 import io
 import json
 import os
@@ -7,8 +7,11 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-from src.transcribe.dashscope.response_parser import extract_transcript, sdk_response_preview
-from src.transcribe.dashscope.settings import (
+from src.transcribe.qwen_audio_legacy.response_parser import (
+    extract_transcript,
+    sdk_response_preview,
+)
+from src.transcribe.qwen_audio_legacy.settings import (
     build_asr_options,
     build_messages,
     ext_for_mime,
@@ -18,7 +21,7 @@ from src.transcribe.dashscope.settings import (
 )
 
 
-DEBUG_BUILD = "dashscope-sdk-status-normalize-v2"
+DEBUG_BUILD = "qwen-audio-legacy-sdk-status-normalize-v2"
 
 
 def _read_audio_bytes(payload_buf: io.BytesIO) -> bytes:
@@ -33,16 +36,19 @@ async def send_with_sdk(
     payload_buf: io.BytesIO,
     payload_mime: str,
 ) -> Tuple[str, int, float, Dict[str, Any], str | None]:
-    """Use official dashscope SDK for transcription."""
+    """Use the official SDK for Qwen Audio Legacy transcription."""
     import asyncio
 
     t_complete = time.time()
-    meta: Dict[str, Any] = {"via": "dashscope-sdk", "debug_build": DEBUG_BUILD}
+    meta: Dict[str, Any] = {
+        "via": "qwen-audio-legacy-sdk",
+        "debug_build": DEBUG_BUILD,
+    }
     try:
         import dashscope
     except Exception as exc:
         err = f"{exc.__class__.__name__}: {exc}"
-        meta["dashscope_sdk_import_error"] = err
+        meta["qwen_audio_legacy_sdk_import_error"] = err
         return "", 503, t_complete, meta, err
 
     audio_bytes = _read_audio_bytes(payload_buf)
@@ -88,7 +94,7 @@ async def send_with_sdk(
 
         transcript, extra = extract_transcript(payload_data)
         meta.update(extra)
-        meta["dashscope_sdk"] = True
+        meta["qwen_audio_legacy_sdk"] = True
         meta["audio_bytes"] = len(audio_bytes)
         meta["audio_uri"] = audio_uri
 
@@ -112,12 +118,12 @@ async def send_with_sdk(
         if not transcript:
             preview = sdk_response_preview(response, payload_data)
             if preview:
-                meta["dashscope_payload_preview"] = preview
+                meta["qwen_audio_legacy_payload_preview"] = preview
         return transcript, status, t_complete, meta, None if transcript else None
     except Exception as exc:
         t_complete = time.time()
         err = f"{exc.__class__.__name__}: {exc}"
-        meta["dashscope_sdk_exception"] = err
+        meta["qwen_audio_legacy_sdk_exception"] = err
         return "", 400, t_complete, meta, err
     finally:
         if tmp_path:
