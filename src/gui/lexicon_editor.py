@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Protocol, cast
 
 import yaml
-from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtCore import QEvent, QObject, QTimer, Qt, Signal
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
     QDialog,
@@ -83,6 +83,8 @@ class _MonacoKeyInterceptor(QObject):
 
 
 class MonacoYamlEditor(QWidget):
+    initialized = Signal()
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._monaco = self._create_monaco_widget()
@@ -96,10 +98,14 @@ class MonacoYamlEditor(QWidget):
 
         editor = Monaco(self)
         editor.installEventFilter(_MonacoKeyInterceptor(editor))
-        editor.initialized.connect(lambda: self._configure_editor(editor))
+        editor.initialized.connect(lambda: self._handle_initialized(editor))
         editor.set_language("yaml")
         editor.set_theme("vs")
         return editor
+
+    def _handle_initialized(self, editor: QWidget) -> None:
+        self._configure_editor(editor)
+        self.initialized.emit()
 
     def _configure_editor(self, editor: QWidget) -> None:
         page = getattr(editor, "page", None)
@@ -240,6 +246,8 @@ def normalize_lexicon_text(text: str) -> str:
 class LexiconEditDialog(QDialog):
     """Dialog for editing the user lexicon YAML file."""
 
+    initialized = Signal()
+
     def __init__(self, parent: QWidget | None = None, *, initial_text: str = "") -> None:
         super().__init__(parent)
         self._saved_text: str | None = None
@@ -251,6 +259,12 @@ class LexiconEditDialog(QDialog):
         self.editor_api = _create_editor(self)
         self.editor_api.set_text(initial_text)
         self.editor_widget = cast(QWidget, self.editor_api)
+        editor_initialized = getattr(self.editor_widget, "initialized", None)
+        if editor_initialized is not None and hasattr(editor_initialized, "connect"):
+            editor_initialized.connect(self.initialized.emit)
+        else:
+            # The plain-text fallback is ready as soon as control returns to Qt.
+            QTimer.singleShot(0, self.initialized.emit)
         layout.addWidget(self.editor_widget)
         layout.setStretchFactor(self.editor_widget, 1)
 

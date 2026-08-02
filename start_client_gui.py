@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMenu,
+    QProgressDialog,
     QPushButton,
     QSizePolicy,
     QStyle,
@@ -110,11 +111,6 @@ GUI_TIMING_SLOW_MS = 100.0
 GUI_TIMER_GAP_MS = 500.0
 GUI_WATCHDOG_GAP_MS = 700.0
 GUI_LOG_MAX_BLOCKS = 500
-# Monaco is initialized in its own GUI process, so warm it as soon as the
-# primary window has completed its deferred startup turn.
-LEXICON_EDITOR_WARMUP_DELAY_MS = 0
-LEXICON_EDITOR_FAILURE_RETRY_MS = 10000
-LEXICON_EDITOR_MAX_WARMUP_FAILURES = 3
 
 
 def _elapsed_ms(start: float) -> float:
@@ -188,10 +184,7 @@ class GUI(QMainWindow):
         self.old_pos = QPoint()
         lexicon_python = resolve_pythonw_client() or sys.executable
         self._lexicon_editor_client = LexiconEditorProcessClient(ROOT, lexicon_python)
-        self._lexicon_warmup_failures = 0
-        self._lexicon_warmup_timer = QTimer(self)
-        self._lexicon_warmup_timer.setSingleShot(True)
-        self._lexicon_warmup_timer.timeout.connect(self._warm_up_lexicon_editor)
+        self._lexicon_loading_dialog: QProgressDialog | None = None
         self._lexicon_event_timer = QTimer(self)
         self._lexicon_event_timer.timeout.connect(self._poll_lexicon_editor_event)
         self._lexicon_event_timer.start(250)
@@ -337,7 +330,6 @@ class GUI(QMainWindow):
             self.start_script()
         except Exception:
             pass
-        self._schedule_lexicon_editor_warmup(LEXICON_EDITOR_WARMUP_DELAY_MS)
 
 
     # Removed custom title bar and its buttons; using native frame instead
@@ -855,36 +847,68 @@ class GUI(QMainWindow):
         self.append_colored_line("已保存 LLM 提示词。")
 
     def show_edit_lexicon_dialog(self) -> None:
-        """Ask the separate, persistent Monaco process to show its window."""
+        """Load Monaco on first use without blocking the main GUI."""
+        if self._lexicon_editor_client.is_ready():
+            if not self._lexicon_editor_client.show():
+                self.append_colored_line("启动用户词库编辑器失败。", "#ff5555")
+            return
+
+        if self._lexicon_loading_dialog is not None:
+            self._lexicon_loading_dialog.raise_()
+            self._lexicon_loading_dialog.activateWindow()
+            return
+
+        loading_dialog = QProgressDialog(
+            "正在加载用户词库编辑器，请稍候……",
+            "",
+            0,
+            0,
+            self,
+        )
+        loading_dialog.setWindowTitle("正在加载")
+        # Qt supports a null cancel button, although the PySide stub omits it.
+        loading_dialog.setCancelButton(cast(QPushButton, None))
+        loading_dialog.setAutoClose(False)
+        loading_dialog.setAutoReset(False)
+        loading_dialog.setMinimumDuration(0)
+        loading_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        self._lexicon_loading_dialog = loading_dialog
+        loading_dialog.show()
+
+        # Let Qt paint the progress dialog before spawning the helper process.
+        QTimer.singleShot(0, self._request_lexicon_editor)
+
+    def _request_lexicon_editor(self) -> None:
         if not self._lexicon_editor_client.show():
+            self._close_lexicon_loading_dialog()
             self.append_colored_line("启动用户词库编辑器失败。", "#ff5555")
 
-    def _schedule_lexicon_editor_warmup(self, delay_ms: int) -> None:
-        """Schedule a single attempt to start the hidden editor process."""
-        if self._lexicon_editor_client.is_running() or self._lexicon_warmup_timer.isActive():
-            return
-        self._lexicon_warmup_timer.start(max(0, delay_ms))
-
-    def _warm_up_lexicon_editor(self) -> None:
-        """Initialize Monaco in another process without blocking this GUI."""
-        if self._lexicon_editor_client.is_running():
-            return
-        if self._lexicon_editor_client.start():
-            self._lexicon_warmup_failures = 0
-            return
-        self._lexicon_warmup_failures += 1
-        record_console_message("词库编辑器后台进程预热失败", style="#ff8800")
-        if self._lexicon_warmup_failures < LEXICON_EDITOR_MAX_WARMUP_FAILURES:
-            self._schedule_lexicon_editor_warmup(LEXICON_EDITOR_FAILURE_RETRY_MS)
+    def _close_lexicon_loading_dialog(self) -> None:
+        dialog = self._lexicon_loading_dialog
+        self._lexicon_loading_dialog = None
+        if dialog is not None:
+            dialog.close()
+            dialog.deleteLater()
 
     def _poll_lexicon_editor_event(self) -> None:
         event = self._lexicon_editor_client.poll_event()
         if not event:
+            process = self._lexicon_editor_client.process
+            if (
+                self._lexicon_loading_dialog is not None
+                and process is not None
+                and not self._lexicon_editor_client.is_running()
+            ):
+                self._close_lexicon_loading_dialog()
+                self.append_colored_line("用户词库编辑器加载进程意外退出。", "#ff5555")
             return
         event_name = event.get("event")
-        if event_name == "saved":
+        if event_name in {"opened", "already_open"}:
+            self._close_lexicon_loading_dialog()
+        elif event_name == "saved":
             self.append_colored_line("用户词库已保存，下次录音自动生效。")
         elif event_name == "error":
+            self._close_lexicon_loading_dialog()
             message = event.get("message") or "未知错误"
             self.append_colored_line(f"读取用户词库失败：{message}", "#ff5555")
 

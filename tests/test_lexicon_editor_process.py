@@ -63,6 +63,7 @@ def test_each_show_command_refreshes_latest_disk_text(monkeypatch, tmp_path: Pat
     service._last_command_serial = 0
     service._active_serial = None
     service._dialog = dialog
+    service._dialog_ready = True
 
     service._command_path.write_text('{"serial": 1, "command": "show"}', encoding="utf-8")
     service._poll_command()
@@ -73,6 +74,33 @@ def test_each_show_command_refreshes_latest_disk_text(monkeypatch, tmp_path: Pat
     assert dialog.prepared_texts == ["words:\n- first\n", "words:\n- second\n"]
     assert dialog.open_count == 2
     assert service._active_serial == 2
+    assert json.loads(service._event_path.read_text(encoding="utf-8"))["event"] == "opened"
+
+
+def test_first_show_schedules_lazy_editor_initialization(monkeypatch, tmp_path: Path) -> None:
+    scheduled_callbacks: list[object] = []
+    monkeypatch.setattr(
+        lexicon_editor_process.QTimer,
+        "singleShot",
+        lambda delay, callback: scheduled_callbacks.append((delay, callback)),
+    )
+    service = lexicon_editor_process.LexiconEditorService.__new__(
+        lexicon_editor_process.LexiconEditorService
+    )
+    service._command_path = tmp_path / "command.json"
+    service._event_path = tmp_path / "event.json"
+    service._last_command_serial = 0
+    service._active_serial = None
+    service._pending_show_serial = None
+    service._dialog = None
+    service._dialog_ready = False
+    service._command_path.write_text('{"serial": 1, "command": "show"}', encoding="utf-8")
+
+    service._poll_command()
+
+    assert service._dialog is None
+    assert service._pending_show_serial == 1
+    assert scheduled_callbacks == [(0, service._initialize_dialog)]
 
 
 def test_visible_editor_is_not_overwritten_by_second_show(monkeypatch, tmp_path: Path) -> None:

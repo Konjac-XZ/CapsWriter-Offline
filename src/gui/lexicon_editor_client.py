@@ -32,6 +32,7 @@ class LexiconEditorProcessClient:
         self._process: subprocess.Popen[str] | None = None
         self._serial = 0
         self._last_event_serial = -1
+        self._ready = False
 
     @property
     def process(self) -> subprocess.Popen[str] | None:
@@ -39,6 +40,11 @@ class LexiconEditorProcessClient:
 
     def is_running(self) -> bool:
         return self._process is not None and self._process.poll() is None
+
+    def is_ready(self) -> bool:
+        if not self.is_running():
+            self._ready = False
+        return self._ready
 
     def _build_command(self) -> list[str]:
         if getattr(sys, "frozen", False):
@@ -61,6 +67,7 @@ class LexiconEditorProcessClient:
     def start(self) -> bool:
         if self.is_running():
             return True
+        self._ready = False
         try:
             self._process = subprocess.Popen(
                 self._build_command(),
@@ -99,6 +106,8 @@ class LexiconEditorProcessClient:
         if serial <= self._last_event_serial:
             return None
         self._last_event_serial = serial
+        if payload.get("event") in {"opened", "already_open"}:
+            self._ready = True
         return payload
 
     def stop(self) -> None:
@@ -118,4 +127,5 @@ class LexiconEditorProcessClient:
                 except subprocess.TimeoutExpired:
                     process.kill()
         self._process = None
+        self._ready = False
         shutil.rmtree(self._session_dir, ignore_errors=True)

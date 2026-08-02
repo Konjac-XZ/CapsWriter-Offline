@@ -77,12 +77,9 @@ class LexiconEditorService(QObject):
         self._parent_pid = parent_pid
         self._last_command_serial = 0
         self._active_serial: int | None = None
-
-        # Monaco/QWebEngine initialization may be slow, but this process has its
-        # own Qt event loop and therefore cannot stall the CapsWriter GUI.
-        self._dialog = LexiconEditDialog(initial_text="")
-        self._dialog.hide()
-        self._dialog.finished.connect(self._dialog_finished)
+        self._pending_show_serial: int | None = None
+        self._dialog: LexiconEditDialog | None = None
+        self._dialog_ready = False
 
         self._command_timer = QTimer(self)
         self._command_timer.timeout.connect(self._poll_command)
@@ -92,9 +89,53 @@ class LexiconEditorService(QObject):
         self._parent_timer.timeout.connect(self._check_parent)
         self._parent_timer.start(PARENT_POLL_INTERVAL_MS)
 
+    def _initialize_dialog(self) -> None:
+        """Create Monaco only after the first explicit show request."""
+        if self._dialog is not None:
+            return
+        try:
+            # Construction can be expensive, but it happens in this isolated
+            # GUI process and cannot block the main CapsWriter event loop.
+            dialog = LexiconEditDialog(initial_text="")
+            dialog.hide()
+            dialog.initialized.connect(self._dialog_initialized)
+            dialog.finished.connect(self._dialog_finished)
+            self._dialog = dialog
+        except Exception as exc:
+            serial = self._pending_show_serial or self._last_command_serial
+            self._pending_show_serial = None
+            _write_json_atomic(
+                self._event_path,
+                {"serial": serial, "event": "error", "message": str(exc)},
+            )
+
+    def _dialog_initialized(self) -> None:
+        self._dialog_ready = True
+        serial = self._pending_show_serial
+        self._pending_show_serial = None
+        if serial is not None:
+            self._open_dialog(serial)
+
+    def _open_dialog(self, serial: int) -> None:
+        dialog = self._dialog
+        if dialog is None:
+            return
+        try:
+            dialog.prepare_for_open(read_lexicon_text())
+        except Exception as exc:
+            _write_json_atomic(
+                self._event_path,
+                {"serial": serial, "event": "error", "message": str(exc)},
+            )
+            return
+
+        self._active_serial = serial
+        dialog.open()
+        dialog.raise_()
+        dialog.activateWindow()
         _write_json_atomic(
             self._event_path,
-            {"serial": 0, "event": "ready", "pid": os.getpid()},
+            {"serial": serial, "event": "opened"},
         )
 
     def _poll_command(self) -> None:
@@ -115,29 +156,24 @@ class LexiconEditorService(QObject):
         if command != "show":
             return
 
-        if self._dialog.isVisible():
-            self._dialog.raise_()
-            self._dialog.activateWindow()
+        dialog = self._dialog
+        if dialog is not None and dialog.isVisible():
+            dialog.raise_()
+            dialog.activateWindow()
             _write_json_atomic(
                 self._event_path,
                 {"serial": serial, "event": "already_open"},
             )
             return
 
-        try:
-            # This happens for every open request, not just during warm-up.
-            self._dialog.prepare_for_open(read_lexicon_text())
-        except Exception as exc:
-            _write_json_atomic(
-                self._event_path,
-                {"serial": serial, "event": "error", "message": str(exc)},
-            )
+        if dialog is None:
+            self._pending_show_serial = serial
+            QTimer.singleShot(0, self._initialize_dialog)
             return
-
-        self._active_serial = serial
-        self._dialog.open()
-        self._dialog.raise_()
-        self._dialog.activateWindow()
+        if not self._dialog_ready:
+            self._pending_show_serial = serial
+            return
+        self._open_dialog(serial)
 
     def _dialog_finished(self, result: int) -> None:
         serial = self._active_serial
