@@ -14,7 +14,6 @@ import yaml
 
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer
 from PySide6.QtGui import (
-    QAction,
     QIcon,
     QWheelEvent,
     QTextDocument,
@@ -34,12 +33,10 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
-    QMenu,
     QProgressDialog,
     QPushButton,
     QSizePolicy,
     QStyle,
-    QSystemTrayIcon,
     QPlainTextEdit,
     QVBoxLayout,
     QWidget,
@@ -71,6 +68,7 @@ from src.gui.listening_overlay import StatusOverlayController
 from src.gui.lexicon_editor_client import LexiconEditorProcessClient
 from src.gui.prompt_editor import PromptEditDialog
 from src.gui.startup_profiler import StartupProfileOptions, StartupProfiler
+from src.gui.tray_process_client import TrayProcessClient
 from src.gui.worker_output_router import WorkerOutputRouter
 from src.polish.llm_polish import get_polish_prompt_text, reload_polish_config, update_polish_prompt_text
 from src.system.process_cleanup import (
@@ -185,6 +183,10 @@ class GUI(QMainWindow):
         lexicon_python = resolve_pythonw_client() or sys.executable
         self._lexicon_editor_client = LexiconEditorProcessClient(ROOT, lexicon_python)
         self._lexicon_loading_dialog: QProgressDialog | None = None
+        self._tray_process_client = TrayProcessClient(ROOT, lexicon_python)
+        self._tray_event_timer = QTimer(self)
+        self._tray_event_timer.timeout.connect(self._poll_tray_process_event)
+        self._tray_event_timer.start(100)
         self._lexicon_event_timer = QTimer(self)
         self._lexicon_event_timer.timeout.connect(self._poll_lexicon_editor_event)
         self._lexicon_event_timer.start(250)
@@ -1420,85 +1422,33 @@ class GUI(QMainWindow):
 
 
     def create_systray_icon(self):
-        self.tray_icon = QSystemTrayIcon(self)
-        try:
-            self.tray_icon.setIcon(QIcon(str(client_icon_path())))
-        except Exception:
-            pass
+        """Start the independent process that owns the tray icon and menu."""
+        if not self._tray_process_client.start():
+            self.log_message("启动托盘进程失败。", "#ff0000")
 
-        reload_providers_action = QAction("⚡ Reload Providers", self)
-        explore_home_folder_action = QAction("📁 Open Home Folder With Explorer", self)
-        vscode_home_folder_action = QAction("🤓 Open Home Folder With VSCode", self)
+    def _poll_tray_process_event(self) -> None:
+        if not self._tray_process_client.is_running():
+            self._tray_process_client.start()
+            return
 
-        show_action = QAction("🪟 Show", self)
-        restart_client_action = QAction("🔄 Restart Client", self)
-        quit_action = QAction("❌ Quit", self)
+        event = self._tray_process_client.poll_event()
+        if event is None:
+            return
 
-        reload_providers_action.triggered.connect(self.reload_providers)
-        explore_home_folder_action.triggered.connect(self.explore_home_folder)
-        vscode_home_folder_action.triggered.connect(self.vscode_home_folder)
-        show_action.triggered.connect(self.showNormal)
-        restart_client_action.triggered.connect(self.restart_client)
-        quit_action.triggered.connect(self.quit_app)
+        event_name = event.get("event")
+        if event_name == "show":
+            self._show_from_tray()
+        elif event_name == "reload_providers":
+            self.reload_providers()
+        elif event_name == "restart_client":
+            self.restart_client()
+        elif event_name == "quit":
+            self.quit_app()
 
-        self.tray_icon.activated.connect(self.on_tray_icon_activated)
-
-        # Keep a persistent reference to avoid GC and enable warm-up
-        self.tray_menu = QMenu()
-        # Provider management shortcuts
-        self.tray_menu.addAction(reload_providers_action)
-
-        self.tray_menu.addSeparator()
-        self.tray_menu.addAction(show_action)
-        self.tray_menu.addAction(restart_client_action)
-        self.tray_menu.addAction(quit_action)
-        self.tray_icon.setContextMenu(self.tray_menu)
-        self.tray_icon.show()
-
-        # Optional tray menu warm-up. Disabled by default because Qt menu layout
-        # can block the GUI thread long enough to freeze the recording timer.
-        try:
-            warmup_text = os.getenv("CW_TRAY_WARMUP_DELAY_MS", "").strip()
-            if warmup_text:
-                delay_ms = max(0, int(warmup_text))
-                QTimer.singleShot(delay_ms, self._warm_up_tray_menu)
-        except Exception:
-            pass
-
-    def _warm_up_tray_menu(self):
-        """Force-create and layout the tray menu to eliminate first-show stutter.
-
-        Kept intentionally lightweight and deferred to avoid affecting startup.
-        """
-        try:
-            try:
-                if self.status_overlay.overlay.isVisible():
-                    self._log_gui_timing("tray warm-up skipped while overlay is visible")
-                    return
-            except Exception:
-                pass
-            menu = getattr(self, "tray_menu", None)
-            if not isinstance(menu, QMenu):
-                return
-            # Ensure style polish and layout
-            try:
-                menu.ensurePolished()
-            except Exception:
-                pass
-            try:
-                _ = menu.sizeHint()
-                for act in menu.actions():
-                    menu.actionGeometry(act)
-            except Exception:
-                pass
-            # Force native handle creation
-            try:
-                _ = menu.winId()
-            except Exception:
-                pass
-        except Exception:
-            # Never let warm-up impact the app
-            pass
+    def _show_from_tray(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
 
     def restart_client(self):
         # Important: run the restart helper with the console Python (python.exe),
@@ -1608,19 +1558,12 @@ class GUI(QMainWindow):
             pass
         self._stop_latest_wav_playback()
         self._lexicon_editor_client.stop()
+        self._tray_process_client.stop()
         # Terminate core_client.py and any launcher-spawned child processes from this checkout.
         self._stop_core_client_processes()
 
-        # Hide the system tray icon
-        self.tray_icon.setVisible(False)
-
         # Quit the application
         QApplication.quit()
-
-    def on_tray_icon_activated(self, reason):
-        # Called when the system tray icon is activated
-        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
-            self.showNormal()  # Show the main window
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
@@ -1979,6 +1922,8 @@ if __name__ == "__main__":
     parser.add_argument("files", nargs="*", type=Path, help="要处理的文件")
     parser.add_argument("--lexicon-editor-process", type=Path, default=None)
     parser.add_argument("--lexicon-parent-pid", type=int, default=None)
+    parser.add_argument("--tray-process", type=Path, default=None)
+    parser.add_argument("--tray-parent-pid", type=int, default=None)
     parser.add_argument("--file-list", type=Path, help="包含文件列表的文本文件")
     parser.add_argument(
         "--profile-startup",
@@ -2013,6 +1958,13 @@ if __name__ == "__main__":
         raise SystemExit(
             run_lexicon_editor_process(args.lexicon_editor_process, args.lexicon_parent_pid)
         )
+
+    if args.tray_process is not None:
+        from src.gui.tray_process import run_tray_process
+
+        if args.tray_parent_pid is None:
+            parser.error("--tray-parent-pid is required with --tray-process")
+        raise SystemExit(run_tray_process(args.tray_process, args.tray_parent_pid))
 
     profile_env_enabled = os.getenv("CW_PROFILE_STARTUP", "").strip().lower() in {
         "1",

@@ -36,6 +36,7 @@ a = Analysis(
         'qt_material',
         'qtmonaco',
         'src.gui.lexicon_editor_process',
+        'src.gui.tray_process',
         'win32api',
         'win32con',
         'win32gui',
