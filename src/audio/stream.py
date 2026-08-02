@@ -10,7 +10,7 @@ import sounddevice as sd
 
 from src.audio.level_publisher import update_latest_level
 from src.infra.cosmic import Cosmic, console
-from src.infra.config import ClientConfig as Config
+from src.infra.config import config as Config
 
 _DEBUG_SLOW_MS = 250.0
 _debug_stream_ops = 0

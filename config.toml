@@ -42,18 +42,6 @@ reduce_audio_files = true
 trash_punc = "，。,."
 # 识别结果要消除的末尾标点
 
-mic_seg_duration = 15
-# 麦克风听写时分段长度：15 秒
-
-mic_seg_overlap = 2
-# 麦克风听写时分段重叠：2 秒
-
-file_seg_duration = 25
-# 转录文件时分段长度：25 秒
-
-file_seg_overlap = 2
-# 转录文件时分段重叠：2 秒
-
 mute_other_audio = true
 # 录音时是否静音其他音频播放
 
@@ -73,13 +61,6 @@ only_enable_microphones_when_pressed_record_shortcut = true
 # 比如从蓝牙耳机换回笔记本电脑默认麦克风
 # 缺点就是输入的时候可能会慢些
 # 毕竟要先建立与麦克风的连接
-
-vscode_exe_path = "C:\\Users\\xinrui\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe"
-# 设置 VSCode 可执行文件位置
-# 用于通过客户端托盘图标右键菜单项 View 子菜单项
-# 🤓 Open Home Folder With VSCode
-# 使用 VSCode 快速打开 CapsWriter 主目录
-# 方便调试
 
 play_start_music = true
 # 开始任务时是否播放提示音

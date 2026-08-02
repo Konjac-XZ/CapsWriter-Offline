@@ -1,4 +1,4 @@
-from src.infra.config import ClientConfig as Config
+from src.infra.config import config as Config
 
 
 def strip_punc(text: str) -> str:

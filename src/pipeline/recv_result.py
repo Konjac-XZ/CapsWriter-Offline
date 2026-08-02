@@ -13,7 +13,7 @@ from src.audio.rename_audio import rename_audio
 from src.pipeline.strip_punc import strip_punc
 from src.pipeline.type_result import type_result
 from src.pipeline.write_md import write_md
-from src.infra.config import ClientConfig as Config
+from src.infra.config import config as Config
 from src.infra.gui_output import gui_event
 from src.infra.daily_input_stats import record_input_characters
 from src.polish.llm_polish import should_polish_text

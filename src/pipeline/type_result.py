@@ -4,7 +4,7 @@ import platform
 import clipman
 import keyboard
 
-from src.infra.config import ClientConfig as Config
+from src.infra.config import config as Config
 
 
 async def type_result(text):

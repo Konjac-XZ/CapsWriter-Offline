@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Union
 
 from src.infra.cosmic import Cosmic, console
-from src.infra.config import ClientConfig as Config
+from src.infra.config import config as Config
 
 
 def rename_audio(task_id, text, time_start) -> Union[Path, None]:

@@ -58,7 +58,7 @@ from src.gui.runtime import (
 ensure_project_cwd()
 load_startup_env()
 
-from src.infra.config import ClientConfig as Config
+from src.infra.config import config as Config
 from src.infra.runtime_logging import configure_runtime_logging, record_console_message
 from src.infra.daily_input_stats import get_today_input_count
 from src.audio.control_requests import (
@@ -1666,19 +1666,6 @@ class GUI(QMainWindow):
         except Exception as e:
             try:
                 self.append_plain_line(f"打开目录失败: {e}")
-            except Exception:
-                pass
-
-    def vscode_home_folder(self):
-        current_directory = str(ROOT)
-        vscode_exe_path = Config.vscode_exe_path
-        try:
-            subprocess.Popen(
-                [vscode_exe_path, current_directory], cwd=current_directory
-            )
-        except Exception as e:
-            try:
-                self.append_plain_line(f"启动 VSCode 失败: {e}")
             except Exception:
                 pass
 

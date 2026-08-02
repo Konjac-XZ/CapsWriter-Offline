@@ -10,7 +10,7 @@ from src.infra.cosmic import Cosmic, console
 from src.keyboard.pause_other_audio import audio_playering_app_name
 from src.audio.send_audio import send_audio
 from src.audio.stream import stream_reopen
-from src.infra.config import ClientConfig as Config
+from src.infra.config import config as Config
 from src.infra.gui_output import gui_event, gui_print
 from src.infra.my_status import Status
 from src.polish.context_settings import toggle_textbox_context_enabled

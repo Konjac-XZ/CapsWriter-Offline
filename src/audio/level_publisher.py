@@ -5,7 +5,7 @@ import time
 
 import numpy as np
 
-from src.infra.config import ClientConfig as Config
+from src.infra.config import config as Config
 from src.infra.cosmic import Cosmic
 from src.infra.gui_output import gui_event
 

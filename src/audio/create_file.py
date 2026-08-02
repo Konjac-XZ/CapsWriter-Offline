@@ -9,7 +9,7 @@ from subprocess import CREATE_NO_WINDOW, DEVNULL, PIPE, Popen
 from typing import Tuple, Union
 from wave import Wave_write
 
-from src.infra.config import ClientConfig as Config
+from src.infra.config import config as Config
 
 
 def create_file(

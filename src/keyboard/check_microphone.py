@@ -3,7 +3,7 @@ import time
 import winreg
 from pathlib import Path
 
-from src.infra.config import ClientConfig as Config
+from src.infra.config import config as Config
 
 
 _check_lock = threading.RLock()

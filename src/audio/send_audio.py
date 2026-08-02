@@ -18,7 +18,7 @@ from src.audio.retry_cache import (
     write_retry_cache,
 )
 from src.audio.write_file import write_file
-from src.infra.config import ClientConfig as Config
+from src.infra.config import config as Config
 from src.infra.gui_output import gui_event
 
 # New modules for clearer separation of concerns

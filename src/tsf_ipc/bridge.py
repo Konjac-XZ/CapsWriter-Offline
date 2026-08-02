@@ -6,7 +6,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Protocol
 
-from src.infra.config import ClientConfig as Config
+from src.infra.config import config as Config
 
 from .protocol import Frame, Operation, Status
 from .windows_pipe import WindowsNamedPipeBroker
