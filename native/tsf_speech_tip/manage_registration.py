@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import os
 import platform
 import shutil
 import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Sequence
 
@@ -35,7 +36,7 @@ class Architecture:
     regsvr32: Path
     build_preset: str
     build_dir: str
-    installed_dll: Path
+    build_dll: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +54,7 @@ def architectures() -> tuple[Architecture, Architecture]:
             regsvr32=system_root / "System32" / "regsvr32.exe",
             build_preset="x64-release",
             build_dir="build-x64",
-            installed_dll=PROJECT_DIR / "installed" / "x64" / DLL_NAME,
+            build_dll=PROJECT_DIR / "build-x64" / "Release" / DLL_NAME,
         ),
         Architecture(
             name="x86",
@@ -61,7 +62,7 @@ def architectures() -> tuple[Architecture, Architecture]:
             regsvr32=system_root / "SysWOW64" / "regsvr32.exe",
             build_preset="x86-release",
             build_dir="build-x86",
-            installed_dll=PROJECT_DIR / "installed" / "x86" / DLL_NAME,
+            build_dll=PROJECT_DIR / "build-x86" / "Release" / DLL_NAME,
         ),
     )
 
@@ -146,16 +147,11 @@ def loaded_hosts() -> list[str]:
 def print_status() -> None:
     print("TSF Speech TIP registration status:")
     for state in registration_states():
-        expected = state.architecture.installed_dll
         if state.registered_path is None:
             status = "not registered"
-        elif normalized_path(state.registered_path) == normalized_path(expected):
-            status = f"registered: {state.registered_path}"
         else:
-            status = (
-                f"registered to unexpected path: {state.registered_path} "
-                f"(expected {expected})"
-            )
+            suffix = "" if state.registered_path.exists() else " [DLL missing]"
+            status = f"registered: {state.registered_path}{suffix}"
         print(f"  {state.architecture.name}: {status}")
     print(
         f"  TSF language profile: {'enabled' if profile_enabled() else 'not enabled'}"
@@ -174,35 +170,26 @@ def require_supported_host() -> None:
         raise WorkflowError("TSF registration is supported only on Windows")
 
 
-def require_safe_registration_paths(states: Sequence[RegistrationState]) -> None:
+def require_recoverable_registration(states: Sequence[RegistrationState]) -> None:
     for state in states:
         registered = state.registered_path
-        if registered is not None and normalized_path(registered) != normalized_path(
-            state.architecture.installed_dll
-        ):
+        if registered is not None and not registered.exists():
             raise WorkflowError(
-                f"Refusing to overwrite {state.architecture.name} registration at "
-                f"an unexpected path: {registered}"
-            )
-        if registered is not None and not state.architecture.installed_dll.exists():
-            raise WorkflowError(
-                f"Cannot safely replace {state.architecture.name}: its registered "
-                f"DLL is missing at {state.architecture.installed_dll}"
+                f"Cannot safely update {state.architecture.name}: its registered "
+                f"DLL is missing at {registered}, so rollback would be impossible"
             )
 
 
-def require_unloaded(*, dry_run: bool) -> None:
+def report_loaded_hosts() -> None:
     hosts = loaded_hosts()
     if not hosts:
         return
-    detail = "\n".join(f"  {host}" for host in hosts)
-    if dry_run:
-        print("WARNING: registration cannot run until these hosts are closed:")
-        print(detail)
-        return
-    raise WorkflowError(
-        "Close every process that loaded the TIP before registration:\n" + detail
+    print(
+        "INFO: these processes keep using their already-loaded DLL until they "
+        "restart; registration will point new processes at the new version:"
     )
+    for host in hosts:
+        print(f"  {host}")
 
 
 def build_and_test_commands() -> list[list[str]]:
@@ -226,6 +213,27 @@ def build_and_test_commands() -> list[list[str]]:
     return commands
 
 
+def deployment_id() -> str:
+    digest = hashlib.sha256()
+    for architecture in architectures():
+        if not architecture.build_dll.exists():
+            raise WorkflowError(
+                f"{architecture.name} Release DLL not found: {architecture.build_dll}"
+            )
+        digest.update(architecture.name.encode("ascii"))
+        digest.update(architecture.build_dll.read_bytes())
+    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    return f"{timestamp}-{digest.hexdigest()[:12]}-{os.getpid()}"
+
+
+def deployment_paths(version: str) -> dict[str, Path]:
+    root = PROJECT_DIR / "installed" / "versions" / version
+    return {
+        architecture.name: root / architecture.name / DLL_NAME
+        for architecture in architectures()
+    }
+
+
 def regsvr32_command(
     architecture: Architecture, dll: Path, *, unregister: bool = False
 ) -> list[os.PathLike[str] | str]:
@@ -236,10 +244,10 @@ def regsvr32_command(
     return command
 
 
-def verify_registered() -> None:
+def verify_registered(expected_paths: dict[str, Path]) -> None:
     errors: list[str] = []
     for state in registration_states():
-        expected = state.architecture.installed_dll
+        expected = expected_paths[state.architecture.name]
         if state.registered_path is None:
             errors.append(f"{state.architecture.name} is not registered")
         elif normalized_path(state.registered_path) != normalized_path(expected):
@@ -270,103 +278,118 @@ def verify_unregistered() -> None:
 
 
 def rollback_install(
-    previous: Sequence[RegistrationState], backups: dict[str, Path]
+    previous: Sequence[RegistrationState], deployed: dict[str, Path]
 ) -> None:
-    print("Registration failed; restoring the previous installed DLLs and registry...")
-    for state in previous:
-        architecture = state.architecture
-        if architecture.installed_dll.exists():
+    print("Registration failed; restoring the previous registry targets...")
+    for architecture in reversed(architectures()):
+        new_dll = deployed[architecture.name]
+        if new_dll.exists():
             run_command(
-                regsvr32_command(
-                    architecture, architecture.installed_dll, unregister=True
-                ),
+                regsvr32_command(architecture, new_dll, unregister=True),
                 check=False,
             )
-        backup = backups.get(architecture.name)
-        if backup is not None and backup.exists():
-            architecture.installed_dll.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(backup, architecture.installed_dll)
-        elif architecture.installed_dll.exists():
-            architecture.installed_dll.unlink()
 
     for state in previous:
-        if state.registered_path is None:
-            continue
-        backup = backups.get(state.architecture.name)
-        if backup is None or not state.architecture.installed_dll.exists():
-            print(
-                f"WARNING: could not restore {state.architecture.name} registration; "
-                "the previous DLL backup is unavailable"
+        if state.registered_path is not None:
+            run_command(
+                regsvr32_command(state.architecture, state.registered_path),
+                check=False,
             )
-            continue
-        run_command(
-            regsvr32_command(state.architecture, state.architecture.installed_dll),
-            check=False,
-        )
+
+    deployment_root = next(iter(deployed.values())).parents[1]
+    if not deployment_root.exists():
+        return
+    try:
+        shutil.rmtree(deployment_root)
+    except OSError as exc:
+        print(f"WARNING: could not remove failed deployment {deployment_root}: {exc}")
 
 
 def install(*, skip_build: bool, dry_run: bool) -> None:
     previous = registration_states()
-    require_safe_registration_paths(previous)
-    require_unloaded(dry_run=dry_run)
+    require_recoverable_registration(previous)
+    report_loaded_hosts()
 
-    commands: list[Sequence[os.PathLike[str] | str]] = []
+    build_commands: list[Sequence[os.PathLike[str] | str]] = []
     if not skip_build:
-        commands.extend(build_and_test_commands())
+        build_commands.extend(build_and_test_commands())
     command_processor = os.environ.get("ComSpec", "cmd.exe")
-    commands.append(
-        [
-            command_processor,
-            "/d",
-            "/c",
-            PROJECT_DIR / "signing" / "install-signed.cmd",
-        ]
-    )
 
     if dry_run:
-        for command in commands:
+        for command in build_commands:
             run_command(command, dry_run=True)
-        print("> verify x64 and x86 HKCU COM registrations")
+        preview_root = PROJECT_DIR / "installed" / "versions" / "<version-id>"
+        preview_paths = {
+            architecture.name: preview_root / architecture.name / DLL_NAME
+            for architecture in architectures()
+        }
+        print("> copy x64 and x86 Release DLLs into a new version directory")
+        run_command(
+            [
+                command_processor,
+                "/d",
+                "/c",
+                PROJECT_DIR / "signing" / "sign.cmd",
+                preview_paths["x64"],
+                preview_paths["x86"],
+            ],
+            dry_run=True,
+        )
+        for architecture in architectures():
+            run_command(
+                regsvr32_command(architecture, preview_paths[architecture.name]),
+                dry_run=True,
+            )
+        print("> verify x64/x86 HKCU COM paths and the TSF language profile")
         return
 
-    with tempfile.TemporaryDirectory(prefix="capswriter-tsf-registration-") as temp:
-        backup_dir = Path(temp)
-        backups: dict[str, Path] = {}
-        for state in previous:
-            installed = state.architecture.installed_dll
-            if installed.exists():
-                backup = backup_dir / state.architecture.name / DLL_NAME
-                backup.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(installed, backup)
-                backups[state.architecture.name] = backup
-        try:
-            for command in commands:
-                run_command(command)
-            verify_registered()
-        except Exception:
-            rollback_install(previous, backups)
-            raise
+    for command in build_commands:
+        run_command(command)
+
+    version = deployment_id()
+    deployed = deployment_paths(version)
+    deployment_root = next(iter(deployed.values())).parents[1]
+    try:
+        for architecture in architectures():
+            destination = deployed[architecture.name]
+            destination.parent.mkdir(parents=True, exist_ok=False)
+            shutil.copy2(architecture.build_dll, destination)
+
+        run_command(
+            [
+                command_processor,
+                "/d",
+                "/c",
+                PROJECT_DIR / "signing" / "sign.cmd",
+                deployed["x64"],
+                deployed["x86"],
+            ]
+        )
+        for architecture in architectures():
+            run_command(regsvr32_command(architecture, deployed[architecture.name]))
+        verify_registered(deployed)
+    except Exception:
+        rollback_install(previous, deployed)
+        raise
 
     print("x64 and x86 TSF DLLs were built, tested, signed, registered, and verified.")
+    print(f"Versioned deployment: {deployment_root}")
+    print("Already-running applications keep the old DLL until they restart.")
 
 
 def uninstall(*, dry_run: bool) -> None:
     states = registration_states()
-    require_safe_registration_paths(states)
-    require_unloaded(dry_run=dry_run)
+    require_recoverable_registration(states)
+    report_loaded_hosts()
     for state in reversed(states):
         if state.registered_path is None:
             print(f"{state.architecture.name}: already unregistered")
             continue
-        if not state.architecture.installed_dll.exists() and not dry_run:
-            raise WorkflowError(
-                f"Cannot unregister {state.architecture.name}: DLL is missing at "
-                f"{state.architecture.installed_dll}"
-            )
+        assert state.registered_path is not None
         run_command(
             regsvr32_command(
                 state.architecture,
-                state.architecture.installed_dll,
+                state.registered_path,
                 unregister=True,
             ),
             dry_run=dry_run,
@@ -382,7 +405,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     install_parser = subparsers.add_parser(
-        "install", help="build, test, sign, install, register, and verify both DLLs"
+        "install",
+        help="build, test, sign, deploy side by side, register, and verify both DLLs",
     )
     install_parser.add_argument(
         "--skip-build",
@@ -393,7 +417,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "--dry-run", action="store_true", help="show the planned commands only"
     )
     uninstall_parser = subparsers.add_parser(
-        "uninstall", help="unregister both installed DLLs without deleting them"
+        "uninstall", help="unregister both DLLs without deleting deployed versions"
     )
     uninstall_parser.add_argument("--dry-run", action="store_true")
     subparsers.add_parser("status", help="show both registry views and loaded hosts")

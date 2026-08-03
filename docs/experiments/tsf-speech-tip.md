@@ -136,12 +136,14 @@ registration workflow for subsequent source updates:
 native\tsf_speech_tip\register-tip.cmd
 ```
 
-The workflow refuses to replace a DLL while any process has it loaded. It then
-configures and builds both Release architectures, runs both CTest suites, invokes
-the existing signing/install step, and verifies the x64 and x86 HKCU COM registry
-views. Existing installed DLLs are backed up before mutation; if signing,
-installation, registration, or verification fails, the previous binaries and
-registrations are restored. It never creates or trusts a certificate implicitly.
+The workflow configures and builds both Release architectures, runs both CTest
+suites, copies the outputs into a new unique directory under
+`installed\versions`, signs those immutable copies, registers their absolute
+paths, and verifies the x64 and x86 HKCU COM views plus the TSF language profile.
+It never overwrites a loaded DLL: existing processes continue using their old
+mapping, while processes started afterward load the newly registered version.
+If signing, registration, or verification fails, the previous registry targets
+are restored. It never creates or trusts a certificate implicitly.
 
 Useful read-only and maintenance commands are:
 
@@ -154,15 +156,15 @@ uv run python native\tsf_speech_tip\manage_registration.py uninstall
 
 `install --skip-build` reuses the existing x64/x86 Release outputs but still
 signs, installs, registers, and verifies them. `uninstall` removes both
-registrations without deleting the installed DLLs or certificate. Both mutating
-commands require every process listed by `status` to be closed first.
+registrations without deleting versioned DLLs or the certificate. Running hosts
+are reported for visibility but do not block either operation; they retain the
+DLL they already loaded until they exit.
 
-`install-signed.cmd` copies the build outputs to
-`native\tsf_speech_tip\installed\{x64,x86}`, signs those copies, verifies them
-with the Authenticode user policy, and registers them. The certificate, deployed
-DLLs, `.cer`, and any `.pfx`/`.p12` backup are ignored by Git. If an installed
-DLL is already loaded, close its host applications or reboot before updating it.
-Use `tasklist /m CapsWriterSpeechTip.dll` to see current hosts.
+`install-signed.cmd` remains as a compatibility entry point and delegates to the
+same side-by-side workflow with `--skip-build`. The certificate, versioned DLLs,
+`.cer`, and any `.pfx`/`.p12` backup are ignored by Git. Old version directories
+are intentionally retained because Windows may still have those DLLs mapped;
+they can be removed later after confirming that no process uses them.
 
 To sign arbitrary build outputs without installing them:
 
@@ -209,10 +211,10 @@ signed with the lost identity will no longer be trusted after removal.
 ## Registration and controlled manual verification
 
 Registration changes the current user's installed TSF profiles and causes the DLL
-to be loaded inside applications. Close applications used for testing first and
-keep the DLL at a stable path. Prefer `install-signed.cmd`. For manual x64
-registration, run the 64-bit `regsvr32`; for x86 registration, use the copy under
-`SysWOW64`:
+to be loaded inside newly started applications. Prefer the automated versioned
+workflow. For manual x64 registration, run the 64-bit `regsvr32`; for x86
+registration, use the copy under `SysWOW64`, and never overwrite a DLL that may
+already be mapped by a running process:
 
 ```text
 C:\Windows\System32\regsvr32.exe <absolute-x64-dll-path>

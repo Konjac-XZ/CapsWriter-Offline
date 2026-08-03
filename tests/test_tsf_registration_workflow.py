@@ -36,19 +36,46 @@ def test_build_workflow_covers_both_release_architectures_and_ctest():
 def test_regsvr32_commands_use_the_matching_windows_architecture():
     workflow = _load_workflow()
     x64, x86 = workflow.architectures()
+    deployed = workflow.deployment_paths("test-version")
 
-    x64_command = workflow.command_text(
-        workflow.regsvr32_command(x64, x64.installed_dll)
-    )
+    x64_command = workflow.command_text(workflow.regsvr32_command(x64, deployed["x64"]))
     x86_command = workflow.command_text(
-        workflow.regsvr32_command(x86, x86.installed_dll, unregister=True)
+        workflow.regsvr32_command(x86, deployed["x86"], unregister=True)
     )
 
     assert r"System32\regsvr32.exe" in x64_command
-    assert r"installed\x64\CapsWriterSpeechTip.dll" in x64_command
+    assert r"installed\versions\test-version\x64\CapsWriterSpeechTip.dll" in x64_command
     assert r"SysWOW64\regsvr32.exe" in x86_command
     assert " /u " in x86_command
-    assert r"installed\x86\CapsWriterSpeechTip.dll" in x86_command
+    assert r"installed\versions\test-version\x86\CapsWriterSpeechTip.dll" in x86_command
+
+
+def test_deployment_paths_keep_architectures_in_one_immutable_version():
+    workflow = _load_workflow()
+
+    deployed = workflow.deployment_paths("20260803-test")
+
+    assert deployed["x64"].parent.name == "x64"
+    assert deployed["x86"].parent.name == "x86"
+    assert deployed["x64"].parents[1] == deployed["x86"].parents[1]
+    assert deployed["x64"].parents[1].name == "20260803-test"
+
+
+def test_loaded_hosts_are_informational_and_do_not_block(monkeypatch, capsys):
+    workflow = _load_workflow()
+    monkeypatch.setattr(
+        workflow,
+        "loaded_hosts",
+        lambda: ["explorer.exe, 1234", "ExampleEditor.exe, 5678"],
+    )
+
+    workflow.report_loaded_hosts()
+
+    output = capsys.readouterr().out
+    assert "keep using their already-loaded DLL" in output
+    assert "registration will point new processes at the new version" in output
+    assert "explorer.exe, 1234" in output
+    assert "Close every process" not in output
 
 
 def test_install_dry_run_is_read_only_and_lists_verification_step():
@@ -62,5 +89,9 @@ def test_install_dry_run_is_read_only_and_lists_verification_step():
     assert result.returncode == 0, result.stderr
     assert "--preset x64-release" in result.stdout
     assert "--preset x86-release" in result.stdout
-    assert "install-signed.cmd" in result.stdout
-    assert "verify x64 and x86 HKCU COM registrations" in result.stdout
+    assert "sign.cmd" in result.stdout
+    assert r"installed\versions\<version-id>\x64" in result.stdout
+    assert r"installed\versions\<version-id>\x86" in result.stdout
+    assert "verify x64/x86 HKCU COM paths and the TSF language profile" in result.stdout
+    assert "Close every process" not in result.stdout
+    assert "Close every process" not in result.stderr
