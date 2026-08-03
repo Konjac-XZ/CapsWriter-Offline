@@ -11,6 +11,7 @@
 #include <new>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 
 #include "edit_session_queue.h"
@@ -46,8 +47,6 @@ constexpr UINT kPipeFrameMessage = WM_APP + 0x341;
 constexpr UINT kPumpEditQueueMessage = WM_APP + 0x342;
 constexpr DWORD kDisconnectedRetryInitialMs = 100;
 constexpr DWORD kDisconnectedRetryMaximumMs = 5000;
-constexpr DWORD kBackgroundPollMs = 250;
-constexpr DWORD kConnectedPollMs = 25;
 constexpr std::size_t kMaximumOutgoingFrames = 256;
 
 HINSTANCE g_instance = nullptr;
@@ -62,30 +61,40 @@ void SafeRelease(T*& value) noexcept {
     }
 }
 
-bool ReadExact(HANDLE pipe, void* target, DWORD byte_count) {
-    auto* cursor = static_cast<std::uint8_t*>(target);
-    DWORD total = 0;
-    while (total < byte_count) {
-        DWORD read = 0;
-        if (!ReadFile(pipe, cursor + total, byte_count - total, &read, nullptr) || read == 0) {
-            return false;
-        }
-        total += read;
-    }
-    return true;
-}
-
 bool WriteExact(HANDLE pipe, const void* source, DWORD byte_count) {
+    HANDLE write_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (write_event == nullptr) {
+        return false;
+    }
     const auto* cursor = static_cast<const std::uint8_t*>(source);
     DWORD total = 0;
+    bool success = true;
     while (total < byte_count) {
+        ResetEvent(write_event);
+        OVERLAPPED overlapped{};
+        overlapped.hEvent = write_event;
         DWORD written = 0;
-        if (!WriteFile(pipe, cursor + total, byte_count - total, &written, nullptr) || written == 0) {
-            return false;
+        if (!WriteFile(
+                pipe,
+                cursor + total,
+                byte_count - total,
+                &written,
+                &overlapped)) {
+            if (GetLastError() != ERROR_IO_PENDING ||
+                WaitForSingleObject(write_event, INFINITE) != WAIT_OBJECT_0 ||
+                !GetOverlappedResult(pipe, &overlapped, &written, FALSE)) {
+                success = false;
+                break;
+            }
+        }
+        if (written == 0) {
+            success = false;
+            break;
         }
         total += written;
     }
-    return true;
+    CloseHandle(write_event);
+    return success;
 }
 
 class TextService;
@@ -171,9 +180,36 @@ public:
             activation_thread_id_ = 0;
             return result;
         }
+        foreground_hook_ = SetWinEventHook(
+            EVENT_SYSTEM_FOREGROUND,
+            EVENT_SYSTEM_FOREGROUND,
+            nullptr,
+            &TextService::ForegroundEventProc,
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT);
+        if (foreground_hook_ == nullptr) {
+            const DWORD error = GetLastError();
+            const HRESULT result = error == ERROR_SUCCESS
+                ? E_FAIL
+                : HRESULT_FROM_WIN32(error);
+            CloseHandle(pipe_wake_event_);
+            pipe_wake_event_ = nullptr;
+            DestroyWindow(dispatch_window_);
+            dispatch_window_ = nullptr;
+            SafeRelease(thread_manager_);
+            client_id_ = TF_CLIENTID_NULL;
+            activation_thread_id_ = 0;
+            return result;
+        }
+        {
+            std::scoped_lock lock(foreground_hooks_mutex_);
+            foreground_hooks_[foreground_hook_] = this;
+        }
         try {
             pipe_thread_ = std::thread([this] { PipeLoop(); });
         } catch (...) {
+            UnregisterForegroundHook();
             CloseHandle(pipe_wake_event_);
             pipe_wake_event_ = nullptr;
             DestroyWindow(dispatch_window_);
@@ -187,12 +223,12 @@ public:
     }
 
     STDMETHODIMP Deactivate() override {
+        UnregisterForegroundHook();
         stop_pipe_.store(true);
         if (pipe_wake_event_ != nullptr) {
             SetEvent(pipe_wake_event_);
         }
         if (pipe_thread_.joinable()) {
-            CancelSynchronousIo(pipe_thread_.native_handle());
             pipe_thread_.join();
         }
         if (pipe_wake_event_ != nullptr) {
@@ -318,6 +354,34 @@ private:
             return 0;
         }
         return DefWindowProcW(window, message, wparam, lparam);
+    }
+
+    static void CALLBACK ForegroundEventProc(
+        HWINEVENTHOOK hook,
+        DWORD /*event*/,
+        HWND /*window*/,
+        LONG /*object_id*/,
+        LONG /*child_id*/,
+        DWORD /*event_thread*/,
+        DWORD /*event_time*/) {
+        std::scoped_lock lock(foreground_hooks_mutex_);
+        const auto found = foreground_hooks_.find(hook);
+        if (found != foreground_hooks_.end() &&
+            found->second->pipe_wake_event_ != nullptr) {
+            SetEvent(found->second->pipe_wake_event_);
+        }
+    }
+
+    void UnregisterForegroundHook() noexcept {
+        if (foreground_hook_ == nullptr) {
+            return;
+        }
+        {
+            std::scoped_lock lock(foreground_hooks_mutex_);
+            foreground_hooks_.erase(foreground_hook_);
+        }
+        UnhookWinEvent(foreground_hook_);
+        foreground_hook_ = nullptr;
     }
 
     bool IsForegroundProcess() const noexcept {
@@ -587,19 +651,79 @@ private:
         last_revision_ = 0;
         original_selection_text_.clear();
         original_selection_style_ = {};
+        if (pipe_wake_event_ != nullptr) {
+            SetEvent(pipe_wake_event_);
+        }
+    }
+
+    bool ShouldDisconnectPipe() const noexcept {
+        return !IsForegroundProcess() && !composition_active_.load();
+    }
+
+    bool ReadExactWithWake(
+        HANDLE pipe,
+        HANDLE read_event,
+        void* target,
+        DWORD byte_count) {
+        auto* cursor = static_cast<std::uint8_t*>(target);
+        DWORD total = 0;
+        while (total < byte_count) {
+            ResetEvent(read_event);
+            OVERLAPPED overlapped{};
+            overlapped.hEvent = read_event;
+            DWORD read = 0;
+            if (ReadFile(
+                    pipe,
+                    cursor + total,
+                    byte_count - total,
+                    &read,
+                    &overlapped)) {
+                if (read == 0) {
+                    return false;
+                }
+                total += read;
+                continue;
+            }
+            if (GetLastError() != ERROR_IO_PENDING) {
+                return false;
+            }
+
+            HANDLE waits[] = {pipe_wake_event_, read_event};
+            while (true) {
+                const DWORD wait_result = WaitForMultipleObjects(
+                    static_cast<DWORD>(std::size(waits)), waits, FALSE, INFINITE);
+                if (wait_result == WAIT_OBJECT_0) {
+                    if (stop_pipe_.load() || ShouldDisconnectPipe()) {
+                        CancelIoEx(pipe, &overlapped);
+                        WaitForSingleObject(read_event, INFINITE);
+                        GetOverlappedResult(pipe, &overlapped, &read, FALSE);
+                        return false;
+                    }
+                    if (!FlushOutgoing(pipe)) {
+                        CancelIoEx(pipe, &overlapped);
+                        WaitForSingleObject(read_event, INFINITE);
+                        GetOverlappedResult(pipe, &overlapped, &read, FALSE);
+                        return false;
+                    }
+                    continue;
+                }
+                if (wait_result != WAIT_OBJECT_0 + 1 ||
+                    !GetOverlappedResult(pipe, &overlapped, &read, FALSE) ||
+                    read == 0) {
+                    return false;
+                }
+                total += read;
+                break;
+            }
+        }
+        return true;
     }
 
     void PipeLoop() {
         DWORD retry_delay_ms = kDisconnectedRetryInitialMs;
         while (!stop_pipe_.load()) {
             if (!IsForegroundProcess()) {
-                WaitForPipeWake(kBackgroundPollMs);
-                continue;
-            }
-            if (!WaitNamedPipeW(caps_writer::tsf::kPipeName, 500)) {
-                WaitForPipeWake(retry_delay_ms);
-                retry_delay_ms = std::min(
-                    retry_delay_ms * 2, kDisconnectedRetryMaximumMs);
+                WaitForPipeWake(INFINITE);
                 continue;
             }
             HANDLE connected_pipe = CreateFileW(
@@ -608,7 +732,9 @@ private:
                 0,
                 nullptr,
                 OPEN_EXISTING,
-                SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
+                FILE_FLAG_OVERLAPPED |
+                    SECURITY_SQOS_PRESENT |
+                    SECURITY_IDENTIFICATION,
                 nullptr);
             if (connected_pipe == INVALID_HANDLE_VALUE) {
                 WaitForPipeWake(retry_delay_ms);
@@ -618,30 +744,29 @@ private:
             }
             retry_delay_ms = kDisconnectedRetryInitialMs;
             connected_.store(true);
-            if (!SendHello(connected_pipe)) {
+            HANDLE read_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            if (read_event == nullptr || !SendHello(connected_pipe)) {
                 connected_.store(false);
+                if (read_event != nullptr) {
+                    CloseHandle(read_event);
+                }
                 CloseHandle(connected_pipe);
                 WaitForPipeWake(retry_delay_ms);
                 continue;
             }
             while (!stop_pipe_.load()) {
-                if (!IsForegroundProcess() && !composition_active_.load()) {
+                if (ShouldDisconnectPipe()) {
                     break;
                 }
                 if (!FlushOutgoing(connected_pipe)) {
                     break;
                 }
-                DWORD available = 0;
-                if (!PeekNamedPipe(
-                        connected_pipe, nullptr, 0, nullptr, &available, nullptr)) {
-                    break;
-                }
-                if (available < sizeof(FrameHeader)) {
-                    WaitForPipeWake(kConnectedPollMs);
-                    continue;
-                }
                 auto frame = std::make_unique<Frame>();
-                if (!ReadExact(connected_pipe, &frame->header, sizeof(FrameHeader))) {
+                if (!ReadExactWithWake(
+                        connected_pipe,
+                        read_event,
+                        &frame->header,
+                        sizeof(FrameHeader))) {
                     break;
                 }
                 if (frame->header.magic != caps_writer::tsf::kMagic ||
@@ -652,8 +777,9 @@ private:
                 }
                 if (frame->header.text_bytes > 0) {
                     frame->text.resize(frame->header.text_bytes / sizeof(wchar_t));
-                    if (!ReadExact(
+                    if (!ReadExactWithWake(
                         connected_pipe,
+                        read_event,
                         frame->text.data(),
                         frame->header.text_bytes)) {
                         break;
@@ -667,6 +793,7 @@ private:
             }
             connected_.store(false);
             CancelIoEx(connected_pipe, nullptr);
+            CloseHandle(read_event);
             CloseHandle(connected_pipe);
             ClearOutgoing();
             WaitForPipeWake(retry_delay_ms);
@@ -735,6 +862,8 @@ private:
     }
 
     std::atomic<ULONG> ref_count_{1};
+    inline static std::mutex foreground_hooks_mutex_;
+    inline static std::unordered_map<HWINEVENTHOOK, TextService*> foreground_hooks_;
     ITfThreadMgr* thread_manager_ = nullptr;
     TfClientId client_id_ = TF_CLIENTID_NULL;
     DWORD activation_thread_id_ = 0;
@@ -743,6 +872,7 @@ private:
     std::atomic<bool> stop_pipe_{false};
     std::atomic<bool> connected_{false};
     HANDLE pipe_wake_event_ = nullptr;
+    HWINEVENTHOOK foreground_hook_ = nullptr;
     std::mutex outgoing_mutex_;
     std::deque<FrameHeader> outgoing_;
 

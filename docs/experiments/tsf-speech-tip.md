@@ -41,7 +41,8 @@ Official references:
 
 The backend owns `\\.\pipe\CapsWriter.TsfSpeechTip.v1`. It creates multiple
 duplex instances with an ACL granting access only to the current user and sets
-`PIPE_REJECT_REMOTE_CLIENTS`. Every loaded TIP instance connects as a client.
+`PIPE_REJECT_REMOTE_CLIENTS`. A TIP connects while its host is foreground, and
+stays connected while it owns an active composition.
 
 Frames have a fixed 40-byte little-endian header followed by UTF-16LE full text:
 
@@ -55,15 +56,22 @@ Frames have a fixed 40-byte little-endian header followed by UTF-16LE full text:
 | text bytes | 4 | UTF-16LE byte count |
 | status | 4 | ACK result or process ID for HELLO |
 
-Each connection is a synchronous request/response pump: the TIP sends
-`HELLO` or the previous command's `ACK`; only then does the broker return
-one queued command (or `PING`). This prevents a synchronous Win32 pipe write from
-blocking the asyncio thread and ensures that a TIP has at most one outstanding TSF
-edit session. All connected TIPs eventually receive `BEGIN`, but only the instance
-loaded in the foreground process may accept it. The backend suppresses the legacy
-keyboard/paste path only after an `APPLIED` ACK for that session. A missing,
-rejected, or timed-out ACK keeps the entire task on the legacy path, preventing
-text from disappearing merely because the experimental DLL is absent.
+Pipe transport is event-driven in both directions. The broker creates overlapped
+pipe instances and each client service thread blocks on the pending read, outgoing
+queue event, or shutdown event. The TIP uses an overlapped read and waits on either
+pipe completion or its shared wake event; `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)`
+wakes a background TIP as soon as its host becomes foreground. There are no fixed
+10/25/250 ms transport or foreground polling loops. Disconnected clients retain a
+bounded exponential reconnect delay after actual connection failures.
+
+The activation-thread edit queue separately ensures that a TIP has at most one
+outstanding TSF edit session and coalesces consecutive queued revisions without
+crossing `BEGIN`, `COMMIT`, or `CANCEL`. All connected TIPs may receive `BEGIN`,
+but only the instance loaded in the foreground process may accept it. The backend
+suppresses the legacy keyboard/paste path only after an `APPLIED` ACK for that
+session. A missing, rejected, or timed-out ACK keeps the entire task on the legacy
+path, preventing text from disappearing merely because the experimental DLL is
+absent.
 Negative ACKs from background TIP instances never outrank a later positive ACK
 from the foreground instance. On timeout, the broker also queues a higher-revision
 `CANCEL`, so a delayed edit session cannot leave a composition behind after the

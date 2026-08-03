@@ -1,7 +1,9 @@
 import asyncio
+import inspect
 import platform
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -21,6 +23,26 @@ pytestmark = pytest.mark.skipif(
 
 def test_pipe_server_does_not_cap_loaded_tip_clients_at_sixteen():
     assert PIPE_UNLIMITED_INSTANCES == 255
+
+
+def test_tsf_transport_uses_event_waits_instead_of_fixed_polling():
+    broker_source = inspect.getsource(WindowsNamedPipeBroker)
+    native_source = (
+        Path(__file__).parents[1]
+        / "native"
+        / "tsf_speech_tip"
+        / "src"
+        / "speech_tip.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert "PeekNamedPipe" not in broker_source
+    assert "wait(0.01)" not in broker_source
+    assert "WaitForMultipleObjects" in broker_source
+    assert "PeekNamedPipe" not in native_source
+    assert "kBackgroundPollMs" not in native_source
+    assert "kConnectedPollMs" not in native_source
+    assert "SetWinEventHook" in native_source
+    assert "FILE_FLAG_OVERLAPPED" in native_source
 
 
 def test_windows_pipe_request_ack_round_trip():
@@ -47,6 +69,37 @@ def test_windows_pipe_request_ack_round_trip():
             client.wait(timeout=2.0)
             broker.stop()
         assert client.returncode == 0
+
+    asyncio.run(exercise())
+
+
+def test_idle_pipe_client_shutdown_is_event_driven():
+    pipe_name = rf"\\.\pipe\CapsWriter.TsfSpeechTip.test.{uuid.uuid4().hex}"
+
+    async def exercise() -> None:
+        broker = WindowsNamedPipeBroker(pipe_name)
+        assert broker.start(asyncio.get_running_loop()) is True
+        helper = Path(__file__).parent / "helpers" / "tsf_pipe_client.py"
+        client = subprocess.Popen(
+            [sys.executable, str(helper), pipe_name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            for _ in range(200):
+                if broker.client_count:
+                    break
+                await asyncio.sleep(0.01)
+            assert broker.client_count == 1
+
+            started = time.monotonic()
+            broker.stop()
+            assert time.monotonic() - started < 0.75
+            client.wait(timeout=2.0)
+        finally:
+            if client.poll() is None:
+                client.kill()
+                client.wait(timeout=2.0)
 
     asyncio.run(exercise())
 
