@@ -40,6 +40,8 @@ void VerifyAttribute(
            "display attribute information could not be read");
     Expect(attribute.lsStyle == expected_style,
            "provider returned the wrong underline style");
+    Expect(info->SetAttributeInfo(&attribute) == E_NOTIMPL,
+           "immutable display attributes must reject host modification");
     info->Release();
 }
 
@@ -84,6 +86,11 @@ int wmain(int argument_count, wchar_t** arguments) {
             enumeration != nullptr,
         "provider did not expose its display attribute enumerator");
     ITfDisplayAttributeInfo* entries[2]{};
+    Expect(SUCCEEDED(enumeration->Next(1, entries, nullptr)) && entries[0] != nullptr,
+           "enumerator rejected a null optional fetched-count pointer");
+    entries[0]->Release();
+    entries[0] = nullptr;
+    Expect(SUCCEEDED(enumeration->Reset()), "display attribute enumerator did not reset");
     ULONG fetched = 0;
     Expect(SUCCEEDED(enumeration->Next(2, entries, &fetched)) && fetched == 2,
            "provider did not enumerate both display attributes");

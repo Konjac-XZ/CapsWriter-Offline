@@ -94,6 +94,14 @@ remain solid. The property is cleared before commit or cancellation. Older
 already-loaded DLLs ignore this request metadata, and host applications that do
 not render TSF display attributes still retain the same composition behavior
 without the requested underline.
+The provider exposes immutable attributes (`SetAttributeInfo` returns
+`E_NOTIMPL`) and follows the COM enumeration contract that permits a null
+optional fetched-count pointer.
+
+Cancellation treats `EndComposition` as an irreversible boundary. The TIP first
+restores both the original selected text and selection style; if either operation
+fails, it leaves the composition active and returns a negative ACK so a later
+cancel can retry.
 
 ## Build
 

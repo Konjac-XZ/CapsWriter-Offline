@@ -16,6 +16,7 @@
 #include <utility>
 
 #include "edit_session_queue.h"
+#include "edit_session_policy.h"
 #include "display_attributes.h"
 #include "protocol.h"
 
@@ -165,8 +166,7 @@ public:
         if (attribute == nullptr) {
             return E_INVALIDARG;
         }
-        attribute_ = *attribute;
-        return S_OK;
+        return E_NOTIMPL;
     }
 
     STDMETHODIMP Reset() override {
@@ -234,22 +234,29 @@ public:
         ULONG count,
         ITfDisplayAttributeInfo** info,
         ULONG* fetched) override {
-        if (info == nullptr || fetched == nullptr) {
+        if (info == nullptr) {
             return E_INVALIDARG;
         }
-        *fetched = 0;
-        while (*fetched < count && position_ < 2) {
+        ULONG fetched_count = 0;
+        while (fetched_count < count && position_ < 2) {
             const CompositionStyle style = position_ == 0
                 ? CompositionStyle::Transcription
                 : CompositionStyle::Polishing;
-            const HRESULT result = CreateDisplayAttributeInfo(style, &info[*fetched]);
+            const HRESULT result = CreateDisplayAttributeInfo(
+                style, &info[fetched_count]);
             if (FAILED(result)) {
+                if (fetched != nullptr) {
+                    *fetched = fetched_count;
+                }
                 return result;
             }
             ++position_;
-            ++*fetched;
+            ++fetched_count;
         }
-        return *fetched == count ? S_OK : S_FALSE;
+        if (fetched != nullptr) {
+            *fetched = fetched_count;
+        }
+        return fetched_count == count ? S_OK : S_FALSE;
     }
 
     STDMETHODIMP Reset() override {
@@ -847,35 +854,45 @@ private:
             return Status::InactiveSession;
         }
         ITfRange* range = nullptr;
-        HRESULT result = composition_->GetRange(&range);
-        if (SUCCEEDED(result) && range != nullptr) {
-            result = range->SetText(
-                edit_cookie,
-                0,
-                original_selection_text_.data(),
-                static_cast<LONG>(original_selection_text_.size()));
+        const HRESULT range_result = composition_->GetRange(&range);
+        if (FAILED(range_result) || range == nullptr) {
+            SafeRelease(range);
+            return Status::EditSessionFailed;
         }
+        const HRESULT text_restore_result = range->SetText(
+            edit_cookie,
+            0,
+            original_selection_text_.data(),
+            static_cast<LONG>(original_selection_text_.size()));
         const TF_SELECTIONSTYLE original_selection_style = original_selection_style_;
-        ITfComposition* composition = composition_;
-        composition->AddRef();
-        const HRESULT end_result = composition->EndComposition(edit_cookie);
-        composition->Release();
-        HRESULT selection_result = E_FAIL;
-        if (SUCCEEDED(result) && SUCCEEDED(end_result) && range != nullptr) {
+        HRESULT selection_restore_result = E_FAIL;
+        if (SUCCEEDED(text_restore_result)) {
             TF_SELECTION selection{};
             selection.range = range;
             selection.style = original_selection_style;
-            selection_result = context->SetSelection(edit_cookie, 1, &selection);
+            selection_restore_result = context->SetSelection(
+                edit_cookie, 1, &selection);
         }
+        if (!caps_writer::tsf::CanEndCancellation(
+                text_restore_result, selection_restore_result)) {
+            range->Release();
+            return Status::EditSessionFailed;
+        }
+
+        ITfComposition* composition = composition_;
+        if (composition == nullptr) {
+            range->Release();
+            return Status::InactiveSession;
+        }
+        composition->AddRef();
+        const HRESULT end_result = composition->EndComposition(edit_cookie);
+        composition->Release();
         if (SUCCEEDED(end_result)) {
             ClearDisplayAttribute(context, range, edit_cookie);
             ClearCompositionState();
         }
-        SafeRelease(range);
-        if (SUCCEEDED(result) && SUCCEEDED(end_result) && SUCCEEDED(selection_result)) {
-            return Status::Applied;
-        }
-        return Status::EditSessionFailed;
+        range->Release();
+        return SUCCEEDED(end_result) ? Status::Applied : Status::EditSessionFailed;
     }
 
     static HRESULT ReadRangeText(

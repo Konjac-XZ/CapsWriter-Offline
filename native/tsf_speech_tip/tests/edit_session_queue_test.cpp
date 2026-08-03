@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "edit_session_queue.h"
+#include "edit_session_policy.h"
 
 using caps_writer::tsf::EditSessionQueue;
 using caps_writer::tsf::Frame;
@@ -133,6 +134,19 @@ void TestCancelAndBeginRemainOrderingBoundaries() {
     }
 }
 
+void TestCancellationEndsOnlyAfterTextAndSelectionRestore() {
+    using caps_writer::tsf::CanEndCancellation;
+
+    Check(CanEndCancellation(S_OK, S_OK),
+          "successful restoration should permit EndComposition");
+    Check(!CanEndCancellation(E_FAIL, S_OK),
+          "text restoration failure must preserve the composition");
+    Check(!CanEndCancellation(S_OK, E_FAIL),
+          "selection restoration failure must preserve the composition");
+    Check(!CanEndCancellation(E_FAIL, E_FAIL),
+          "failed restoration must never cross the cancellation boundary");
+}
+
 }  // namespace
 
 int main() {
@@ -140,5 +154,6 @@ int main() {
     TestCoalescesOnlyConsecutiveSameSessionRevisions();
     TestCommitIsAFenceForPendingRevision();
     TestCancelAndBeginRemainOrderingBoundaries();
+    TestCancellationEndsOnlyAfterTextAndSelectionRestore();
     return 0;
 }
