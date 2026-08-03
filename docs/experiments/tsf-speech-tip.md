@@ -141,7 +141,7 @@ After the certificate and machine trust have been created once, use the guarded
 registration workflow for subsequent source updates:
 
 ```text
-native\tsf_speech_tip\register-tip.cmd
+sudo native\tsf_speech_tip\register-tip.cmd
 ```
 
 The workflow configures and builds both Release architectures, runs both CTest
@@ -159,7 +159,7 @@ Useful read-only and maintenance commands are:
 uv run python native\tsf_speech_tip\manage_registration.py status
 uv run python native\tsf_speech_tip\manage_registration.py install --dry-run
 uv run python native\tsf_speech_tip\manage_registration.py uninstall --dry-run
-uv run python native\tsf_speech_tip\manage_registration.py uninstall
+sudo uv run python native\tsf_speech_tip\manage_registration.py uninstall
 ```
 
 `install --skip-build` reuses the existing x64/x86 Release outputs but still
@@ -167,6 +167,9 @@ signs, installs, registers, and verifies them. `uninstall` removes both
 registrations without deleting versioned DLLs or the certificate. Running hosts
 are reported for visibility but do not block either operation; they retain the
 DLL they already loaded until they exit.
+Mutating install and uninstall commands require elevation because TSF category
+registration is machine-scoped; the workflow checks this before changing any
+registration state.
 
 `install-signed.cmd` remains as a compatibility entry point and delegates to the
 same side-by-side workflow with `--skip-build`. The certificate, versioned DLLs,

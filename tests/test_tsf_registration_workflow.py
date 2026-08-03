@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT = (
     Path(__file__).parents[1] / "native" / "tsf_speech_tip" / "manage_registration.py"
@@ -76,6 +78,19 @@ def test_loaded_hosts_are_informational_and_do_not_block(monkeypatch, capsys):
     assert "registration will point new processes at the new version" in output
     assert "explorer.exe, 1234" in output
     assert "Close every process" not in output
+
+
+def test_mutating_registration_requires_elevation_before_reading_state(monkeypatch):
+    workflow = _load_workflow()
+    monkeypatch.setattr(workflow.ctypes.windll.shell32, "IsUserAnAdmin", lambda: False)
+    monkeypatch.setattr(
+        workflow,
+        "registration_states",
+        lambda: (_ for _ in ()).throw(AssertionError("registration was read")),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="Administrator privileges"):
+        workflow.install(skip_build=True, dry_run=False)
 
 
 def test_install_dry_run_is_read_only_and_lists_verification_step():

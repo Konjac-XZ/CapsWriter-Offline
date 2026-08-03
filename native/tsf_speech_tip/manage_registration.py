@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import ctypes
 import hashlib
 import os
 import platform
@@ -170,6 +171,14 @@ def require_supported_host() -> None:
         raise WorkflowError("TSF registration is supported only on Windows")
 
 
+def require_elevated() -> None:
+    if not bool(ctypes.windll.shell32.IsUserAnAdmin()):
+        raise WorkflowError(
+            "Administrator privileges are required before changing TSF categories. "
+            "Run this command through sudo or an elevated terminal."
+        )
+
+
 def require_recoverable_registration(states: Sequence[RegistrationState]) -> None:
     for state in states:
         registered = state.registered_path
@@ -306,6 +315,8 @@ def rollback_install(
 
 
 def install(*, skip_build: bool, dry_run: bool) -> None:
+    if not dry_run:
+        require_elevated()
     previous = registration_states()
     require_recoverable_registration(previous)
     report_loaded_hosts()
@@ -378,6 +389,8 @@ def install(*, skip_build: bool, dry_run: bool) -> None:
 
 
 def uninstall(*, dry_run: bool) -> None:
+    if not dry_run:
+        require_elevated()
     states = registration_states()
     require_recoverable_registration(states)
     report_loaded_hosts()
