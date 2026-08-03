@@ -1,24 +1,25 @@
 import asyncio
 import os
 import time
+import warnings
+
 import pangu
+from src.audio.rename_audio import rename_audio
+from src.infra.config import config as Config
 from src.infra.cosmic import Cosmic, console
+from src.infra.daily_input_stats import record_input_characters
+from src.infra.gui_output import gui_event
+from src.pipeline.regex_replace import regex_replace
+from src.pipeline.strip_punc import strip_punc
+from src.pipeline.type_result import type_result
+from src.pipeline.write_md import write_md
 from src.polish.llm_polish import (
     is_llm_polish_enabled,
     polish_text,
     record_finalized_text,
+    should_polish_text,
 )
-from src.pipeline.regex_replace import regex_replace
-from src.audio.rename_audio import rename_audio
-from src.pipeline.strip_punc import strip_punc
-from src.pipeline.type_result import type_result
-from src.pipeline.write_md import write_md
-from src.infra.config import config as Config
-from src.infra.gui_output import gui_event
-from src.infra.daily_input_stats import record_input_characters
-from src.polish.llm_polish import should_polish_text
 from src.tsf_ipc import get_tsf_speech_tip_bridge
-import warnings
 
 warnings.filterwarnings("ignore")
 
@@ -251,18 +252,22 @@ async def recv_result():
                 # 新任务开始时，清理增量输出标记
                 Cosmic._transcript_had_deltas = False
 
+            final_output_succeeded = not is_final
             if is_transcript_delta:
                 # 润色开启时，优先由 TSF Composition 承载可修订的 full text。
                 # BEGIN 未获得前台 TIP 的 APPLIED ACK 时保留旧的键入回退。
                 tsf_owned = False
                 if current_tid is not None and is_llm_polish_enabled():
                     tsf_owned = await tsf_bridge.begin_or_revise(current_tid, text)
-                if not tsf_owned:
+                if (
+                    not tsf_owned
+                    and not tsf_bridge.owns_task(current_tid)
+                    and not is_full_text_revision
+                ):
                     # A full-text hypothesis may revise its unstable suffix.
                     # The legacy keyboard fallback can only append, so suppress
                     # intermediate updates and let the final result paste once.
-                    if not is_full_text_revision:
-                        await type_transcript_delta(text)
+                    await type_transcript_delta(text)
             else:
                 # 最终：按原逻辑输出，但走剪贴板粘贴
                 # 若此前已有增量转录结果输出，则不再进行最终粘贴，避免重复
@@ -273,6 +278,19 @@ async def recv_result():
                         record_input_characters(
                             text, log_interval=Config.daily_input_log_interval
                         )
+                        final_output_succeeded = True
+                    elif await tsf_bridge.cancel(current_tid):
+                        # A confirmed CANCEL proves that the uncommitted
+                        # composition is gone, so the legacy paste cannot
+                        # duplicate it. If cancellation is not confirmed, keep
+                        # the bridge state for later cleanup and do not paste.
+                        await type_final(text)
+                        final_output_succeeded = True
+                    else:
+                        console.print(
+                            "TSF 最终提交与取消均未确认，已抑制剪贴板回退以避免重复上屏。",
+                            style="yellow",
+                        )
                 elif has_incremental_transcript and getattr(
                     Cosmic, "_transcript_had_deltas", False
                 ):
@@ -281,10 +299,11 @@ async def recv_result():
                         Cosmic._last_transcript_delta_len = 0
                     Cosmic._transcript_had_deltas = False
                     # 不进行任何粘贴输出
-                    pass
+                    final_output_succeeded = True
                 else:
                     await type_final(text)
-            if is_final and text:
+                    final_output_succeeded = True
+            if is_final and text and final_output_succeeded:
                 from src.keyboard.play_music import play_completion_sound
 
                 play_completion_sound()

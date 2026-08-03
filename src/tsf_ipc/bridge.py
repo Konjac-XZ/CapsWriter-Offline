@@ -64,6 +64,29 @@ class TsfSpeechTipBridge:
             and self._state.captured
         )
 
+    @staticmethod
+    def _ack_timeout() -> float:
+        return max(
+            0.01,
+            float(getattr(Config, "tsf_speech_tip_ack_timeout_ms", 150)) / 1000.0,
+        )
+
+    async def _request_applied(self, frame: Frame) -> bool:
+        try:
+            ack = await self._broker.request(frame, self._ack_timeout())
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - transport failures all mean no ACK
+            return False
+        return bool(
+            ack
+            and ack.is_ack
+            and ack.acknowledged_operation == int(frame.operation)
+            and ack.session_id == frame.session_id
+            and ack.revision == frame.revision
+            and ack.status == int(Status.APPLIED)
+        )
+
     async def begin_or_revise(self, task_id: str, text: str) -> bool:
         if not self.enabled:
             return False
@@ -72,7 +95,7 @@ class TsfSpeechTipBridge:
                 if not self._state.captured:
                     return False
                 self._state.revision += 1
-                self._broker.broadcast(
+                return await self._request_applied(
                     Frame(
                         Operation.REVISE,
                         self._state.session_id,
@@ -80,34 +103,31 @@ class TsfSpeechTipBridge:
                         text,
                     )
                 )
-                return True
 
             if self._state is not None and self._state.captured:
-                self._broker.broadcast(
+                self._state.revision += 1
+                cancelled = await self._request_applied(
                     Frame(
                         Operation.CANCEL,
                         self._state.session_id,
-                        self._state.revision + 1,
+                        self._state.revision,
                     )
                 )
+                if not cancelled:
+                    return False
 
             session_id = uuid.uuid4()
             state = _CompositionState(task_id, session_id, 1, False)
             self._state = state
-            timeout = max(
-                0.01,
-                float(getattr(Config, "tsf_speech_tip_ack_timeout_ms", 150)) / 1000.0,
+            state.captured = await self._request_applied(
+                Frame(Operation.BEGIN, session_id, state.revision, text)
             )
-            ack = await self._broker.request(
-                Frame(Operation.BEGIN, session_id, state.revision, text), timeout
-            )
-            state.captured = bool(ack and ack.status == int(Status.APPLIED))
             if not state.captured:
                 # A foreground edit session can finish just after our timeout.
                 # Queue a higher revision cancel so a late BEGIN cannot coexist
                 # with the legacy keyboard/paste fallback.
                 state.revision += 1
-                self._broker.broadcast(
+                await self._request_applied(
                     Frame(Operation.CANCEL, state.session_id, state.revision)
                 )
             return state.captured
@@ -119,17 +139,20 @@ class TsfSpeechTipBridge:
                 return False
             if final_text is not None:
                 state.revision += 1
-                self._broker.broadcast(
+                revised = await self._request_applied(
                     Frame(
                         Operation.REVISE, state.session_id, state.revision, final_text
                     )
                 )
+                if not revised:
+                    return False
             state.revision += 1
-            self._broker.broadcast(
+            committed = await self._request_applied(
                 Frame(Operation.COMMIT, state.session_id, state.revision)
             )
-            self._state = None
-            return True
+            if committed:
+                self._state = None
+            return committed
 
     async def cancel(self, task_id: str | None = None) -> bool:
         async with self._lock:
@@ -137,11 +160,15 @@ class TsfSpeechTipBridge:
             if state is None or (task_id is not None and state.task_id != task_id):
                 return False
             if state.captured:
-                self._broker.broadcast(
-                    Frame(Operation.CANCEL, state.session_id, state.revision + 1)
+                state.revision += 1
+                cancelled = await self._request_applied(
+                    Frame(Operation.CANCEL, state.session_id, state.revision)
                 )
+                if cancelled:
+                    self._state = None
+                return cancelled
             self._state = None
-            return state.captured
+            return False
 
 
 _bridge = TsfSpeechTipBridge()

@@ -69,6 +69,14 @@ from the foreground instance. On timeout, the broker also queues a higher-revisi
 `CANCEL`, so a delayed edit session cannot leave a composition behind after the
 backend has chosen the legacy fallback.
 
+Once a session is captured, the backend waits for an `APPLIED` ACK for every
+`REVISE`. Finalization is an ordered barrier: the final full-text `REVISE(N)` must
+be confirmed before `COMMIT(N+1)` is sent, and ownership is released only after
+the commit is confirmed. A failed or timed-out commit keeps ownership available
+for recovery. The pipeline may use the legacy paste fallback only after a
+subsequent `CANCEL` is also confirmed; otherwise it suppresses fallback output to
+avoid duplicating a composition that may have been applied after the timeout.
+
 ## Build
 
 From `native/tsf_speech_tip` with Visual Studio 2022 and a Windows SDK installed:

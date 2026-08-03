@@ -1,6 +1,8 @@
 import asyncio
 from typing import Any, cast
 
+import pytest
+
 from src.infra.cosmic import Cosmic
 from src.pipeline import recv_result as pipeline
 
@@ -38,11 +40,13 @@ class MessageThenWaitQueue:
 
 
 class FakeTsfBridge:
-    def __init__(self):
+    def __init__(self, *, commit_result=True, cancel_result=True):
         self.owned_task = None
         self.revisions = []
         self.commits = []
         self.cancels = []
+        self.commit_result = commit_result
+        self.cancel_result = cancel_result
 
     async def begin_or_revise(self, task_id, text):
         self.owned_task = task_id
@@ -54,13 +58,15 @@ class FakeTsfBridge:
 
     async def commit(self, task_id, text):
         self.commits.append((task_id, text))
-        self.owned_task = None
-        return True
+        if self.commit_result:
+            self.owned_task = None
+        return self.commit_result
 
     async def cancel(self, task_id=None):
         self.cancels.append(task_id)
-        self.owned_task = None
-        return True
+        if self.cancel_result:
+            self.owned_task = None
+        return self.cancel_result
 
 
 class RejectingTsfBridge(FakeTsfBridge):
@@ -69,11 +75,49 @@ class RejectingTsfBridge(FakeTsfBridge):
         return False
 
 
-def test_final_asr_and_llm_full_text_revisions_commit_without_legacy_paste(monkeypatch):
-    bridge = FakeTsfBridge()
+class OwnedButUnconfirmedTsfBridge(FakeTsfBridge):
+    async def begin_or_revise(self, task_id, text):
+        self.owned_task = task_id
+        self.revisions.append((task_id, text))
+        return False
+
+
+@pytest.mark.parametrize(
+    (
+        "commit_result",
+        "cancel_result",
+        "expected_typed",
+        "expected_recorded",
+        "expected_cancel",
+        "expected_sound_count",
+    ),
+    [
+        (True, True, [], ["LLM final full text"], [], 1),
+        (
+            False,
+            True,
+            ["LLM final full text"],
+            ["LLM final full text"],
+            ["task-1"],
+            1,
+        ),
+        (False, False, [], [], ["task-1", "task-1"], 0),
+    ],
+)
+def test_final_tsf_output_requires_confirmed_commit_or_cancelled_fallback(
+    monkeypatch,
+    commit_result,
+    cancel_result,
+    expected_typed,
+    expected_recorded,
+    expected_cancel,
+    expected_sound_count,
+):
+    bridge = FakeTsfBridge(commit_result=commit_result, cancel_result=cancel_result)
     typed = []
     finalized = []
     recorded = []
+    played = []
 
     async def fake_polish(text, *, on_text=None, **_kwargs):
         assert text == "ASR full text"
@@ -112,7 +156,9 @@ def test_final_asr_and_llm_full_text_revisions_commit_without_legacy_paste(monke
         "record_input_characters",
         lambda text, **_kwargs: recorded.append(text),
     )
-    monkeypatch.setattr("src.keyboard.play_music.play_completion_sound", lambda: None)
+    monkeypatch.setattr(
+        "src.keyboard.play_music.play_completion_sound", lambda: played.append(True)
+    )
     monkeypatch.setattr(pipeline.Config, "save_audio", False)
     monkeypatch.setattr(pipeline.Config, "save_markdown", False)
 
@@ -123,9 +169,11 @@ def test_final_asr_and_llm_full_text_revisions_commit_without_legacy_paste(monke
         ("task-1", "LLM partial full text"),
     ]
     assert bridge.commits == [("task-1", "LLM final full text")]
-    assert typed == []
+    assert bridge.cancels == expected_cancel
+    assert typed == expected_typed
     assert finalized == ["LLM final full text"]
-    assert recorded == ["LLM final full text"]
+    assert recorded == expected_recorded
+    assert len(played) == expected_sound_count
 
 
 def test_full_text_asr_revision_is_not_sent_to_append_only_keyboard_fallback(
@@ -165,6 +213,40 @@ def test_full_text_asr_revision_is_not_sent_to_append_only_keyboard_fallback(
     assert bridge.revisions == [("task-realtime", "已稳定前缀加暂存尾部")]
     assert Cosmic._transcript_had_deltas is False
     assert recorded == []
+
+
+def test_unconfirmed_revision_does_not_fall_back_while_composition_is_owned(
+    monkeypatch,
+):
+    bridge = OwnedButUnconfirmedTsfBridge()
+    typed = []
+    message = {
+        "task_id": "task-realtime",
+        "is_final": False,
+        "is_transcript_delta": True,
+        "text": "临时文本",
+        "time_start": 1.0,
+        "time_submit": 1.1,
+        "time_complete": 1.2,
+        "source": "mic",
+        "stream": True,
+    }
+    Cosmic.queue_out = cast(Any, OneMessageQueue(message))
+    Cosmic.abandon_requested = False
+    Cosmic.abandoned_task_ids.clear()
+    Cosmic.active_task_id = None
+
+    Cosmic._transcript_had_deltas = False
+
+    monkeypatch.setattr(pipeline, "get_tsf_speech_tip_bridge", lambda: bridge)
+    monkeypatch.setattr(pipeline, "is_llm_polish_enabled", lambda: True)
+    monkeypatch.setattr(pipeline, "regex_replace", lambda text: text)
+    monkeypatch.setattr("keyboard.write", typed.append)
+
+    asyncio.run(pipeline.recv_result())
+
+    assert bridge.revisions == [("task-realtime", "临时文本")]
+    assert typed == []
 
 
 def _configure_final_message_test(monkeypatch, bridge, message, fake_polish):

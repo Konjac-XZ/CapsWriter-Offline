@@ -19,7 +19,6 @@ from .protocol import (
     encode_frame,
 )
 
-
 PIPE_NAME = r"\\.\pipe\CapsWriter.TsfSpeechTip.v1"
 INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
 ERROR_PIPE_CONNECTED = 535
@@ -62,6 +61,13 @@ class _PipeClient:
     queue_lock: threading.Lock = field(default_factory=threading.Lock)
 
 
+@dataclass(slots=True)
+class _PendingRequest:
+    future: asyncio.Future[Frame | None]
+    client_handles: set[int]
+    last_negative_ack: Frame | None = None
+
+
 class WindowsNamedPipeBroker:
     """Same-user, local-only named-pipe server used by all in-process TIP clients."""
 
@@ -74,9 +80,7 @@ class WindowsNamedPipeBroker:
         self._accept_thread: threading.Thread | None = None
         self._clients: dict[int, _PipeClient] = {}
         self._clients_lock = threading.Lock()
-        self._pending: dict[
-            tuple[uuid.UUID, int, int], list[asyncio.Future[Frame]]
-        ] = {}
+        self._pending: dict[tuple[uuid.UUID, int, int], list[_PendingRequest]] = {}
         self._pending_lock = threading.Lock()
 
     @property
@@ -136,23 +140,36 @@ class WindowsNamedPipeBroker:
         self._fail_pending(RuntimeError("TSF named-pipe broker stopped"))
 
     async def request(self, frame: Frame, timeout: float) -> Frame | None:
-        if self.client_count == 0:
-            return None
         loop = self._loop or asyncio.get_running_loop()
         key = (frame.session_id, frame.revision, int(frame.operation))
-        future: asyncio.Future[Frame] = loop.create_future()
-        with self._pending_lock:
-            self._pending.setdefault(key, []).append(future)
-        sent = self.broadcast(frame)
+        future: asyncio.Future[Frame | None] = loop.create_future()
+        encoded = encode_frame(frame)
+        with self._clients_lock:
+            clients = list(self._clients.values())
+            if not clients:
+                return None
+            pending = _PendingRequest(
+                future=future,
+                client_handles={client.handle for client in clients},
+            )
+            with self._pending_lock:
+                self._pending.setdefault(key, []).append(pending)
+        sent = 0
+        for client in clients:
+            try:
+                self._enqueue_frame(client, frame, encoded)
+                sent += 1
+            except queue.Full:
+                self._remove_client(client.handle)
         if sent == 0:
-            self._remove_pending(key, future)
+            self._remove_pending(key, pending)
             return None
         try:
             return await asyncio.wait_for(future, timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
         finally:
-            self._remove_pending(key, future)
+            self._remove_pending(key, pending)
 
     def broadcast(self, frame: Frame) -> int:
         encoded = encode_frame(frame)
@@ -406,47 +423,59 @@ class WindowsNamedPipeBroker:
                     return
                 frame = decode_frame(header, payload)
                 if frame.is_ack:
-                    self._resolve_ack(frame)
+                    self._resolve_ack(client.handle, frame)
         except Exception:
             return
         finally:
             self._remove_client(client.handle)
 
-    def _resolve_ack(self, frame: Frame) -> None:
+    def _resolve_ack(self, client_handle: int, frame: Frame) -> None:
         key = (frame.session_id, frame.revision, frame.acknowledged_operation)
         with self._pending_lock:
-            futures = list(self._pending.get(key, ()))
-        if not futures or self._loop is None:
+            requests = list(self._pending.get(key, ()))
+            completions: list[tuple[asyncio.Future[Frame | None], Frame | None]] = []
+            for request in requests:
+                if client_handle not in request.client_handles:
+                    continue
+                if frame.status == int(Status.APPLIED):
+                    request.client_handles.clear()
+                    completions.append((request.future, frame))
+                    continue
+                request.client_handles.discard(client_handle)
+                request.last_negative_ack = frame
+                if not request.client_handles:
+                    completions.append((request.future, request.last_negative_ack))
+        if not completions or self._loop is None:
             return
-        # BEGIN is broadcast to every loaded TIP. Background processes reject it,
-        # so only a positive foreground APPLIED result may claim the session.
-        if frame.status != int(Status.APPLIED):
-            return
-        for future in futures:
-            self._loop.call_soon_threadsafe(self._set_future_result, future, frame)
+        for future, result in completions:
+            self._loop.call_soon_threadsafe(self._set_future_result, future, result)
 
     @staticmethod
-    def _set_future_result(future: asyncio.Future[Frame], frame: Frame) -> None:
+    def _set_future_result(
+        future: asyncio.Future[Frame | None], frame: Frame | None
+    ) -> None:
         if not future.done():
             future.set_result(frame)
 
     def _remove_pending(
         self,
         key: tuple[uuid.UUID, int, int],
-        future: asyncio.Future[Frame],
+        request: _PendingRequest,
     ) -> None:
         with self._pending_lock:
-            futures = self._pending.get(key)
-            if not futures:
+            requests = self._pending.get(key)
+            if not requests:
                 return
-            if future in futures:
-                futures.remove(future)
-            if not futures:
+            if request in requests:
+                requests.remove(request)
+            if not requests:
                 self._pending.pop(key, None)
 
     def _fail_pending(self, error: Exception) -> None:
         with self._pending_lock:
-            futures = [future for group in self._pending.values() for future in group]
+            futures = [
+                request.future for group in self._pending.values() for request in group
+            ]
             self._pending.clear()
         if self._loop is None:
             return
@@ -467,6 +496,22 @@ class WindowsNamedPipeBroker:
             except queue.Full:
                 pass
             self._kernel32.CloseHandle(client.handle)
+            self._resolve_disconnect(handle)
+
+    def _resolve_disconnect(self, handle: int) -> None:
+        with self._pending_lock:
+            completions: list[asyncio.Future[Frame | None]] = []
+            for requests in self._pending.values():
+                for request in requests:
+                    if handle not in request.client_handles:
+                        continue
+                    request.client_handles.discard(handle)
+                    if not request.client_handles:
+                        completions.append(request.future)
+        if self._loop is None:
+            return
+        for future in completions:
+            self._loop.call_soon_threadsafe(self._set_future_result, future, None)
 
     def _read_exact(self, handle: int, size: int) -> bytes | None:
         result = bytearray()
