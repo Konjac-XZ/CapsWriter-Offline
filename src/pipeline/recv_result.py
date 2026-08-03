@@ -54,6 +54,15 @@ def _is_abandoned(task_id: str | None) -> bool:
     )
 
 
+async def _cancel_abandoned_tsf_task(tsf_bridge, task_id: str | None) -> None:
+    """Cancel the composition before forgetting an abandoned task."""
+    try:
+        await tsf_bridge.cancel(task_id)
+    finally:
+        _clear_abandoned_task(task_id)
+        _clear_active_task(task_id)
+
+
 def _transcription_delay(message: dict) -> float:
     """Return ASR latency after recording stops, excluding recording time."""
     time_complete = message.get("time_complete", 0)
@@ -69,6 +78,8 @@ def _transcription_delay(message: dict) -> float:
 
 async def recv_result():
     # 直接从本地结果队列读取（由 send_audio 推送），不再依赖远程 websocket
+    current_tid = None
+    tsf_bridge = get_tsf_speech_tip_bridge()
     try:
         while True:
             message = await Cosmic.queue_out.get()
@@ -91,21 +102,17 @@ async def recv_result():
             if current_tid is not None:
                 current_tid = str(current_tid)
             polish_prefetch_task = message.get("polish_prefetch_task")
-            tsf_bridge = get_tsf_speech_tip_bridge()
-
             if current_tid is not None:
                 Cosmic.active_task_id = current_tid
             if _is_abandoned(current_tid):
-                await tsf_bridge.cancel(current_tid)
                 if (
                     isinstance(polish_prefetch_task, asyncio.Task)
                     and not polish_prefetch_task.done()
                 ):
                     polish_prefetch_task.cancel()
-                _clear_abandoned_task(current_tid)
+                await _cancel_abandoned_tsf_task(tsf_bridge, current_tid)
                 if hide_status_overlay_when_done:
                     _emit_status_overlay("hide")
-                _clear_active_task(current_tid)
                 continue
 
             # 增量转录结果：对中间增量不做末尾标点剥离，避免抖动
@@ -138,9 +145,8 @@ async def recv_result():
                     text = await polish_task
                 except asyncio.CancelledError:
                     if _is_abandoned(current_tid):
-                        _clear_abandoned_task(current_tid)
+                        await _cancel_abandoned_tsf_task(tsf_bridge, current_tid)
                         _emit_status_overlay("hide")
-                        _clear_active_task(current_tid)
                         continue
                     raise
                 finally:
@@ -151,11 +157,9 @@ async def recv_result():
                 _polish_elapsed = 0.0
 
             if _is_abandoned(current_tid):
-                await tsf_bridge.cancel(current_tid)
-                _clear_abandoned_task(current_tid)
+                await _cancel_abandoned_tsf_task(tsf_bridge, current_tid)
                 if hide_status_overlay_when_done:
                     _emit_status_overlay("hide")
-                _clear_active_task(current_tid)
                 continue
 
             # 正则替换（在 strip_punc 之后、pangu 之前执行）
@@ -181,9 +185,8 @@ async def recv_result():
                 # 使用 pangu 对完整文本进行中英文混排空格优化，仅用于显示/输出
                 text = pangu.spacing_text(text)
                 if _is_abandoned(current_tid):
-                    _clear_abandoned_task(current_tid)
+                    await _cancel_abandoned_tsf_task(tsf_bridge, current_tid)
                     _emit_status_overlay("hide")
-                    _clear_active_task(current_tid)
                     continue
                 # 若末尾不是有效标点，则补中文句号
                 # 将已完成的文本存入历史，供下一次 LLM 润色使用
@@ -292,7 +295,9 @@ async def recv_result():
         _emit_status_overlay("hide")
         print(e)
     finally:
-        return
+        if tsf_bridge.owns_task(current_tid):
+            await tsf_bridge.cancel(current_tid)
+        _clear_active_task(current_tid)
 
 
 if __name__ == "__main__":

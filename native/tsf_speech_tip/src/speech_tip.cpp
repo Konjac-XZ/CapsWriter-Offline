@@ -416,8 +416,12 @@ private:
         if (FAILED(result) || fetched != 1 || selection.range == nullptr) {
             return Status::NoContext;
         }
+        std::wstring original_selection_text;
+        result = ReadRangeText(selection.range, edit_cookie, &original_selection_text);
         ITfContextComposition* context_composition = nullptr;
-        result = context->QueryInterface(IID_PPV_ARGS(&context_composition));
+        if (SUCCEEDED(result)) {
+            result = context->QueryInterface(IID_PPV_ARGS(&context_composition));
+        }
         if (SUCCEEDED(result)) {
             result = context_composition->StartComposition(
                 edit_cookie,
@@ -446,6 +450,8 @@ private:
             context_->AddRef();
             active_session_ = frame.header.session_id;
             last_revision_ = frame.header.revision;
+            original_selection_text_ = std::move(original_selection_text);
+            original_selection_style_ = selection.style;
             composition_active_.store(true);
         }
         selection.range->Release();
@@ -493,25 +499,70 @@ private:
         return SUCCEEDED(result) ? Status::Applied : Status::EditSessionFailed;
     }
 
-    Status ApplyCancel(ITfContext* /*context*/, const Frame& frame, TfEditCookie edit_cookie) {
+    Status ApplyCancel(ITfContext* context, const Frame& frame, TfEditCookie edit_cookie) {
         if (composition_ == nullptr || !SameSession(active_session_, frame.header.session_id)) {
             return Status::InactiveSession;
         }
         ITfRange* range = nullptr;
         HRESULT result = composition_->GetRange(&range);
         if (SUCCEEDED(result) && range != nullptr) {
-            result = range->SetText(edit_cookie, 0, L"", 0);
-            range->Release();
+            result = range->SetText(
+                edit_cookie,
+                0,
+                original_selection_text_.data(),
+                static_cast<LONG>(original_selection_text_.size()));
         }
+        const TF_SELECTIONSTYLE original_selection_style = original_selection_style_;
         ITfComposition* composition = composition_;
         composition->AddRef();
         const HRESULT end_result = composition->EndComposition(edit_cookie);
         composition->Release();
-        if (SUCCEEDED(result) && SUCCEEDED(end_result)) {
+        HRESULT selection_result = E_FAIL;
+        if (SUCCEEDED(result) && SUCCEEDED(end_result) && range != nullptr) {
+            TF_SELECTION selection{};
+            selection.range = range;
+            selection.style = original_selection_style;
+            selection_result = context->SetSelection(edit_cookie, 1, &selection);
+        }
+        SafeRelease(range);
+        if (SUCCEEDED(end_result)) {
             ClearCompositionState();
+        }
+        if (SUCCEEDED(result) && SUCCEEDED(end_result) && SUCCEEDED(selection_result)) {
             return Status::Applied;
         }
         return Status::EditSessionFailed;
+    }
+
+    static HRESULT ReadRangeText(
+        ITfRange* source,
+        TfEditCookie edit_cookie,
+        std::wstring* text) {
+        if (source == nullptr || text == nullptr) {
+            return E_INVALIDARG;
+        }
+        ITfRange* reader = nullptr;
+        HRESULT result = source->Clone(&reader);
+        if (FAILED(result) || reader == nullptr) {
+            return FAILED(result) ? result : E_FAIL;
+        }
+        constexpr ULONG kBufferCharacters = 1024;
+        wchar_t buffer[kBufferCharacters];
+        while (SUCCEEDED(result)) {
+            ULONG fetched = 0;
+            result = reader->GetText(
+                edit_cookie,
+                TF_TF_MOVESTART,
+                buffer,
+                kBufferCharacters,
+                &fetched);
+            if (FAILED(result) || fetched == 0) {
+                break;
+            }
+            text->append(buffer, fetched);
+        }
+        reader->Release();
+        return result;
     }
 
     static void SetCaretAtEnd(ITfContext* context, ITfRange* source, TfEditCookie edit_cookie) {
@@ -534,6 +585,8 @@ private:
         SafeRelease(context_);
         active_session_.fill(0);
         last_revision_ = 0;
+        original_selection_text_.clear();
+        original_selection_style_ = {};
     }
 
     void PipeLoop() {
@@ -699,6 +752,8 @@ private:
     std::array<std::uint8_t, 16> active_session_{};
     std::uint64_t last_revision_ = 0;
     caps_writer::tsf::EditSessionQueue edit_queue_;
+    std::wstring original_selection_text_;
+    TF_SELECTIONSTYLE original_selection_style_{};
 
 };
 

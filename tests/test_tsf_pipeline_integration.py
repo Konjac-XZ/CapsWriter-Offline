@@ -20,11 +20,29 @@ class OneMessageQueue:
         return None
 
 
+class MessageThenWaitQueue:
+    def __init__(self, message):
+        self.message = message
+        self.returned = False
+        self.waiting = asyncio.Event()
+
+    async def get(self):
+        if not self.returned:
+            self.returned = True
+            return self.message
+        self.waiting.set()
+        await asyncio.Future()
+
+    def task_done(self):
+        return None
+
+
 class FakeTsfBridge:
     def __init__(self):
         self.owned_task = None
         self.revisions = []
         self.commits = []
+        self.cancels = []
 
     async def begin_or_revise(self, task_id, text):
         self.owned_task = task_id
@@ -40,6 +58,7 @@ class FakeTsfBridge:
         return True
 
     async def cancel(self, task_id=None):
+        self.cancels.append(task_id)
         self.owned_task = None
         return True
 
@@ -146,3 +165,141 @@ def test_full_text_asr_revision_is_not_sent_to_append_only_keyboard_fallback(
     assert bridge.revisions == [("task-realtime", "已稳定前缀加暂存尾部")]
     assert Cosmic._transcript_had_deltas is False
     assert recorded == []
+
+
+def _configure_final_message_test(monkeypatch, bridge, message, fake_polish):
+    Cosmic.queue_out = cast(Any, OneMessageQueue(message))
+    Cosmic.abandon_requested = False
+    Cosmic.abandoned_task_ids.clear()
+    Cosmic.active_task_id = None
+
+    monkeypatch.setattr(pipeline, "get_tsf_speech_tip_bridge", lambda: bridge)
+    monkeypatch.setattr(pipeline, "is_llm_polish_enabled", lambda: True)
+    monkeypatch.setattr(pipeline, "should_polish_text", lambda _text: True)
+    monkeypatch.setattr(pipeline, "polish_text", fake_polish)
+    monkeypatch.setattr(pipeline, "strip_punc", lambda text: text)
+    monkeypatch.setattr(pipeline, "regex_replace", lambda text: text)
+    monkeypatch.setattr(pipeline.pangu, "spacing_text", lambda text: text)
+    monkeypatch.setattr(pipeline.Config, "save_audio", False)
+    monkeypatch.setattr(pipeline.Config, "save_markdown", False)
+
+
+def _final_message(task_id):
+    return {
+        "task_id": task_id,
+        "is_final": True,
+        "text": "ASR full text",
+        "time_start": 1.0,
+        "time_submit": 2.0,
+        "time_complete": 3.0,
+        "source": "mic",
+    }
+
+
+def test_abandon_while_polishing_cancels_tsf_before_clearing_task(monkeypatch):
+    bridge = FakeTsfBridge()
+    original_cancel = bridge.cancel
+
+    async def checked_cancel(task_id=None):
+        assert Cosmic.abandon_requested is True
+        assert Cosmic.active_task_id == task_id
+        return await original_cancel(task_id)
+
+    bridge.cancel = checked_cancel
+
+    async def fake_polish(_text, **_kwargs):
+        Cosmic.abandon_requested = True
+        raise asyncio.CancelledError
+
+    _configure_final_message_test(
+        monkeypatch, bridge, _final_message("task-polish-cancel"), fake_polish
+    )
+
+    asyncio.run(pipeline.recv_result())
+
+    assert bridge.cancels == ["task-polish-cancel"]
+    assert Cosmic.abandon_requested is False
+    assert Cosmic.active_task_id is None
+
+
+def test_abandon_during_final_spacing_cancels_tsf(monkeypatch):
+    bridge = FakeTsfBridge()
+
+    async def fake_polish(text, **_kwargs):
+        return text
+
+    def abandon_during_spacing(text):
+        Cosmic.abandoned_task_ids.add("task-spacing-cancel")
+        return text
+
+    _configure_final_message_test(
+        monkeypatch, bridge, _final_message("task-spacing-cancel"), fake_polish
+    )
+    monkeypatch.setattr(pipeline.pangu, "spacing_text", abandon_during_spacing)
+
+    asyncio.run(pipeline.recv_result())
+
+    assert bridge.cancels == ["task-spacing-cancel"]
+    assert "task-spacing-cancel" not in Cosmic.abandoned_task_ids
+    assert Cosmic.active_task_id is None
+
+
+def test_receive_loop_exception_cancels_owned_tsf_composition(monkeypatch):
+    bridge = FakeTsfBridge()
+
+    async def fake_polish(text, **_kwargs):
+        return text
+
+    _configure_final_message_test(
+        monkeypatch, bridge, _final_message("task-exception"), fake_polish
+    )
+
+    def fail_regex(_text):
+        raise RuntimeError("formatting failed")
+
+    monkeypatch.setattr(pipeline, "regex_replace", fail_regex)
+
+    asyncio.run(pipeline.recv_result())
+
+    assert bridge.cancels == ["task-exception"]
+    assert Cosmic.active_task_id is None
+
+
+def test_receive_loop_cancellation_cancels_owned_tsf_composition(monkeypatch):
+    bridge = FakeTsfBridge()
+    queue = MessageThenWaitQueue(
+        {
+            "task_id": "task-loop-cancel",
+            "is_final": False,
+            "is_transcript_delta": True,
+            "transcript_revision_mode": "full_text",
+            "text": "partial text",
+            "time_submit": 1.0,
+            "time_complete": 1.1,
+            "stream": True,
+        }
+    )
+    Cosmic.queue_out = cast(Any, queue)
+    Cosmic.abandon_requested = False
+    Cosmic.abandoned_task_ids.clear()
+    Cosmic.active_task_id = None
+
+    monkeypatch.setattr(pipeline, "get_tsf_speech_tip_bridge", lambda: bridge)
+    monkeypatch.setattr(pipeline, "is_llm_polish_enabled", lambda: True)
+    monkeypatch.setattr(pipeline, "regex_replace", lambda text: text)
+
+    async def run_and_cancel():
+        receive_task = asyncio.create_task(pipeline.recv_result())
+        await queue.waiting.wait()
+        receive_task.cancel()
+        try:
+            await receive_task
+        except asyncio.CancelledError:
+            pass
+        else:
+            raise AssertionError("recv_result cancellation was suppressed")
+
+    asyncio.run(run_and_cancel())
+
+    assert bridge.cancels == ["task-loop-cancel"]
+    assert Cosmic.active_task_id is None
