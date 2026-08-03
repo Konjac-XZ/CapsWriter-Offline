@@ -3,13 +3,17 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import json
+import os
 import time
 from typing import Any, Optional, Protocol, Tuple
 
 import httpx
 
+from src.infra.cosmic import Cosmic
 from src.infra.response_parse import extract_text_from_body
 from src.provider.provider_settings import (
+    get_bool as ps_get_bool,
     get_prompt as ps_get_prompt,
     get_str as ps_get_str,
 )
@@ -22,8 +26,20 @@ def _clean_base_url(url: str) -> str:
     return (url or "").strip().rstrip("/")
 
 
+def build_chat_completions_url(base_url: str) -> str:
+    base = _clean_base_url(base_url)
+    if base.endswith("/chat/completions"):
+        return base
+    if base.endswith("/v1"):
+        return f"{base}/chat/completions"
+    return f"{base}/v1/chat/completions"
+
+
 def get_api_key() -> str:
-    return ps_get_str("api_key", env="XIAOMI_API_KEY", default="") or ""
+    configured = ps_get_str("api_key", default="") or ""
+    return (
+        configured or os.getenv("MIMO_API_KEY", "") or os.getenv("XIAOMI_API_KEY", "")
+    )
 
 
 def get_model() -> str:
@@ -48,15 +64,19 @@ def get_timeout_seconds() -> float:
         return 30.0
 
 
+def is_streaming_enabled() -> bool:
+    return ps_get_bool("stream", env="XIAOMI_TRANSCRIBE_STREAM", default=True)
+
+
 def get_auth_header_mode() -> str:
     mode = (
-        ps_get_str("auth_header", env="XIAOMI_AUTH_HEADER", default="api-key")
-        or "api-key"
+        ps_get_str("auth_header", env="XIAOMI_AUTH_HEADER", default="bearer")
+        or "bearer"
     )
     normalized = mode.strip().lower().replace("_", "-")
-    if normalized in {"bearer", "authorization"}:
-        return "bearer"
-    return "api-key"
+    if normalized in {"api-key", "apikey"}:
+        return "api-key"
+    return "bearer"
 
 
 def get_language() -> str:
@@ -75,9 +95,9 @@ def should_send_prompt() -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def build_headers(api_key: str) -> dict[str, str]:
+def build_headers(api_key: str, *, stream: bool = False) -> dict[str, str]:
     headers = {
-        "Accept": "application/json",
+        "Accept": "text/event-stream" if stream else "application/json",
         "Content-Type": "application/json",
     }
     if get_auth_header_mode() == "bearer":
@@ -130,7 +150,9 @@ def build_audio_data_url(payload_mime: str, audio_b64: str) -> str:
     return f"data:{mime};base64,{audio_b64}"
 
 
-def build_request_body(payload_mime: str, audio_b64: str) -> dict[str, Any]:
+def build_request_body(
+    payload_mime: str, audio_b64: str, *, stream: Optional[bool] = None
+) -> dict[str, Any]:
     content: list[dict[str, Any]] = [
         {
             "type": "input_audio",
@@ -162,6 +184,7 @@ def build_request_body(payload_mime: str, audio_b64: str) -> dict[str, Any]:
         "asr_options": {
             "language": get_language(),
         },
+        "stream": is_streaming_enabled() if stream is None else stream,
     }
 
     return body
@@ -210,6 +233,121 @@ def _should_retry(status_code: int) -> bool:
     return status_code in (0, 408, 429, 500, 502, 503, 504)
 
 
+def _extract_stream_text(obj: Any) -> tuple[Optional[str], bool]:
+    """Return a text fragment and whether it is an incremental delta."""
+    if isinstance(obj, str):
+        return obj, False
+    if not isinstance(obj, dict):
+        return None, False
+
+    if isinstance(obj.get("delta"), str):
+        return obj["delta"], True
+    if isinstance(obj.get("text"), str):
+        return obj["text"], False
+
+    try:
+        choice = obj["choices"][0]
+        delta = choice.get("delta")
+        if isinstance(delta, dict) and isinstance(delta.get("content"), str):
+            return delta["content"], True
+        message = choice.get("message")
+        if isinstance(message, dict) and isinstance(message.get("content"), str):
+            return message["content"], False
+        if isinstance(choice.get("text"), str):
+            return choice["text"], False
+    except (KeyError, IndexError, TypeError):
+        pass
+    return None, False
+
+
+async def _emit_transcript_delta(
+    task_id: str,
+    text: str,
+    time_start: float,
+    record_stop: float,
+    t_submit: float,
+) -> None:
+    await Cosmic.queue_out.put(
+        {
+            "task_id": task_id,
+            "is_final": False,
+            "text": text,
+            "time_start": time_start,
+            "time_stop": record_stop,
+            "time_submit": t_submit,
+            "time_complete": time.time(),
+            "source": "mic",
+            "is_transcript_delta": True,
+            "stream": True,
+        }
+    )
+
+
+async def stream_transcribe(
+    client: httpx.AsyncClient,
+    url: str,
+    headers: dict[str, str],
+    request_body: dict[str, Any],
+    task_id: str,
+    time_start: float,
+    record_stop: float,
+) -> tuple[str, int, float, float, bool]:
+    """Consume Xiaomi's OpenAI-compatible SSE response and join text deltas."""
+    t_submit = time.time()
+    current_text = ""
+    last_emit = 0.0
+
+    async with client.stream(
+        "POST", url, headers=headers, json=request_body
+    ) as response:
+        status_code = response.status_code
+        http2_flag = response.http_version == "HTTP/2"
+        if not 200 <= status_code < 300:
+            await response.aread()
+            return (
+                _error_text(response),
+                status_code,
+                t_submit,
+                time.time(),
+                http2_flag,
+            )
+
+        async for raw_line in response.aiter_lines():
+            line = raw_line.strip()
+            if not line or line.startswith(":") or line.startswith("event:"):
+                continue
+            if line.startswith("data:"):
+                line = line[5:].strip()
+            if line in {"[DONE]", "DONE"}:
+                break
+
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            text_part, is_delta = _extract_stream_text(payload)
+            if not text_part:
+                continue
+
+            if is_delta:
+                current_text += text_part
+            else:
+                current_text = text_part
+
+            now = time.time()
+            if current_text and now - last_emit >= 0.05:
+                last_emit = now
+                await _emit_transcript_delta(
+                    task_id,
+                    current_text,
+                    time_start,
+                    record_stop,
+                    t_submit,
+                )
+
+    return current_text, status_code, t_submit, time.time(), http2_flag
+
+
 async def transcribe_with_retries(
     payload_buf: io.BytesIO,
     payload_mime: str,
@@ -223,17 +361,19 @@ async def transcribe_with_retries(
     now = time.time()
     if not api_key:
         return (
-            "Xiaomi API key is missing. Set XIAOMI_API_KEY or fill config/providers/xiaomi.yaml.",
+            "Xiaomi API key is missing. Set MIMO_API_KEY (or XIAOMI_API_KEY) "
+            "or fill config/providers/xiaomi.yaml.",
             0,
             now,
             now,
             False,
         )
 
-    url = f"{get_base_url()}/v1/chat/completions"
+    url = build_chat_completions_url(get_base_url())
     audio_b64 = _encode_audio(payload_buf)
-    request_body = build_request_body(payload_mime, audio_b64)
-    headers = build_headers(api_key)
+    stream_enabled = is_streaming_enabled()
+    request_body = build_request_body(payload_mime, audio_b64, stream=stream_enabled)
+    headers = build_headers(api_key, stream=stream_enabled)
 
     last_text = ""
     last_status = 0
@@ -246,7 +386,51 @@ async def transcribe_with_retries(
         resp: Optional[httpx.Response] = None
         t_submit = time.time()
         try:
-            resp = await get_http_client().post(url, headers=headers, json=request_body)
+            client = get_http_client()
+            if stream_enabled:
+                (
+                    last_text,
+                    last_status,
+                    t_submit,
+                    t_complete,
+                    http2_flag,
+                ) = await stream_transcribe(
+                    client,
+                    url,
+                    headers,
+                    request_body,
+                    task_id,
+                    time_start,
+                    record_stop,
+                )
+                if 200 <= last_status < 300:
+                    return (
+                        last_text,
+                        last_status,
+                        t_submit,
+                        t_complete,
+                        http2_flag,
+                    )
+                if not _should_retry(last_status):
+                    return (
+                        last_text,
+                        last_status,
+                        t_submit,
+                        t_complete,
+                        http2_flag,
+                    )
+                if attempt + 1 < retry_count:
+                    await asyncio.sleep(base_delay * (2**attempt))
+                    continue
+                return (
+                    last_text,
+                    last_status,
+                    t_submit,
+                    t_complete,
+                    http2_flag,
+                )
+
+            resp = await client.post(url, headers=headers, json=request_body)
             t_complete = time.time()
             last_status = resp.status_code
             http2_flag = resp.http_version == "HTTP/2"
