@@ -32,6 +32,13 @@ enum class Status : std::uint32_t {
     InvalidFrame = 7,
 };
 
+// Request frames use FrameHeader::status for visual composition state. ACK
+// frames use the same field for Status. Values default safely for older peers.
+enum class CompositionStyle : std::uint32_t {
+    Transcription = 0,
+    Polishing = 1,
+};
+
 #pragma pack(push, 1)
 struct FrameHeader {
     std::uint32_t magic;

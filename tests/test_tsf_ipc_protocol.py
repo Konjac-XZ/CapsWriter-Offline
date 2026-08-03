@@ -5,6 +5,7 @@ import pytest
 from src.tsf_ipc.protocol import (
     HEADER,
     MAGIC,
+    CompositionStyle,
     Frame,
     Operation,
     Status,
@@ -58,3 +59,19 @@ def test_tsf_ack_exposes_original_operation():
 
     assert frame.is_ack is True
     assert frame.acknowledged_operation == Operation.BEGIN
+
+
+def test_request_status_field_carries_composition_style_without_layout_change():
+    frame = Frame(
+        Operation.REVISE,
+        uuid.uuid4(),
+        7,
+        "润色中",
+        status=CompositionStyle.POLISHING,
+    )
+
+    encoded = encode_frame(frame)
+    decoded = decode_frame(encoded[: HEADER.size], encoded[HEADER.size :])
+
+    assert HEADER.size == 40
+    assert decoded.status == CompositionStyle.POLISHING

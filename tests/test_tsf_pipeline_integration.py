@@ -5,6 +5,7 @@ import pytest
 
 from src.infra.cosmic import Cosmic
 from src.pipeline import recv_result as pipeline
+from src.tsf_ipc.protocol import CompositionStyle
 
 
 class OneMessageQueue:
@@ -48,9 +49,11 @@ class FakeTsfBridge:
         self.commit_result = commit_result
         self.cancel_result = cancel_result
 
-    async def begin_or_revise(self, task_id, text):
+    async def begin_or_revise(
+        self, task_id, text, style=CompositionStyle.TRANSCRIPTION
+    ):
         self.owned_task = task_id
-        self.revisions.append((task_id, text))
+        self.revisions.append((task_id, text, style))
         return True
 
     def owns_task(self, task_id):
@@ -70,15 +73,19 @@ class FakeTsfBridge:
 
 
 class RejectingTsfBridge(FakeTsfBridge):
-    async def begin_or_revise(self, task_id, text):
-        self.revisions.append((task_id, text))
+    async def begin_or_revise(
+        self, task_id, text, style=CompositionStyle.TRANSCRIPTION
+    ):
+        self.revisions.append((task_id, text, style))
         return False
 
 
 class OwnedButUnconfirmedTsfBridge(FakeTsfBridge):
-    async def begin_or_revise(self, task_id, text):
+    async def begin_or_revise(
+        self, task_id, text, style=CompositionStyle.TRANSCRIPTION
+    ):
         self.owned_task = task_id
-        self.revisions.append((task_id, text))
+        self.revisions.append((task_id, text, style))
         return False
 
 
@@ -165,8 +172,8 @@ def test_final_tsf_output_requires_confirmed_commit_or_cancelled_fallback(
     asyncio.run(pipeline.recv_result())
 
     assert bridge.revisions == [
-        ("task-1", "ASR full text"),
-        ("task-1", "LLM partial full text"),
+        ("task-1", "ASR full text", CompositionStyle.POLISHING),
+        ("task-1", "LLM partial full text", CompositionStyle.POLISHING),
     ]
     assert bridge.commits == [("task-1", "LLM final full text")]
     assert bridge.cancels == expected_cancel
@@ -210,7 +217,13 @@ def test_full_text_asr_revision_is_not_sent_to_append_only_keyboard_fallback(
 
     asyncio.run(pipeline.recv_result())
 
-    assert bridge.revisions == [("task-realtime", "已稳定前缀加暂存尾部")]
+    assert bridge.revisions == [
+        (
+            "task-realtime",
+            "已稳定前缀加暂存尾部",
+            CompositionStyle.TRANSCRIPTION,
+        )
+    ]
     assert Cosmic._transcript_had_deltas is False
     assert recorded == []
 
@@ -245,7 +258,9 @@ def test_unconfirmed_revision_does_not_fall_back_while_composition_is_owned(
 
     asyncio.run(pipeline.recv_result())
 
-    assert bridge.revisions == [("task-realtime", "临时文本")]
+    assert bridge.revisions == [
+        ("task-realtime", "临时文本", CompositionStyle.TRANSCRIPTION)
+    ]
     assert typed == []
 
 
@@ -287,7 +302,7 @@ def test_abandon_while_polishing_cancels_tsf_before_clearing_task(monkeypatch):
         assert Cosmic.active_task_id == task_id
         return await original_cancel(task_id)
 
-    bridge.cancel = checked_cancel
+    monkeypatch.setattr(bridge, "cancel", checked_cancel)
 
     async def fake_polish(_text, **_kwargs):
         Cosmic.abandon_requested = True

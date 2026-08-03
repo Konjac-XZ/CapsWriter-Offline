@@ -33,6 +33,18 @@ class Status(IntEnum):
     INVALID_FRAME = 7
 
 
+class CompositionStyle(IntEnum):
+    """Visual state carried in the request header's status field.
+
+    ACK frames continue to use that field for ``Status``. Keeping the wire
+    layout and protocol version unchanged lets already-loaded older TIPs ignore
+    the new request metadata during a side-by-side DLL update.
+    """
+
+    TRANSCRIPTION = 0
+    POLISHING = 1
+
+
 @dataclass(frozen=True, slots=True)
 class Frame:
     operation: int

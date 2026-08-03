@@ -1,5 +1,6 @@
 #include <windows.h>
 #include <msctf.h>
+#include <oleauto.h>
 
 #include <algorithm>
 #include <array>
@@ -15,11 +16,15 @@
 #include <utility>
 
 #include "edit_session_queue.h"
+#include "display_attributes.h"
 #include "protocol.h"
 
+using caps_writer::tsf::CompositionStyle;
+using caps_writer::tsf::DisplayAttributeGuid;
 using caps_writer::tsf::Frame;
 using caps_writer::tsf::FrameHeader;
 using caps_writer::tsf::Operation;
+using caps_writer::tsf::ParseCompositionStyle;
 using caps_writer::tsf::SameSession;
 using caps_writer::tsf::Status;
 
@@ -99,6 +104,173 @@ bool WriteExact(HANDLE pipe, const void* source, DWORD byte_count) {
 
 class TextService;
 
+class DisplayAttributeInfo final : public ITfDisplayAttributeInfo {
+public:
+    explicit DisplayAttributeInfo(CompositionStyle style) noexcept
+        : style_(style), attribute_(caps_writer::tsf::MakeDisplayAttribute(style)) {
+        ++g_object_count;
+    }
+
+    STDMETHODIMP QueryInterface(REFIID iid, void** object) override {
+        if (object == nullptr) {
+            return E_INVALIDARG;
+        }
+        *object = nullptr;
+        if (iid != IID_IUnknown && iid != IID_ITfDisplayAttributeInfo) {
+            return E_NOINTERFACE;
+        }
+        *object = static_cast<ITfDisplayAttributeInfo*>(this);
+        AddRef();
+        return S_OK;
+    }
+
+    STDMETHODIMP_(ULONG) AddRef() override { return ++ref_count_; }
+
+    STDMETHODIMP_(ULONG) Release() override {
+        const ULONG remaining = --ref_count_;
+        if (remaining == 0) {
+            delete this;
+        }
+        return remaining;
+    }
+
+    STDMETHODIMP GetGUID(GUID* guid) override {
+        if (guid == nullptr) {
+            return E_INVALIDARG;
+        }
+        *guid = DisplayAttributeGuid(style_);
+        return S_OK;
+    }
+
+    STDMETHODIMP GetDescription(BSTR* description) override {
+        if (description == nullptr) {
+            return E_INVALIDARG;
+        }
+        *description = SysAllocString(
+            style_ == CompositionStyle::Polishing
+                ? L"CapsWriter polishing composition"
+                : L"CapsWriter transcription composition");
+        return *description != nullptr ? S_OK : E_OUTOFMEMORY;
+    }
+
+    STDMETHODIMP GetAttributeInfo(TF_DISPLAYATTRIBUTE* attribute) override {
+        if (attribute == nullptr) {
+            return E_INVALIDARG;
+        }
+        *attribute = attribute_;
+        return S_OK;
+    }
+
+    STDMETHODIMP SetAttributeInfo(const TF_DISPLAYATTRIBUTE* attribute) override {
+        if (attribute == nullptr) {
+            return E_INVALIDARG;
+        }
+        attribute_ = *attribute;
+        return S_OK;
+    }
+
+    STDMETHODIMP Reset() override {
+        attribute_ = caps_writer::tsf::MakeDisplayAttribute(style_);
+        return S_OK;
+    }
+
+private:
+    ~DisplayAttributeInfo() { --g_object_count; }
+
+    std::atomic<ULONG> ref_count_{1};
+    CompositionStyle style_;
+    TF_DISPLAYATTRIBUTE attribute_{};
+};
+
+HRESULT CreateDisplayAttributeInfo(
+    CompositionStyle style,
+    ITfDisplayAttributeInfo** info) {
+    if (info == nullptr) {
+        return E_INVALIDARG;
+    }
+    *info = new (std::nothrow) DisplayAttributeInfo(style);
+    return *info != nullptr ? S_OK : E_OUTOFMEMORY;
+}
+
+class DisplayAttributeEnumerator final : public IEnumTfDisplayAttributeInfo {
+public:
+    explicit DisplayAttributeEnumerator(ULONG position = 0) noexcept
+        : position_(position) {
+        ++g_object_count;
+    }
+
+    STDMETHODIMP QueryInterface(REFIID iid, void** object) override {
+        if (object == nullptr) {
+            return E_INVALIDARG;
+        }
+        *object = nullptr;
+        if (iid != IID_IUnknown && iid != IID_IEnumTfDisplayAttributeInfo) {
+            return E_NOINTERFACE;
+        }
+        *object = static_cast<IEnumTfDisplayAttributeInfo*>(this);
+        AddRef();
+        return S_OK;
+    }
+
+    STDMETHODIMP_(ULONG) AddRef() override { return ++ref_count_; }
+
+    STDMETHODIMP_(ULONG) Release() override {
+        const ULONG remaining = --ref_count_;
+        if (remaining == 0) {
+            delete this;
+        }
+        return remaining;
+    }
+
+    STDMETHODIMP Clone(IEnumTfDisplayAttributeInfo** enumeration) override {
+        if (enumeration == nullptr) {
+            return E_INVALIDARG;
+        }
+        *enumeration = new (std::nothrow) DisplayAttributeEnumerator(position_);
+        return *enumeration != nullptr ? S_OK : E_OUTOFMEMORY;
+    }
+
+    STDMETHODIMP Next(
+        ULONG count,
+        ITfDisplayAttributeInfo** info,
+        ULONG* fetched) override {
+        if (info == nullptr || fetched == nullptr) {
+            return E_INVALIDARG;
+        }
+        *fetched = 0;
+        while (*fetched < count && position_ < 2) {
+            const CompositionStyle style = position_ == 0
+                ? CompositionStyle::Transcription
+                : CompositionStyle::Polishing;
+            const HRESULT result = CreateDisplayAttributeInfo(style, &info[*fetched]);
+            if (FAILED(result)) {
+                return result;
+            }
+            ++position_;
+            ++*fetched;
+        }
+        return *fetched == count ? S_OK : S_FALSE;
+    }
+
+    STDMETHODIMP Reset() override {
+        position_ = 0;
+        return S_OK;
+    }
+
+    STDMETHODIMP Skip(ULONG count) override {
+        const ULONG remaining = 2 - std::min(position_, 2UL);
+        const ULONG skipped = std::min(count, remaining);
+        position_ += skipped;
+        return skipped == count ? S_OK : S_FALSE;
+    }
+
+private:
+    ~DisplayAttributeEnumerator() { --g_object_count; }
+
+    std::atomic<ULONG> ref_count_{1};
+    ULONG position_ = 0;
+};
+
 class EditSession final : public ITfEditSession {
 public:
     EditSession(TextService* service, ITfContext* context, Frame frame) noexcept;
@@ -117,7 +289,10 @@ private:
     Frame frame_;
 };
 
-class TextService final : public ITfTextInputProcessorEx, public ITfCompositionSink {
+class TextService final
+    : public ITfTextInputProcessorEx,
+      public ITfCompositionSink,
+      public ITfDisplayAttributeProvider {
 public:
     TextService() noexcept { ++g_object_count; }
 
@@ -131,6 +306,8 @@ public:
             *object = static_cast<ITfTextInputProcessorEx*>(this);
         } else if (iid == IID_ITfCompositionSink) {
             *object = static_cast<ITfCompositionSink*>(this);
+        } else if (iid == IID_ITfDisplayAttributeProvider) {
+            *object = static_cast<ITfDisplayAttributeProvider*>(this);
         } else {
             return E_NOINTERFACE;
         }
@@ -146,6 +323,30 @@ public:
             delete this;
         }
         return remaining;
+    }
+
+    STDMETHODIMP EnumDisplayAttributeInfo(
+        IEnumTfDisplayAttributeInfo** enumeration) override {
+        if (enumeration == nullptr) {
+            return E_INVALIDARG;
+        }
+        *enumeration = new (std::nothrow) DisplayAttributeEnumerator();
+        return *enumeration != nullptr ? S_OK : E_OUTOFMEMORY;
+    }
+
+    STDMETHODIMP GetDisplayAttributeInfo(
+        REFGUID guid,
+        ITfDisplayAttributeInfo** info) override {
+        if (IsEqualGUID(guid, caps_writer::tsf::kTranscriptionDisplayAttributeGuid)) {
+            return CreateDisplayAttributeInfo(CompositionStyle::Transcription, info);
+        }
+        if (IsEqualGUID(guid, caps_writer::tsf::kPolishingDisplayAttributeGuid)) {
+            return CreateDisplayAttributeInfo(CompositionStyle::Polishing, info);
+        }
+        if (info != nullptr) {
+            *info = nullptr;
+        }
+        return E_INVALIDARG;
     }
 
     STDMETHODIMP Activate(ITfThreadMgr* thread_manager, TfClientId client_id) override {
@@ -219,6 +420,7 @@ public:
             activation_thread_id_ = 0;
             return E_OUTOFMEMORY;
         }
+        InitializeDisplayAttributes();
         return S_OK;
     }
 
@@ -250,6 +452,8 @@ public:
         }
         edit_queue_.Reset();
         ClearCompositionState();
+        SafeRelease(category_manager_);
+        display_attribute_atoms_.fill(TF_INVALID_GUIDATOM);
         SafeRelease(thread_manager_);
         client_id_ = TF_CLIENTID_NULL;
         activation_thread_id_ = 0;
@@ -384,6 +588,67 @@ private:
         foreground_hook_ = nullptr;
     }
 
+    void InitializeDisplayAttributes() noexcept {
+        display_attribute_atoms_.fill(TF_INVALID_GUIDATOM);
+        HRESULT result = CoCreateInstance(
+            CLSID_TF_CategoryMgr,
+            nullptr,
+            CLSCTX_INPROC_SERVER,
+            IID_PPV_ARGS(&category_manager_));
+        if (FAILED(result) || category_manager_ == nullptr) {
+            SafeRelease(category_manager_);
+            return;
+        }
+        result = category_manager_->RegisterGUID(
+            caps_writer::tsf::kTranscriptionDisplayAttributeGuid,
+            &display_attribute_atoms_[0]);
+        if (SUCCEEDED(result)) {
+            result = category_manager_->RegisterGUID(
+                caps_writer::tsf::kPolishingDisplayAttributeGuid,
+                &display_attribute_atoms_[1]);
+        }
+        if (FAILED(result)) {
+            SafeRelease(category_manager_);
+            display_attribute_atoms_.fill(TF_INVALID_GUIDATOM);
+        }
+    }
+
+    void ApplyDisplayAttribute(
+        ITfContext* context,
+        ITfRange* range,
+        TfEditCookie edit_cookie,
+        CompositionStyle style) const noexcept {
+        const std::size_t index = style == CompositionStyle::Polishing ? 1 : 0;
+        const TfGuidAtom atom = display_attribute_atoms_[index];
+        if (context == nullptr || range == nullptr || atom == TF_INVALID_GUIDATOM) {
+            return;
+        }
+        ITfProperty* property = nullptr;
+        if (SUCCEEDED(context->GetProperty(GUID_PROP_ATTRIBUTE, &property)) &&
+            property != nullptr) {
+            VARIANT value{};
+            value.vt = VT_I4;
+            value.lVal = atom;
+            property->SetValue(edit_cookie, range, &value);
+            property->Release();
+        }
+    }
+
+    static void ClearDisplayAttribute(
+        ITfContext* context,
+        ITfRange* range,
+        TfEditCookie edit_cookie) noexcept {
+        if (context == nullptr || range == nullptr) {
+            return;
+        }
+        ITfProperty* property = nullptr;
+        if (SUCCEEDED(context->GetProperty(GUID_PROP_ATTRIBUTE, &property)) &&
+            property != nullptr) {
+            property->Clear(edit_cookie, range);
+            property->Release();
+        }
+    }
+
     bool IsForegroundProcess() const noexcept {
         HWND foreground = GetForegroundWindow();
         if (foreground == nullptr) {
@@ -509,6 +774,11 @@ private:
             }
         }
         if (SUCCEEDED(result)) {
+            ApplyDisplayAttribute(
+                context,
+                selection.range,
+                edit_cookie,
+                ParseCompositionStyle(frame.header.status));
             SetCaretAtEnd(context, selection.range, edit_cookie);
             context_ = context;
             context_->AddRef();
@@ -538,6 +808,11 @@ private:
                 frame.text.data(),
                 static_cast<LONG>(frame.text.size()));
             if (SUCCEEDED(result)) {
+                ApplyDisplayAttribute(
+                    context,
+                    range,
+                    edit_cookie,
+                    ParseCompositionStyle(frame.header.status));
                 SetCaretAtEnd(context, range, edit_cookie);
                 last_revision_ = frame.header.revision;
             }
@@ -546,7 +821,7 @@ private:
         return SUCCEEDED(result) ? Status::Applied : Status::EditSessionFailed;
     }
 
-    Status ApplyCommit(ITfContext* /*context*/, const Frame& frame, TfEditCookie edit_cookie) {
+    Status ApplyCommit(ITfContext* context, const Frame& frame, TfEditCookie edit_cookie) {
         if (composition_ == nullptr || !SameSession(active_session_, frame.header.session_id)) {
             return Status::InactiveSession;
         }
@@ -555,11 +830,15 @@ private:
         }
         ITfComposition* composition = composition_;
         composition->AddRef();
+        ITfRange* range = nullptr;
+        composition->GetRange(&range);
         const HRESULT result = composition->EndComposition(edit_cookie);
         composition->Release();
         if (SUCCEEDED(result)) {
+            ClearDisplayAttribute(context, range, edit_cookie);
             ClearCompositionState();
         }
+        SafeRelease(range);
         return SUCCEEDED(result) ? Status::Applied : Status::EditSessionFailed;
     }
 
@@ -588,10 +867,11 @@ private:
             selection.style = original_selection_style;
             selection_result = context->SetSelection(edit_cookie, 1, &selection);
         }
-        SafeRelease(range);
         if (SUCCEEDED(end_result)) {
+            ClearDisplayAttribute(context, range, edit_cookie);
             ClearCompositionState();
         }
+        SafeRelease(range);
         if (SUCCEEDED(result) && SUCCEEDED(end_result) && SUCCEEDED(selection_result)) {
             return Status::Applied;
         }
@@ -866,6 +1146,11 @@ private:
     inline static std::unordered_map<HWINEVENTHOOK, TextService*> foreground_hooks_;
     ITfThreadMgr* thread_manager_ = nullptr;
     TfClientId client_id_ = TF_CLIENTID_NULL;
+    ITfCategoryMgr* category_manager_ = nullptr;
+    std::array<TfGuidAtom, 2> display_attribute_atoms_{
+        TF_INVALID_GUIDATOM,
+        TF_INVALID_GUIDATOM,
+    };
     DWORD activation_thread_id_ = 0;
     HWND dispatch_window_ = nullptr;
     std::thread pipe_thread_;
@@ -1086,13 +1371,30 @@ HRESULT SetTsfRegistration(bool install) {
     if (FAILED(result)) {
         return result;
     }
-    result = install
-        ? category_manager->RegisterCategory(
-              kTextServiceClsid, GUID_TFCAT_TIP_SPEECH, kTextServiceClsid)
-        : category_manager->UnregisterCategory(
-              kTextServiceClsid, GUID_TFCAT_TIP_SPEECH, kTextServiceClsid);
+    if (install) {
+        result = category_manager->RegisterCategory(
+            kTextServiceClsid, GUID_TFCAT_TIP_SPEECH, kTextServiceClsid);
+        if (SUCCEEDED(result)) {
+            result = category_manager->RegisterCategory(
+                kTextServiceClsid,
+                GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
+                kTextServiceClsid);
+        }
+        if (FAILED(result)) {
+            category_manager->UnregisterCategory(
+                kTextServiceClsid, GUID_TFCAT_TIP_SPEECH, kTextServiceClsid);
+        }
+    } else {
+        category_manager->UnregisterCategory(
+            kTextServiceClsid,
+            GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
+            kTextServiceClsid);
+        category_manager->UnregisterCategory(
+            kTextServiceClsid, GUID_TFCAT_TIP_SPEECH, kTextServiceClsid);
+        result = S_OK;
+    }
     category_manager->Release();
-    return install ? result : S_OK;
+    return result;
 }
 
 }  // namespace

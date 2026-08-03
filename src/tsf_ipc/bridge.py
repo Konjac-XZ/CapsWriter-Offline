@@ -8,7 +8,7 @@ from typing import Protocol
 
 from src.infra.config import config as Config
 
-from .protocol import Frame, Operation, Status
+from .protocol import CompositionStyle, Frame, Operation, Status
 from .windows_pipe import WindowsNamedPipeBroker
 
 
@@ -31,6 +31,7 @@ class _CompositionState:
     session_id: uuid.UUID
     revision: int
     captured: bool
+    style: CompositionStyle
 
 
 class TsfSpeechTipBridge:
@@ -87,7 +88,12 @@ class TsfSpeechTipBridge:
             and ack.status == int(Status.APPLIED)
         )
 
-    async def begin_or_revise(self, task_id: str, text: str) -> bool:
+    async def begin_or_revise(
+        self,
+        task_id: str,
+        text: str,
+        style: CompositionStyle = CompositionStyle.TRANSCRIPTION,
+    ) -> bool:
         if not self.enabled:
             return False
         async with self._lock:
@@ -95,14 +101,18 @@ class TsfSpeechTipBridge:
                 if not self._state.captured:
                     return False
                 self._state.revision += 1
-                return await self._request_applied(
+                applied = await self._request_applied(
                     Frame(
                         Operation.REVISE,
                         self._state.session_id,
                         self._state.revision,
                         text,
+                        status=style,
                     )
                 )
+                if applied:
+                    self._state.style = style
+                return applied
 
             if self._state is not None and self._state.captured:
                 self._state.revision += 1
@@ -117,10 +127,16 @@ class TsfSpeechTipBridge:
                     return False
 
             session_id = uuid.uuid4()
-            state = _CompositionState(task_id, session_id, 1, False)
+            state = _CompositionState(task_id, session_id, 1, False, style)
             self._state = state
             state.captured = await self._request_applied(
-                Frame(Operation.BEGIN, session_id, state.revision, text)
+                Frame(
+                    Operation.BEGIN,
+                    session_id,
+                    state.revision,
+                    text,
+                    status=style,
+                )
             )
             if not state.captured:
                 # A foreground edit session can finish just after our timeout.
@@ -141,7 +157,11 @@ class TsfSpeechTipBridge:
                 state.revision += 1
                 revised = await self._request_applied(
                     Frame(
-                        Operation.REVISE, state.session_id, state.revision, final_text
+                        Operation.REVISE,
+                        state.session_id,
+                        state.revision,
+                        final_text,
+                        status=state.style,
                     )
                 )
                 if not revised:

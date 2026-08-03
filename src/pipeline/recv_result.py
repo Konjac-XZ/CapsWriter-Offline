@@ -20,6 +20,7 @@ from src.polish.llm_polish import (
     should_polish_text,
 )
 from src.tsf_ipc import get_tsf_speech_tip_bridge
+from src.tsf_ipc.protocol import CompositionStyle
 
 warnings.filterwarnings("ignore")
 
@@ -128,11 +129,20 @@ async def recv_result():
                 if polish_enabled_for_text:
                     _emit_status_overlay("show", "polishing")
                 if current_tid is not None and is_llm_polish_enabled():
-                    await tsf_bridge.begin_or_revise(current_tid, text)
+                    style = (
+                        CompositionStyle.POLISHING
+                        if polish_enabled_for_text
+                        else CompositionStyle.TRANSCRIPTION
+                    )
+                    await tsf_bridge.begin_or_revise(current_tid, text, style)
 
                 async def on_polished_text(revised_text: str) -> None:
                     if current_tid is not None and tsf_bridge.owns_task(current_tid):
-                        await tsf_bridge.begin_or_revise(current_tid, revised_text)
+                        await tsf_bridge.begin_or_revise(
+                            current_tid,
+                            revised_text,
+                            CompositionStyle.POLISHING,
+                        )
 
                 polish_task = asyncio.create_task(
                     polish_text(
@@ -258,7 +268,11 @@ async def recv_result():
                 # BEGIN 未获得前台 TIP 的 APPLIED ACK 时保留旧的键入回退。
                 tsf_owned = False
                 if current_tid is not None and is_llm_polish_enabled():
-                    tsf_owned = await tsf_bridge.begin_or_revise(current_tid, text)
+                    tsf_owned = await tsf_bridge.begin_or_revise(
+                        current_tid,
+                        text,
+                        CompositionStyle.TRANSCRIPTION,
+                    )
                 if (
                     not tsf_owned
                     and not tsf_bridge.owns_task(current_tid)

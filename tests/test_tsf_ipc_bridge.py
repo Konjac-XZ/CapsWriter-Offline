@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from src.tsf_ipc.bridge import TsfSpeechTipBridge
-from src.tsf_ipc.protocol import Frame, Operation, Status
+from src.tsf_ipc.protocol import CompositionStyle, Frame, Operation, Status
 
 
 class FakeBroker:
@@ -60,7 +60,12 @@ def test_bridge_sends_full_text_revisions_then_commits(enable_bridge):
 
     async def exercise():
         assert await bridge.begin_or_revise("task-1", "第一版") is True
-        assert await bridge.begin_or_revise("task-1", "完整的第二版") is True
+        assert (
+            await bridge.begin_or_revise(
+                "task-1", "完整的第二版", CompositionStyle.POLISHING
+            )
+            is True
+        )
         assert await bridge.commit("task-1", "最终文本") is True
 
     asyncio.run(exercise())
@@ -79,6 +84,12 @@ def test_bridge_sends_full_text_revisions_then_commits(enable_bridge):
         "",
     ]
     assert len({frame.session_id for frame in broker.frames}) == 1
+    assert [frame.status for frame in broker.frames] == [
+        CompositionStyle.TRANSCRIPTION,
+        CompositionStyle.POLISHING,
+        CompositionStyle.POLISHING,
+        0,
+    ]
 
 
 def test_bridge_keeps_legacy_path_when_foreground_tip_does_not_ack(enable_bridge):

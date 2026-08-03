@@ -85,6 +85,14 @@ for recovery. The pipeline may use the legacy paste fallback only after a
 subsequent `CANCEL` is also confirmed; otherwise it suppresses fallback output to
 avoid duplicating a composition that may have been applied after the timeout.
 
+The request header's status field carries a backward-compatible visual state.
+The TIP applies `GUID_PROP_ATTRIBUTE` over the complete composition range using
+two display attributes: transcription revisions request `TF_LS_DASH`, while LLM
+polishing revisions request `TF_LS_SOLID`. The property is cleared before commit
+or cancellation. Older already-loaded DLLs ignore this request metadata, and
+host applications that do not render TSF display attributes still retain the
+same composition behavior without the requested underline.
+
 ## Build
 
 From `native/tsf_speech_tip` with Visual Studio 2022 and a Windows SDK installed:
@@ -249,8 +257,9 @@ certificate deletion affects every binary signed with that identity.
   trusted only on machines where its public certificate was explicitly installed.
   Registration and signature verification still do not prove that every Windows
   app will load the TIP.
-- No custom `ITfDisplayAttributeProvider` is implemented yet. The range still has
-  TSF's composing property, but host-specific visual treatment can differ.
+- The TIP provides dashed transcription and solid polishing display attributes,
+  but rendering remains host-controlled. Applications can ignore or approximate
+  the requested underline style.
 - App-container and elevated-process coverage is unverified. Microsoft notes that
   an IME runs under the containing app's restrictions. The local named pipe is
   deliberately same-user only; integrity-level and app-container behavior needs

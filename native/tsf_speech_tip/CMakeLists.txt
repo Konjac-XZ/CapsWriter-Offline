@@ -14,7 +14,7 @@ target_compile_definitions(CapsWriterSpeechTip PRIVATE
     NOMINMAX
 )
 target_compile_options(CapsWriterSpeechTip PRIVATE /W4 /permissive- /EHsc)
-target_link_libraries(CapsWriterSpeechTip PRIVATE ole32 advapi32 uuid)
+target_link_libraries(CapsWriterSpeechTip PRIVATE ole32 oleaut32 advapi32 uuid)
 
 set_target_properties(CapsWriterSpeechTip PROPERTIES
     PREFIX ""
@@ -36,4 +36,39 @@ if(BUILD_TESTING)
     target_compile_options(EditSessionQueueTest PRIVATE /W4 /permissive- /EHsc)
     target_include_directories(EditSessionQueueTest PRIVATE src)
     add_test(NAME EditSessionQueueTest COMMAND EditSessionQueueTest)
+
+    add_executable(DisplayAttributesTest
+        tests/display_attributes_test.cpp
+    )
+    target_compile_features(DisplayAttributesTest PRIVATE cxx_std_20)
+    target_compile_definitions(DisplayAttributesTest PRIVATE
+        UNICODE
+        _UNICODE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+    )
+    target_compile_options(DisplayAttributesTest PRIVATE /W4 /permissive- /EHsc)
+    target_include_directories(DisplayAttributesTest PRIVATE src)
+    target_link_libraries(DisplayAttributesTest PRIVATE uuid)
+    add_test(NAME DisplayAttributesTest COMMAND DisplayAttributesTest)
+
+    add_executable(DisplayAttributeProviderTest
+        tests/display_attribute_provider_test.cpp
+    )
+    target_compile_features(DisplayAttributeProviderTest PRIVATE cxx_std_20)
+    target_compile_definitions(DisplayAttributeProviderTest PRIVATE
+        UNICODE
+        _UNICODE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+    )
+    target_compile_options(
+        DisplayAttributeProviderTest PRIVATE /W4 /permissive- /EHsc
+    )
+    target_include_directories(DisplayAttributeProviderTest PRIVATE src)
+    target_link_libraries(DisplayAttributeProviderTest PRIVATE ole32 oleaut32 uuid)
+    add_test(
+        NAME DisplayAttributeProviderTest
+        COMMAND DisplayAttributeProviderTest $<TARGET_FILE:CapsWriterSpeechTip>
+    )
 endif()
