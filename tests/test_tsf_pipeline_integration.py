@@ -172,7 +172,7 @@ def test_final_tsf_output_requires_confirmed_commit_or_cancelled_fallback(
     asyncio.run(pipeline.recv_result())
 
     assert bridge.revisions == [
-        ("task-1", "ASR full text", CompositionStyle.POLISHING),
+        ("task-1", "ASR full text", CompositionStyle.TRANSCRIPTION),
         ("task-1", "LLM partial full text", CompositionStyle.POLISHING),
     ]
     assert bridge.commits == [("task-1", "LLM final full text")]

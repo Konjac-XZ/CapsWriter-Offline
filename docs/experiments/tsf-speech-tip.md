@@ -87,11 +87,13 @@ avoid duplicating a composition that may have been applied after the timeout.
 
 The request header's status field carries a backward-compatible visual state.
 The TIP applies `GUID_PROP_ATTRIBUTE` over the complete composition range using
-two display attributes: transcription revisions request `TF_LS_DASH`, while LLM
-polishing revisions request `TF_LS_SOLID`. The property is cleared before commit
-or cancellation. Older already-loaded DLLs ignore this request metadata, and
-host applications that do not render TSF display attributes still retain the
-same composition behavior without the requested underline.
+two display attributes: ASR revisions request `TF_LS_DASH`, including the wait
+for the polishing provider's first output token. The first actual LLM text
+revision switches the range to `TF_LS_SOLID`, and subsequent polishing revisions
+remain solid. The property is cleared before commit or cancellation. Older
+already-loaded DLLs ignore this request metadata, and host applications that do
+not render TSF display attributes still retain the same composition behavior
+without the requested underline.
 
 ## Build
 

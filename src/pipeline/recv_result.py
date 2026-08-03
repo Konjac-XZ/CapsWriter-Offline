@@ -129,12 +129,14 @@ async def recv_result():
                 if polish_enabled_for_text:
                     _emit_status_overlay("show", "polishing")
                 if current_tid is not None and is_llm_polish_enabled():
-                    style = (
-                        CompositionStyle.POLISHING
-                        if polish_enabled_for_text
-                        else CompositionStyle.TRANSCRIPTION
+                    # Entering the polishing phase does not mean that polished
+                    # text exists yet. Keep the final ASR hypothesis dashed
+                    # while waiting for the provider's first output token.
+                    await tsf_bridge.begin_or_revise(
+                        current_tid,
+                        text,
+                        CompositionStyle.TRANSCRIPTION,
                     )
-                    await tsf_bridge.begin_or_revise(current_tid, text, style)
 
                 async def on_polished_text(revised_text: str) -> None:
                     if current_tid is not None and tsf_bridge.owns_task(current_tid):
