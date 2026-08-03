@@ -129,6 +129,34 @@ cmake --build --preset x86-release
 signing\install-signed.cmd
 ```
 
+After the certificate and machine trust have been created once, use the guarded
+registration workflow for subsequent source updates:
+
+```text
+native\tsf_speech_tip\register-tip.cmd
+```
+
+The workflow refuses to replace a DLL while any process has it loaded. It then
+configures and builds both Release architectures, runs both CTest suites, invokes
+the existing signing/install step, and verifies the x64 and x86 HKCU COM registry
+views. Existing installed DLLs are backed up before mutation; if signing,
+installation, registration, or verification fails, the previous binaries and
+registrations are restored. It never creates or trusts a certificate implicitly.
+
+Useful read-only and maintenance commands are:
+
+```text
+uv run python native\tsf_speech_tip\manage_registration.py status
+uv run python native\tsf_speech_tip\manage_registration.py install --dry-run
+uv run python native\tsf_speech_tip\manage_registration.py uninstall --dry-run
+uv run python native\tsf_speech_tip\manage_registration.py uninstall
+```
+
+`install --skip-build` reuses the existing x64/x86 Release outputs but still
+signs, installs, registers, and verifies them. `uninstall` removes both
+registrations without deleting the installed DLLs or certificate. Both mutating
+commands require every process listed by `status` to be closed first.
+
 `install-signed.cmd` copies the build outputs to
 `native\tsf_speech_tip\installed\{x64,x86}`, signs those copies, verifies them
 with the Authenticode user policy, and registers them. The certificate, deployed
