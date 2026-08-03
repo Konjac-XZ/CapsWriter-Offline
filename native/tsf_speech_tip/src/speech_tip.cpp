@@ -13,6 +13,7 @@
 #include <thread>
 #include <utility>
 
+#include "edit_session_queue.h"
 #include "protocol.h"
 
 using caps_writer::tsf::Frame;
@@ -42,6 +43,7 @@ constexpr GUID kLanguageProfileGuid = {
 constexpr wchar_t kProfileDescription[] = L"CapsWriter Speech Composition (Experimental)";
 constexpr wchar_t kWindowClassName[] = L"CapsWriter.TsfSpeechTip.Dispatch.v1";
 constexpr UINT kPipeFrameMessage = WM_APP + 0x341;
+constexpr UINT kPumpEditQueueMessage = WM_APP + 0x342;
 constexpr DWORD kDisconnectedRetryInitialMs = 100;
 constexpr DWORD kDisconnectedRetryMaximumMs = 5000;
 constexpr DWORD kBackgroundPollMs = 250;
@@ -210,6 +212,7 @@ public:
             DestroyWindow(dispatch_window_);
             dispatch_window_ = nullptr;
         }
+        edit_queue_.Reset();
         ClearCompositionState();
         SafeRelease(thread_manager_);
         client_id_ = TF_CLIENTID_NULL;
@@ -248,6 +251,15 @@ public:
         }
         SendAck(frame, status);
         return status == Status::Applied ? S_OK : S_FALSE;
+    }
+
+    void CompleteEditSession() {
+        edit_queue_.Complete();
+        // Do not request the next asynchronous edit session recursively from
+        // inside DoEditSession. Pump it after TSF has unwound this callback.
+        if (dispatch_window_ != nullptr) {
+            PostMessageW(dispatch_window_, kPumpEditQueueMessage, 0, 0);
+        }
     }
 
 private:
@@ -299,6 +311,12 @@ private:
             }
             return 0;
         }
+        if (message == kPumpEditQueueMessage) {
+            if (service != nullptr) {
+                service->DispatchNextEdit();
+            }
+            return 0;
+        }
         return DefWindowProcW(window, message, wparam, lparam);
     }
 
@@ -323,44 +341,63 @@ private:
             return;
         }
 
-        ITfContext* context = nullptr;
-        if (operation == Operation::Begin) {
-            ITfDocumentMgr* document_manager = nullptr;
-            HRESULT result = thread_manager_->GetFocus(&document_manager);
-            if (SUCCEEDED(result) && document_manager != nullptr) {
-                result = document_manager->GetTop(&context);
-                document_manager->Release();
-            }
-            if (FAILED(result) || context == nullptr) {
-                SendAck(frame, Status::NoContext);
-                return;
-            }
-        } else {
-            if (context_ == nullptr || !SameSession(active_session_, frame.header.session_id)) {
-                SendAck(frame, Status::InactiveSession);
-                return;
-            }
-            context = context_;
-            context->AddRef();
+        auto superseded = edit_queue_.Push(std::move(frame));
+        if (superseded.has_value()) {
+            SendAck(*superseded, Status::StaleRevision);
         }
+        DispatchNextEdit();
+    }
 
-        Frame request_frame = frame;
-        auto* edit_session = new (std::nothrow) EditSession(this, context, std::move(frame));
-        if (edit_session == nullptr) {
+    void DispatchNextEdit() {
+        while (auto next = edit_queue_.StartNext()) {
+            Frame frame = std::move(*next);
+            const auto operation = static_cast<Operation>(frame.header.operation);
+            ITfContext* context = nullptr;
+            if (operation == Operation::Begin) {
+                ITfDocumentMgr* document_manager = nullptr;
+                HRESULT result = thread_manager_->GetFocus(&document_manager);
+                if (SUCCEEDED(result) && document_manager != nullptr) {
+                    result = document_manager->GetTop(&context);
+                    document_manager->Release();
+                }
+                if (FAILED(result) || context == nullptr) {
+                    SendAck(frame, Status::NoContext);
+                    edit_queue_.Complete();
+                    continue;
+                }
+            } else {
+                if (context_ == nullptr ||
+                    !SameSession(active_session_, frame.header.session_id)) {
+                    SendAck(frame, Status::InactiveSession);
+                    edit_queue_.Complete();
+                    continue;
+                }
+                context = context_;
+                context->AddRef();
+            }
+
+            Frame request_frame = frame;
+            auto* edit_session = new (std::nothrow) EditSession(
+                this, context, std::move(frame));
+            if (edit_session == nullptr) {
+                context->Release();
+                SendAck(request_frame, Status::EditSessionFailed);
+                edit_queue_.Complete();
+                continue;
+            }
+            HRESULT session_result = E_FAIL;
+            const HRESULT request_result = context->RequestEditSession(
+                client_id_,
+                edit_session,
+                TF_ES_ASYNC | TF_ES_READWRITE,
+                &session_result);
             context->Release();
-            SendAck(request_frame, Status::EditSessionFailed);
-            return;
-        }
-        HRESULT session_result = E_FAIL;
-        const HRESULT request_result = context->RequestEditSession(
-            client_id_,
-            edit_session,
-            TF_ES_ASYNC | TF_ES_READWRITE,
-            &session_result);
-        context->Release();
-        edit_session->Release();
-        if (FAILED(request_result) || FAILED(session_result)) {
-            SendAck(request_frame, Status::EditSessionFailed);
+            edit_session->Release();
+            if (FAILED(request_result) || FAILED(session_result)) {
+                SendAck(request_frame, Status::EditSessionFailed);
+                edit_queue_.Complete();
+                continue;
+            }
             return;
         }
     }
@@ -661,6 +698,7 @@ private:
     std::atomic<bool> composition_active_{false};
     std::array<std::uint8_t, 16> active_session_{};
     std::uint64_t last_revision_ = 0;
+    caps_writer::tsf::EditSessionQueue edit_queue_;
 
 };
 
@@ -699,7 +737,9 @@ STDMETHODIMP_(ULONG) EditSession::Release() {
 }
 
 STDMETHODIMP EditSession::DoEditSession(TfEditCookie edit_cookie) {
-    return service_->ApplyEdit(context_, frame_, edit_cookie);
+    const HRESULT result = service_->ApplyEdit(context_, frame_, edit_cookie);
+    service_->CompleteEditSession();
+    return result;
 }
 
 class ClassFactory final : public IClassFactory {
