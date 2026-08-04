@@ -114,6 +114,7 @@ class WindowsNamedPipeBroker:
         self._pending: dict[tuple[uuid.UUID, int, int], list[_PendingRequest]] = {}
         self._pending_lock = threading.Lock()
         self._event_handler: Callable[[Frame], None] | None = None
+        self._client_event: asyncio.Event | None = None
 
     @property
     def client_count(self) -> int:
@@ -130,6 +131,9 @@ class WindowsNamedPipeBroker:
         if self._accept_thread is not None and self._accept_thread.is_alive():
             return True
         self._loop = loop or asyncio.get_running_loop()
+        self._client_event = asyncio.Event()
+        if self.client_count:
+            self._client_event.set()
         self._stop.clear()
         self._ready.clear()
         self._startup_error = None
@@ -172,6 +176,18 @@ class WindowsNamedPipeBroker:
             if client.service_thread is not None:
                 client.service_thread.join(timeout=1.0)
         self._fail_pending(RuntimeError("TSF named-pipe broker stopped"))
+
+    async def wait_for_client(self, timeout: float) -> bool:
+        if self.client_count:
+            return True
+        event = self._client_event
+        if event is None:
+            return False
+        try:
+            await asyncio.wait_for(event.wait(), timeout=timeout)
+        except TimeoutError:
+            return False
+        return self.client_count > 0
 
     async def request(self, frame: Frame, timeout: float) -> BrokerReply | None:
         loop = self._loop or asyncio.get_running_loop()
@@ -479,6 +495,7 @@ class WindowsNamedPipeBroker:
                 )
                 with self._clients_lock:
                     self._clients[client.handle] = client
+                self._notify_client_change()
                 service_thread = threading.Thread(
                     target=self._service_client,
                     args=(client,),
@@ -633,6 +650,7 @@ class WindowsNamedPipeBroker:
         with self._clients_lock:
             client = self._clients.pop(handle, None)
         if client is not None:
+            self._notify_client_change()
             _LOGGER.info(
                 "TIP disconnected pid=%d handle=%d",
                 client.process_id,
@@ -647,6 +665,18 @@ class WindowsNamedPipeBroker:
             if client.stop_event:
                 self._kernel32.SetEvent(client.stop_event)
             self._resolve_disconnect(handle)
+
+    def _notify_client_change(self) -> None:
+        if self._loop is not None and self._client_event is not None:
+            self._loop.call_soon_threadsafe(self._update_client_event)
+
+    def _update_client_event(self) -> None:
+        if self._client_event is None:
+            return
+        if self.client_count:
+            self._client_event.set()
+        else:
+            self._client_event.clear()
 
     def _resolve_disconnect(self, handle: int) -> None:
         with self._pending_lock:

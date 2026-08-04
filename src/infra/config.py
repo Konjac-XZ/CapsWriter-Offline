@@ -39,6 +39,7 @@ class ClientConfig(BaseModel):
     restore_clipboard_after_paste: bool = False
     tsf_speech_tip_enabled: bool = False
     tsf_speech_tip_ack_timeout_ms: int = Field(default=150, ge=10)
+    tsf_speech_tip_context_timeout_ms: int = Field(default=500, ge=10)
     daily_input_log_interval: int = Field(default=1000, ge=1)
     save_audio: bool = False
     save_markdown: bool = False

@@ -20,6 +20,7 @@ class Operation(IntEnum):
     CANCEL = 4
     PING = 5
     COMPOSITION_TERMINATED = 6
+    QUERY_CONTEXT = 7
     ACK_FLAG = 0x8000
 
 

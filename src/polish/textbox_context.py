@@ -5,10 +5,11 @@ from collections.abc import Iterable
 from functools import lru_cache
 import platform
 import time
+import unicodedata
 import uuid
 from dataclasses import dataclass
 from ctypes import wintypes
-from typing import Any
+from typing import Any, TypeGuard
 
 import clipman
 import keyboard
@@ -67,10 +68,22 @@ class _UiaTextResult:
     caret_source: str | None = None
 
 
+def has_meaningful_textbox_text(text: str | None) -> TypeGuard[str]:
+    """Return whether textbox text contains at least one visible base character."""
+    if not isinstance(text, str):
+        return False
+    ignored_categories = {"Cc", "Cf", "Cs", "Co", "Cn", "Mn", "Me"}
+    return any(
+        not char.isspace() and unicodedata.category(char) not in ignored_categories
+        for char in text
+    )
+
+
 def get_active_textbox_context(
     *,
     debug: bool = False,
     excluded_process_names: Iterable[str] | None = None,
+    clipboard_fallback_enabled: bool = False,
 ) -> TextBoxContext | None:
     if platform.system() != "Windows":
         _debug_log(debug, "[文本框解析] 非 Windows 平台，跳过文本框读取。")
@@ -104,7 +117,7 @@ def get_active_textbox_context(
     if hwnd and (process_id is None or process_name is None):
         process_id = process_id or _get_window_process_id(hwnd)
         process_name = process_name or _safe_process_name(process_id)
-    if result and result.text.strip():
+    if result and has_meaningful_textbox_text(result.text):
         _debug_log(
             debug,
             (
@@ -126,10 +139,10 @@ def get_active_textbox_context(
             caret_source=result.caret_source,
         )
 
-    if not is_password:
+    if not is_password and clipboard_fallback_enabled:
         _debug_log(debug, "[文本框解析] UIA 未获得文本，尝试剪贴板回退。")
         text = _read_text_via_clipboard_copy(debug=debug)
-        if text and text.strip():
+        if has_meaningful_textbox_text(text):
             _debug_log(debug, f"[文本框解析] 剪贴板回退成功 len={len(text)}")
             return TextBoxContext(
                 text=text,
@@ -139,10 +152,11 @@ def get_active_textbox_context(
                 process_id=process_id,
                 process_name=process_name,
             )
-
         _debug_log(debug, "[文本框解析] 剪贴板回退未获得文本。")
-    else:
+    elif is_password:
         _debug_log(debug, "[文本框解析] 检测到密码控件，跳过剪贴板回退。")
+    else:
+        _debug_log(debug, "[文本框解析] 剪贴板回退已禁用。")
 
     _debug_log(debug, "[文本框解析] 未能读取当前文本框内容。")
 
@@ -298,7 +312,7 @@ def _read_text_via_uia(
             ):
                 _debug_log(debug, f"[文本框解析] 尝试 {source}。")
                 result = reader(element, uiac, debug=debug)
-                if result and result.text.strip():
+                if result and has_meaningful_textbox_text(result.text):
                     return result, hwnd, class_name, False
 
             _debug_log(debug, "[文本框解析] 所有 UIA 模式均未返回可用文本。")
@@ -337,7 +351,7 @@ def _read_text_via_text_pattern(
             _debug_log(debug, "[文本框解析] TextPattern 存在，但 DocumentRange 为空。")
             return None
         text = _normalize_text(text_range.GetText(_MAX_DIRECT_TEXT_CHARS))
-        if not text or not text.strip():
+        if not has_meaningful_textbox_text(text):
             _debug_log(debug, "[文本框解析] TextPattern 返回空文本。")
             return None
         result = _UiaTextResult(text=text, source="uia_text")
@@ -388,7 +402,7 @@ def _read_text_via_value_pattern(
 
     try:
         text = _normalize_text(pattern.CurrentValue)
-        if not text or not text.strip():
+        if not has_meaningful_textbox_text(text):
             _debug_log(debug, "[文本框解析] ValuePattern 返回空文本。")
             return None
         _debug_log(debug, f"[文本框解析] ValuePattern 成功 len={len(text)}")
@@ -420,7 +434,7 @@ def _read_text_via_legacy_pattern(
 
     try:
         text = _normalize_text(pattern.CurrentValue)
-        if not text or not text.strip():
+        if not has_meaningful_textbox_text(text):
             _debug_log(debug, "[文本框解析] LegacyIAccessible 返回空文本。")
             return None
         _debug_log(debug, f"[文本框解析] LegacyIAccessible 成功 len={len(text)}")
@@ -682,7 +696,7 @@ def _read_text_via_clipboard_copy(*, debug: bool = False) -> str | None:
             )
             pass
 
-    if isinstance(copied, str) and not copied.strip():
+    if isinstance(copied, str) and not has_meaningful_textbox_text(copied):
         _debug_log(debug, "[文本框解析] 剪贴板回退仅获得空白文本。")
 
     return copied

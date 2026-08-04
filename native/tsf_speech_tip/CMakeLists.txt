@@ -37,6 +37,14 @@ if(BUILD_TESTING)
     target_include_directories(EditSessionQueueTest PRIVATE src)
     add_test(NAME EditSessionQueueTest COMMAND EditSessionQueueTest)
 
+    add_executable(ContextSnapshotTest
+        tests/context_snapshot_test.cpp
+    )
+    target_compile_features(ContextSnapshotTest PRIVATE cxx_std_20)
+    target_compile_options(ContextSnapshotTest PRIVATE /W4 /permissive- /EHsc)
+    target_include_directories(ContextSnapshotTest PRIVATE src)
+    add_test(NAME ContextSnapshotTest COMMAND ContextSnapshotTest)
+
     add_executable(DisplayAttributesTest
         tests/display_attributes_test.cpp
     )

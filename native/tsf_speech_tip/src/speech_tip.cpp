@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <inputscope.h>
 #include <msctf.h>
 #include <oleauto.h>
 
@@ -18,6 +19,7 @@
 #include "edit_session_queue.h"
 #include "edit_session_policy.h"
 #include "display_attributes.h"
+#include "context_snapshot.h"
 #include "protocol.h"
 
 using caps_writer::tsf::CompositionStyle;
@@ -47,6 +49,14 @@ constexpr GUID kLanguageProfileGuid = {
     {0xa7, 0x38, 0xbc, 0x80, 0xc0, 0x1e, 0x67, 0x26},
 };
 
+// {1713DD5A-68E7-4A5B-9AF6-592A595C778D}
+constexpr GUID kInputScopePropertyGuid = {
+    0x1713dd5a,
+    0x68e7,
+    0x4a5b,
+    {0x9a, 0xf6, 0x59, 0x2a, 0x59, 0x5c, 0x77, 0x8d},
+};
+
 constexpr wchar_t kProfileDescription[] = L"CapsWriter Speech Composition (Experimental)";
 constexpr wchar_t kWindowClassName[] = L"CapsWriter.TsfSpeechTip.Dispatch.v1";
 constexpr UINT kPipeFrameMessage = WM_APP + 0x341;
@@ -54,6 +64,8 @@ constexpr UINT kPumpEditQueueMessage = WM_APP + 0x342;
 constexpr DWORD kDisconnectedRetryInitialMs = 100;
 constexpr DWORD kDisconnectedRetryMaximumMs = 5000;
 constexpr std::size_t kMaximumOutgoingFrames = 256;
+constexpr LONG kContextSurroundingCharacters = 4096;
+constexpr std::size_t kContextSelectionCharacters = 4096;
 
 HINSTANCE g_instance = nullptr;
 std::atomic<long> g_object_count{0};
@@ -511,6 +523,7 @@ public:
     HRESULT ApplyEdit(ITfContext* context, const Frame& frame, TfEditCookie edit_cookie) {
         const auto operation = static_cast<Operation>(frame.header.operation);
         Status status = Status::EditSessionFailed;
+        std::wstring response_text;
         switch (operation) {
             case Operation::Begin:
                 status = ApplyBegin(context, frame, edit_cookie);
@@ -524,11 +537,14 @@ public:
             case Operation::Cancel:
                 status = ApplyCancel(context, frame, edit_cookie);
                 break;
+            case Operation::QueryContext:
+                status = ApplyQueryContext(context, edit_cookie, &response_text);
+                break;
             default:
                 status = Status::InvalidFrame;
                 break;
         }
-        SendAck(frame, status);
+        SendAck(frame, status, response_text);
         return status == Status::Applied ? S_OK : S_FALSE;
     }
 
@@ -704,7 +720,8 @@ private:
             SendAck(frame, Status::Applied);
             return;
         }
-        if (operation == Operation::Begin && !IsForegroundProcess()) {
+        if ((operation == Operation::Begin || operation == Operation::QueryContext) &&
+            !IsForegroundProcess()) {
             SendAck(frame, Status::IgnoredNotForeground);
             return;
         }
@@ -721,7 +738,12 @@ private:
             Frame frame = std::move(*next);
             const auto operation = static_cast<Operation>(frame.header.operation);
             ITfContext* context = nullptr;
-            if (operation == Operation::Begin) {
+            if (operation == Operation::QueryContext &&
+                composition_ != nullptr && context_ != nullptr) {
+                context = context_;
+                context->AddRef();
+            } else if (operation == Operation::Begin ||
+                       operation == Operation::QueryContext) {
                 ITfDocumentMgr* document_manager = nullptr;
                 HRESULT result = thread_manager_->GetFocus(&document_manager);
                 if (SUCCEEDED(result) && document_manager != nullptr) {
@@ -754,10 +776,13 @@ private:
                 continue;
             }
             HRESULT session_result = E_FAIL;
+            const DWORD edit_flags = operation == Operation::QueryContext
+                ? TF_ES_ASYNC | TF_ES_READ
+                : TF_ES_ASYNC | TF_ES_READWRITE;
             const HRESULT request_result = context->RequestEditSession(
                 client_id_,
                 edit_session,
-                TF_ES_ASYNC | TF_ES_READWRITE,
+                edit_flags,
                 &session_result);
             context->Release();
             edit_session->Release();
@@ -931,6 +956,78 @@ private:
         return SUCCEEDED(end_result) ? Status::Applied : Status::EditSessionFailed;
     }
 
+    Status ApplyQueryContext(
+        ITfContext* context,
+        TfEditCookie edit_cookie,
+        std::wstring* payload) {
+        if (context == nullptr || payload == nullptr) {
+            return Status::NoContext;
+        }
+
+        ITfRange* range = nullptr;
+        TF_SELECTIONSTYLE selection_style{};
+        std::wstring selection_text;
+        HRESULT result = E_FAIL;
+        if (composition_ != nullptr && context == context_) {
+            result = composition_->GetRange(&range);
+            selection_style = original_selection_style_;
+            selection_text = original_selection_text_;
+        } else {
+            TF_SELECTION selection{};
+            ULONG fetched = 0;
+            result = context->GetSelection(
+                edit_cookie, TF_DEFAULT_SELECTION, 1, &selection, &fetched);
+            if (SUCCEEDED(result) && fetched == 1 && selection.range != nullptr) {
+                range = selection.range;
+                selection_style = selection.style;
+            } else {
+                SafeRelease(selection.range);
+                return Status::NoContext;
+            }
+        }
+        if (FAILED(result) || range == nullptr) {
+            SafeRelease(range);
+            return Status::NoContext;
+        }
+        if (IsSensitiveInputScope(context, range, edit_cookie)) {
+            range->Release();
+            *payload = caps_writer::tsf::EncodeContextSnapshot(
+                L"", L"", L"", static_cast<unsigned long>(TF_AE_NONE));
+            return Status::Applied;
+        }
+        if (composition_ == nullptr || context != context_) {
+            result = ReadRangeTextLimited(
+                range,
+                edit_cookie,
+                kContextSelectionCharacters,
+                &selection_text);
+            if (FAILED(result)) {
+                range->Release();
+                return Status::EditSessionFailed;
+            }
+        }
+
+        std::wstring prefix;
+        std::wstring suffix;
+        result = ReadSurroundingText(
+            range,
+            edit_cookie,
+            kContextSurroundingCharacters,
+            &prefix,
+            &suffix);
+        range->Release();
+        if (FAILED(result)) {
+            return Status::EditSessionFailed;
+        }
+
+        *payload = caps_writer::tsf::EncodeContextSnapshot(
+            prefix,
+            selection_text,
+            suffix,
+            static_cast<unsigned long>(selection_style.ase));
+        return Status::Applied;
+    }
+
     static HRESULT ReadRangeText(
         ITfRange* source,
         TfEditCookie edit_cookie,
@@ -960,6 +1057,148 @@ private:
         }
         reader->Release();
         return result;
+    }
+
+    static HRESULT ReadRangeTextLimited(
+        ITfRange* source,
+        TfEditCookie edit_cookie,
+        std::size_t maximum_characters,
+        std::wstring* text) {
+        if (source == nullptr || text == nullptr) {
+            return E_INVALIDARG;
+        }
+        ITfRange* reader = nullptr;
+        HRESULT result = source->Clone(&reader);
+        if (FAILED(result) || reader == nullptr) {
+            return FAILED(result) ? result : E_FAIL;
+        }
+        constexpr ULONG kBufferCharacters = 1024;
+        wchar_t buffer[kBufferCharacters];
+        while (SUCCEEDED(result) && text->size() < maximum_characters) {
+            const auto remaining = maximum_characters - text->size();
+            const ULONG requested = static_cast<ULONG>(
+                std::min<std::size_t>(kBufferCharacters, remaining));
+            ULONG fetched = 0;
+            result = reader->GetText(
+                edit_cookie,
+                TF_TF_MOVESTART,
+                buffer,
+                requested,
+                &fetched);
+            if (FAILED(result) || fetched == 0) {
+                break;
+            }
+            text->append(buffer, fetched);
+        }
+        reader->Release();
+        return result;
+    }
+
+    static HRESULT ReadSurroundingText(
+        ITfRange* source,
+        TfEditCookie edit_cookie,
+        LONG maximum_characters,
+        std::wstring* prefix,
+        std::wstring* suffix) {
+        if (source == nullptr || prefix == nullptr || suffix == nullptr) {
+            return E_INVALIDARG;
+        }
+
+        ITfRange* before = nullptr;
+        HRESULT result = source->Clone(&before);
+        if (SUCCEEDED(result) && before != nullptr) {
+            result = before->Collapse(edit_cookie, TF_ANCHOR_START);
+        }
+        LONG shifted = 0;
+        if (SUCCEEDED(result)) {
+            result = before->ShiftStart(
+                edit_cookie, -maximum_characters, &shifted, nullptr);
+        }
+        if (SUCCEEDED(result)) {
+            result = ReadRangeTextLimited(
+                before,
+                edit_cookie,
+                static_cast<std::size_t>(maximum_characters),
+                prefix);
+        }
+        SafeRelease(before);
+        if (FAILED(result)) {
+            return result;
+        }
+
+        ITfRange* after = nullptr;
+        result = source->Clone(&after);
+        if (SUCCEEDED(result) && after != nullptr) {
+            result = after->Collapse(edit_cookie, TF_ANCHOR_END);
+        }
+        shifted = 0;
+        if (SUCCEEDED(result)) {
+            result = after->ShiftEnd(
+                edit_cookie, maximum_characters, &shifted, nullptr);
+        }
+        if (SUCCEEDED(result)) {
+            result = ReadRangeTextLimited(
+                after,
+                edit_cookie,
+                static_cast<std::size_t>(maximum_characters),
+                suffix);
+        }
+        SafeRelease(after);
+        return result;
+    }
+
+    static bool IsSensitiveInputScope(
+        ITfContext* context,
+        ITfRange* range,
+        TfEditCookie edit_cookie) {
+        ITfReadOnlyProperty* property = nullptr;
+        if (FAILED(context->GetAppProperty(kInputScopePropertyGuid, &property)) ||
+            property == nullptr) {
+            return false;
+        }
+
+        VARIANT value;
+        VariantInit(&value);
+        const HRESULT value_result = property->GetValue(edit_cookie, range, &value);
+        property->Release();
+        if (FAILED(value_result) || value.vt != VT_UNKNOWN || value.punkVal == nullptr) {
+            VariantClear(&value);
+            return false;
+        }
+
+        ITfInputScope* input_scope = nullptr;
+        const HRESULT scope_result = value.punkVal->QueryInterface(
+            IID_PPV_ARGS(&input_scope));
+        VariantClear(&value);
+        if (FAILED(scope_result) || input_scope == nullptr) {
+            return false;
+        }
+
+        InputScope* scopes = nullptr;
+        UINT count = 0;
+        bool sensitive = false;
+        if (SUCCEEDED(input_scope->GetInputScopes(&scopes, &count))) {
+            for (UINT index = 0; index < count; ++index) {
+                switch (scopes[index]) {
+                    case IS_PASSWORD:
+                    case IS_PRIVATE:
+                    case IS_NUMERIC_PASSWORD:
+                    case IS_NUMERIC_PIN:
+                    case IS_ALPHANUMERIC_PIN:
+                    case IS_ALPHANUMERIC_PIN_SET:
+                        sensitive = true;
+                        break;
+                    default:
+                        break;
+                }
+                if (sensitive) {
+                    break;
+                }
+            }
+        }
+        CoTaskMemFree(scopes);
+        input_scope->Release();
+        return sensitive;
     }
 
     static void SetCaretAtEnd(ITfContext* context, ITfRange* source, TfEditCookie edit_cookie) {
@@ -1150,15 +1389,21 @@ private:
         return WriteExact(pipe, &hello, sizeof(hello));
     }
 
-    void SendAck(const Frame& request, Status status) {
+    void SendAck(
+        const Frame& request,
+        Status status,
+        const std::wstring& response_text = {}) {
         if (!connected_.load()) {
             return;
         }
-        FrameHeader response = request.header;
-        response.operation = static_cast<std::uint16_t>(
+        Frame response{};
+        response.header = request.header;
+        response.header.operation = static_cast<std::uint16_t>(
             request.header.operation | static_cast<std::uint16_t>(Operation::AckFlag));
-        response.text_bytes = 0;
-        response.status = static_cast<std::uint32_t>(status);
+        response.text = response_text;
+        response.header.text_bytes = static_cast<std::uint32_t>(
+            response.text.size() * sizeof(wchar_t));
+        response.header.status = static_cast<std::uint32_t>(status);
         {
             std::scoped_lock lock(outgoing_mutex_);
             if (outgoing_.size() >= kMaximumOutgoingFrames) {
@@ -1178,14 +1423,14 @@ private:
         if (!connected_.load()) {
             return;
         }
-        FrameHeader event{};
-        event.magic = caps_writer::tsf::kMagic;
-        event.version = caps_writer::tsf::kVersion;
-        event.operation = static_cast<std::uint16_t>(
+        Frame event{};
+        event.header.magic = caps_writer::tsf::kMagic;
+        event.header.version = caps_writer::tsf::kVersion;
+        event.header.operation = static_cast<std::uint16_t>(
             Operation::CompositionTerminated);
-        event.revision = revision;
-        event.session_id = session_id;
-        event.status = static_cast<std::uint32_t>(rollback_status);
+        event.header.revision = revision;
+        event.header.session_id = session_id;
+        event.header.status = static_cast<std::uint32_t>(rollback_status);
         {
             std::scoped_lock lock(outgoing_mutex_);
             if (outgoing_.size() >= kMaximumOutgoingFrames) {
@@ -1200,7 +1445,7 @@ private:
 
     bool FlushOutgoing(HANDLE pipe) {
         while (!stop_pipe_.load()) {
-            FrameHeader response{};
+            Frame response{};
             {
                 std::scoped_lock lock(outgoing_mutex_);
                 if (outgoing_.empty()) {
@@ -1209,7 +1454,14 @@ private:
                 response = outgoing_.front();
                 outgoing_.pop_front();
             }
-            if (!WriteExact(pipe, &response, sizeof(response))) {
+            if (!WriteExact(pipe, &response.header, sizeof(response.header))) {
+                return false;
+            }
+            if (!response.text.empty() &&
+                !WriteExact(
+                    pipe,
+                    response.text.data(),
+                    static_cast<DWORD>(response.header.text_bytes))) {
                 return false;
             }
         }
@@ -1245,7 +1497,7 @@ private:
     HANDLE pipe_wake_event_ = nullptr;
     HWINEVENTHOOK foreground_hook_ = nullptr;
     std::mutex outgoing_mutex_;
-    std::deque<FrameHeader> outgoing_;
+    std::deque<Frame> outgoing_;
 
     ITfContext* context_ = nullptr;
     ITfComposition* composition_ = nullptr;

@@ -16,6 +16,7 @@ from src.tsf_ipc.protocol import (
     decode_header,
     encode_frame,
 )
+from src.tsf_ipc.context_snapshot import encode_context_snapshot
 from src.tsf_ipc.windows_pipe import (
     GENERIC_READ,
     GENERIC_WRITE,
@@ -59,6 +60,11 @@ def main(pipe_name: str) -> None:
             if payload is None:
                 raise EOFError("missing request payload")
             request = decode_frame(header, payload)
+            response_text = (
+                encode_context_snapshot("pipe ", "", "context")
+                if request.operation == Operation.QUERY_CONTEXT
+                else ""
+            )
             if not client_api._write_all(
                 handle,
                 encode_frame(
@@ -66,6 +72,7 @@ def main(pipe_name: str) -> None:
                         int(Operation.ACK_FLAG) | int(request.operation),
                         request.session_id,
                         request.revision,
+                        text=response_text,
                         status=Status.APPLIED,
                     )
                 ),

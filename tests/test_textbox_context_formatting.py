@@ -213,6 +213,12 @@ class TextboxContextFormattingTest(unittest.TestCase):
         self.assertIn("当前话题", textbox_message)
         self.assertNotIn("表示用户当前输入光标位置", textbox_message)
 
+    def test_invisible_only_context_does_not_add_context_message(self) -> None:
+        messages = _build_messages("", "ASR", "\u200b\ufeff", None, [])
+
+        self.assertEqual(len(messages), 1)
+        self.assertTrue(messages[0]["content"].startswith("ASR 原文"))
+
     def test_without_caret_uses_existing_head_tail_truncation(self) -> None:
         with patch(
             "src.polish.llm_polish._cfg",

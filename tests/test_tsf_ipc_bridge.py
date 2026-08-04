@@ -5,6 +5,7 @@ import pytest
 from src.tsf_ipc.bridge import TsfSpeechTipBridge
 from src.tsf_ipc.protocol import CompositionStyle, Frame, Operation, Status
 from src.tsf_ipc.windows_pipe import BrokerReply
+from src.tsf_ipc.context_snapshot import encode_context_snapshot
 
 
 class FakeBroker:
@@ -17,6 +18,7 @@ class FakeBroker:
         *,
         process_id=1234,
         process_name="Editor.exe",
+        response_text="",
     ):
         self.default_status = default_status
         self.responses = {
@@ -27,6 +29,7 @@ class FakeBroker:
         self.event_handler = None
         self.process_id = process_id
         self.process_name = process_name
+        self.response_text = response_text
 
     def start(self, loop=None):
         return True
@@ -47,6 +50,7 @@ class FakeBroker:
                 int(Operation.ACK_FLAG) | int(frame.operation),
                 frame.session_id,
                 frame.revision,
+                text=self.response_text,
                 status=response,
             ),
             process_id=self.process_id,
@@ -112,6 +116,49 @@ def test_bridge_sends_full_text_revisions_then_commits(enable_bridge):
         CompositionStyle.POLISHING,
         0,
     ]
+
+
+def test_bridge_queries_context_from_actual_applied_host(enable_bridge):
+    broker = FakeBroker(
+        process_id=4321,
+        process_name="ChatGPT.exe",
+        response_text=encode_context_snapshot("前文😀", "选中", "后文"),
+    )
+    bridge = TsfSpeechTipBridge(broker)
+
+    snapshot = asyncio.run(bridge.query_context())
+
+    assert snapshot is not None
+    assert snapshot.text == "前文😀选中后文"
+    assert snapshot.caret_offset == len("前文😀选中")
+    assert snapshot.selection_start == len("前文😀")
+    assert snapshot.selection_end == len("前文😀选中")
+    assert snapshot.process_id == 4321
+    assert snapshot.process_name == "ChatGPT.exe"
+    assert [frame.operation for frame in broker.frames] == [Operation.QUERY_CONTEXT]
+
+
+def test_bridge_rejects_invalid_context_payload(enable_bridge):
+    bridge = TsfSpeechTipBridge(FakeBroker(response_text="invalid"))
+
+    assert asyncio.run(bridge.query_context()) is None
+
+
+def test_context_query_waits_for_first_foreground_tip_connection(enable_bridge):
+    class DelayedBroker(FakeBroker):
+        client_count = 0
+
+        async def wait_for_client(self, _timeout):
+            self.client_count = 1
+            return True
+
+    broker = DelayedBroker(response_text=encode_context_snapshot("前文", "", "后文"))
+    bridge = TsfSpeechTipBridge(broker)
+
+    snapshot = asyncio.run(bridge.query_context())
+
+    assert snapshot is not None
+    assert snapshot.text == "前文后文"
 
 
 def test_chatgpt_single_line_polishing_keeps_streaming(enable_bridge):

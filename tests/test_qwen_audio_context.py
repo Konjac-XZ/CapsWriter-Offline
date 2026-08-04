@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from src.audio import send_audio
 from src.polish import llm_polish
+from src.polish import context_providers
 from src.polish.textbox_context import TextBoxContext
 from src.transcribe.qwen_audio import qwen_audio_transcribe_http as qwen_audio
 
@@ -62,6 +63,19 @@ def test_asr_context_without_caret_keeps_textbox_tail(monkeypatch):
     assert messages[0]["content"][0]["text"].endswith("结尾关键术语 MQTT")
 
 
+def test_asr_context_omits_invisible_only_textbox(monkeypatch):
+    _enable_context(monkeypatch)
+    context = SimpleNamespace(
+        asr_history=[],
+        captured_textbox_context=TextBoxContext(
+            text="\u200b\ufeff",
+            source="test",
+        ),
+    )
+
+    assert qwen_audio.build_asr_context_messages(context) == []
+
+
 def test_request_places_context_before_audio(monkeypatch):
     _enable_context(monkeypatch)
     monkeypatch.setattr(qwen_audio, "get_model", lambda: "qwen-audio-3.0-asr-flash")
@@ -88,26 +102,76 @@ def test_shared_capture_runs_for_qwen_when_llm_polish_is_disabled(monkeypatch):
     marker = object()
     monkeypatch.setattr(llm_polish, "is_llm_polish_enabled", lambda: False)
     monkeypatch.setattr(llm_polish, "_qwen_asr_context_enabled", lambda: True)
-    monkeypatch.setattr(llm_polish, "_prepare_polish_request_context", lambda: marker)
+    monkeypatch.setattr(llm_polish, "_qwen_asr_textbox_enabled", lambda: False)
+    monkeypatch.setattr(
+        llm_polish,
+        "_prepare_polish_request_context",
+        lambda **_kwargs: marker,
+    )
 
     assert asyncio.run(llm_polish.prefetch_request_context()) is marker
 
 
+def test_prefetch_uses_context_provider_result(monkeypatch):
+    marker = object()
+    captured = TextBoxContext(
+        text="TSF 光标上下文",
+        source="tsf",
+        caret_offset=3,
+    )
+    prepare_options = {}
+
+    class Registry:
+        async def capture(self, _options):
+            return captured
+
+    def prepare(**kwargs):
+        prepare_options.update(kwargs)
+        return marker
+
+    monkeypatch.setattr(llm_polish, "is_llm_polish_enabled", lambda: True)
+    monkeypatch.setattr(llm_polish, "_qwen_asr_context_enabled", lambda: False)
+    monkeypatch.setattr(llm_polish, "_qwen_asr_textbox_enabled", lambda: False)
+    monkeypatch.setattr(
+        llm_polish,
+        "_cfg",
+        lambda: {"textbox_context": {"enabled": True}},
+    )
+    monkeypatch.setattr(llm_polish, "_prepare_polish_request_context", prepare)
+    monkeypatch.setattr(
+        context_providers,
+        "DEFAULT_CONTEXT_PROVIDER_REGISTRY",
+        Registry(),
+    )
+
+    assert asyncio.run(llm_polish.prefetch_request_context()) is marker
+    assert prepare_options["captured_textbox_context"] is captured
+    assert prepare_options["textbox_context_prepared"] is True
+
+
 def test_shared_capture_keeps_asr_textbox_separate_from_polish_toggle(monkeypatch):
     captured = TextBoxContext(text="光标附近文本", source="test", caret_offset=3)
+    capture_options = {}
     monkeypatch.setattr(
         llm_polish,
         "_cfg",
         lambda: {
             "enabled": False,
-            "textbox_context": {"enabled": False, "max_chars": 100},
+            "textbox_context": {
+                "enabled": False,
+                "max_chars": 100,
+                "clipboard_fallback_enabled": False,
+            },
             "history": {"enabled": False},
         },
     )
     monkeypatch.setattr(llm_polish, "_qwen_asr_textbox_enabled", lambda: True)
-    monkeypatch.setattr(
-        llm_polish, "get_active_textbox_context", lambda **kwargs: captured
-    )
+
+    def capture_textbox(**kwargs):
+        capture_options.update(kwargs)
+        return captured
+
+    monkeypatch.setattr(llm_polish, "get_active_textbox_context", capture_textbox)
     monkeypatch.setattr(llm_polish, "get_recent_vision_context_summary", lambda: None)
     monkeypatch.setattr(llm_polish, "get_finalized_history", lambda: [])
     monkeypatch.setattr(llm_polish, "get_asr_finalized_history", lambda: ["ASR 历史"])
@@ -117,8 +181,40 @@ def test_shared_capture_keeps_asr_textbox_separate_from_polish_toggle(monkeypatc
 
     assert context.captured_textbox_context is captured
     assert context.textbox_context is None
+    assert capture_options["clipboard_fallback_enabled"] is False
     assert context.history == []
     assert context.asr_history == ["ASR 历史"]
+
+
+def test_prepared_invisible_context_is_discarded(monkeypatch):
+    captured = TextBoxContext(text="\u200b\ufeff", source="tsf", caret_offset=1)
+    monkeypatch.setattr(
+        llm_polish,
+        "_cfg",
+        lambda: {
+            "enabled": True,
+            "textbox_context": {"enabled": True, "max_chars": 100},
+            "history": {"enabled": False},
+        },
+    )
+    monkeypatch.setattr(llm_polish, "_qwen_asr_textbox_enabled", lambda: False)
+    monkeypatch.setattr(llm_polish, "get_recent_vision_context_summary", lambda: None)
+    monkeypatch.setattr(llm_polish, "get_finalized_history", lambda: [])
+    monkeypatch.setattr(llm_polish, "get_asr_finalized_history", lambda: [])
+    monkeypatch.setattr(llm_polish, "_get_env", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "src.infra.user_lexicon.get_lexicon_user_message",
+        lambda: None,
+    )
+
+    context = llm_polish._prepare_polish_request_context(
+        captured_textbox_context=captured,
+        textbox_context_prepared=True,
+    )
+
+    assert context.captured_textbox_context is None
+    assert context.textbox_context is None
+    assert context.textbox_context_has_position is False
 
 
 def test_asr_history_records_even_when_polish_history_is_disabled(monkeypatch):

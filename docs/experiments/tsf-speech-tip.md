@@ -19,10 +19,13 @@ model:
 3. `COMMIT(...)` calls `ITfComposition::EndComposition` without changing the
    final text.
 4. `CANCEL(...)` clears the range and then ends the composition.
+5. `QUERY_CONTEXT(...)` obtains the foreground selection and a bounded amount of
+   surrounding text without starting or changing a composition.
 
 The TIP is an in-process COM DLL. A pipe reader therefore never calls TSF from its
 worker thread. It posts an owned frame to a message-only window created on the
-TIP activation thread; that thread requests `TF_ES_ASYNC | TF_ES_READWRITE` and
+TIP activation thread; that thread requests `TF_ES_ASYNC | TF_ES_READWRITE` for
+composition mutations or `TF_ES_ASYNC | TF_ES_READ` for context snapshots, then
 applies the frame in `ITfEditSession::DoEditSession`.
 
 Official references:
@@ -50,7 +53,7 @@ Frames have a fixed 40-byte little-endian header followed by UTF-16LE full text:
 | --- | ---: | --- |
 | magic | 4 | `CWTP` |
 | version | 2 | `1` |
-| operation | 2 | begin/revise/commit/cancel or ACK bit |
+| operation | 2 | begin/revise/commit/cancel/query-context or ACK bit |
 | revision | 8 | strictly increasing per session |
 | session | 16 | UUID in Windows/GUID byte order |
 | text bytes | 4 | UTF-16LE byte count |
@@ -63,6 +66,16 @@ pipe completion or its shared wake event; `SetWinEventHook(EVENT_SYSTEM_FOREGROU
 wakes a background TIP as soon as its host becomes foreground. There are no fixed
 10/25/250 ms transport or foreground polling loops. Disconnected clients retain a
 bounded exponential reconnect delay after actual connection failures.
+
+`QUERY_CONTEXT` ACKs use the normal UTF-16LE payload. A short versioned metadata
+prefix carries UTF-16 prefix/selection lengths and the active selection end; the
+remaining payload is the unescaped prefix + original selection + suffix text.
+The broker waits briefly for the first foreground TIP connection, so a newly
+focused host does not immediately fall through to UI Automation. Password,
+private, and PIN input scopes return an authoritative empty snapshot, preventing
+the fallback chain from probing them. If a CapsWriter composition is already
+active, the TIP substitutes its saved original selection and reads around the
+composition range so temporary ASR text never contaminates the snapshot.
 
 The activation-thread edit queue separately ensures that a TIP has at most one
 outstanding TSF edit session and coalesces consecutive queued revisions without

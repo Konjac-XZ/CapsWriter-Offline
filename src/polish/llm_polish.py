@@ -14,7 +14,11 @@ from typing import Any, cast
 import yaml
 
 from src.polish.smart_quotes import normalize_zh_cn_smart_quotes
-from src.polish.textbox_context import TextBoxContext, get_active_textbox_context
+from src.polish.textbox_context import (
+    TextBoxContext,
+    get_active_textbox_context,
+    has_meaningful_textbox_text,
+)
 from src.polish.vision_context import get_recent_vision_context_summary
 from src.polish.providers import (
     PolishProviderConfig,
@@ -651,7 +655,14 @@ def _coerce_optional_positive_int(
     return number if number > 0 else None
 
 
-def _prepare_polish_request_context() -> PolishRequestContext:
+def _prepare_polish_request_context(
+    *,
+    captured_textbox_context: TextBoxContext | None = None,
+    textbox_context_prepared: bool = False,
+    textbox_capture_ms: float | None = None,
+) -> PolishRequestContext:
+    prepared_textbox_context = captured_textbox_context
+    captured_textbox_context = None
     cfg = _cfg()
     tc_cfg = cfg.get("textbox_context", {})
     timings: dict[str, float] = {}
@@ -702,22 +713,28 @@ def _prepare_polish_request_context() -> PolishRequestContext:
         default=600,
     )
     textbox_context_debug: bool = bool(tc_cfg.get("debug", False))
+    clipboard_fallback_enabled = bool(tc_cfg.get("clipboard_fallback_enabled", False))
     textbox_context_excluded_process_names = _get_excluded_process_names(
         tc_cfg.get("excluded_process_names")
     )
 
-    captured_textbox_context: TextBoxContext | None = None
     textbox_context: str | None = None
     textbox_context_has_position = False
     if capture_textbox_context:
-        t0 = time.perf_counter()
-        captured = get_active_textbox_context(
-            debug=textbox_context_debug,
-            excluded_process_names=textbox_context_excluded_process_names,
-        )
-        timings["textbox_capture_ms"] = (time.perf_counter() - t0) * 1000.0
+        if textbox_context_prepared:
+            captured = prepared_textbox_context
+            if textbox_capture_ms is not None:
+                timings["textbox_capture_ms"] = textbox_capture_ms
+        else:
+            t0 = time.perf_counter()
+            captured = get_active_textbox_context(
+                debug=textbox_context_debug,
+                excluded_process_names=textbox_context_excluded_process_names,
+                clipboard_fallback_enabled=clipboard_fallback_enabled,
+            )
+            timings["textbox_capture_ms"] = (time.perf_counter() - t0) * 1000.0
 
-        if captured and captured.text.strip():
+        if captured and has_meaningful_textbox_text(captured.text):
             captured_textbox_context = captured
             textbox_context_has_position = _has_usable_caret_offset(captured)
             if textbox_context_enabled:
@@ -774,7 +791,40 @@ async def prefetch_request_context() -> PolishRequestContext | None:
     if not is_llm_polish_enabled() and not _qwen_asr_context_enabled():
         return None
     try:
-        return await asyncio.to_thread(_prepare_polish_request_context)
+        cfg = _cfg()
+        tc_cfg = cfg.get("textbox_context", {})
+        capture_textbox_context = bool(tc_cfg.get("enabled", False)) or (
+            _qwen_asr_textbox_enabled()
+        )
+        captured_textbox_context = None
+        textbox_capture_ms = None
+        if capture_textbox_context:
+            from src.polish.context_providers import (
+                DEFAULT_CONTEXT_PROVIDER_REGISTRY,
+                ContextCaptureOptions,
+            )
+
+            started = time.perf_counter()
+            captured_textbox_context = await DEFAULT_CONTEXT_PROVIDER_REGISTRY.capture(
+                ContextCaptureOptions(
+                    debug=bool(tc_cfg.get("debug", False)),
+                    excluded_process_names=tuple(
+                        _get_excluded_process_names(
+                            tc_cfg.get("excluded_process_names")
+                        )
+                    ),
+                    clipboard_fallback_enabled=bool(
+                        tc_cfg.get("clipboard_fallback_enabled", False)
+                    ),
+                )
+            )
+            textbox_capture_ms = (time.perf_counter() - started) * 1000.0
+        return await asyncio.to_thread(
+            _prepare_polish_request_context,
+            captured_textbox_context=captured_textbox_context,
+            textbox_context_prepared=True,
+            textbox_capture_ms=textbox_capture_ms,
+        )
     except Exception:
         return None
 
@@ -831,7 +881,7 @@ def _build_messages(
                 ),
             }
         )
-    if textbox_context:
+    if has_meaningful_textbox_text(textbox_context):
         if textbox_context_has_position:
             textbox_context_prompt = (
                 "以下是用户当前文本框中的上下文片段，仅供参考，"

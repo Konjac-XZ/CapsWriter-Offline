@@ -30,6 +30,7 @@ def test_client_config_converts_paths_and_accepts_minimums() -> None:
             "start_music_path": "assets/start.mp3",
             "stop_music_path": "assets/stop.mp3",
             "tsf_speech_tip_ack_timeout_ms": 10,
+            "tsf_speech_tip_context_timeout_ms": 20,
             "daily_input_log_interval": 1,
         }
     )
@@ -37,6 +38,7 @@ def test_client_config_converts_paths_and_accepts_minimums() -> None:
     assert parsed.start_music_path == Path("assets/start.mp3")
     assert parsed.stop_music_path == Path("assets/stop.mp3")
     assert parsed.tsf_speech_tip_ack_timeout_ms == 10
+    assert parsed.tsf_speech_tip_context_timeout_ms == 20
     assert parsed.daily_input_log_interval == 1
 
 
@@ -45,6 +47,7 @@ def test_client_config_converts_paths_and_accepts_minimums() -> None:
     [
         {"paste": "false"},
         {"tsf_speech_tip_ack_timeout_ms": 9},
+        {"tsf_speech_tip_context_timeout_ms": 9},
         {"daily_input_log_interval": 0},
     ],
 )

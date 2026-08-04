@@ -18,6 +18,7 @@ from .host_processor import (
     HostProcessorRegistry,
     RevisionDecision,
 )
+from .context_snapshot import TsfContextSnapshot, decode_context_snapshot
 from .protocol import CompositionStyle, Frame, Operation, Status
 from .windows_pipe import BrokerReply, WindowsNamedPipeBroker
 
@@ -146,11 +147,26 @@ class TsfSpeechTipBridge:
             float(getattr(Config, "tsf_speech_tip_ack_timeout_ms", 150)) / 1000.0,
         )
 
-    async def _request_applied(self, frame: Frame) -> BrokerReply | None:
+    @staticmethod
+    def _context_timeout() -> float:
+        return max(
+            0.01,
+            float(getattr(Config, "tsf_speech_tip_context_timeout_ms", 500)) / 1000.0,
+        )
+
+    async def _request_applied(
+        self,
+        frame: Frame,
+        *,
+        timeout: float | None = None,
+    ) -> BrokerReply | None:
         started = time.monotonic()
         clients_before = getattr(self._broker, "client_count", None)
         try:
-            ack = await self._broker.request(frame, self._ack_timeout())
+            ack = await self._broker.request(
+                frame,
+                self._ack_timeout() if timeout is None else timeout,
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - IPC diagnostics must not fail ASR
@@ -179,6 +195,44 @@ class TsfSpeechTipBridge:
             result = self._status_name(ack_frame.status)
         self._log_request_result(frame, started, result, clients_before)
         return ack if applied else None
+
+    async def query_context(self) -> TsfContextSnapshot | None:
+        if not self.enabled:
+            return None
+        timeout = self._context_timeout()
+        started = time.monotonic()
+        if getattr(self._broker, "client_count", None) == 0:
+            wait_for_client = getattr(self._broker, "wait_for_client", None)
+            if wait_for_client is not None:
+                try:
+                    if not await wait_for_client(timeout):
+                        return None
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001 - UIA can still provide context
+                    return None
+        remaining = max(0.01, timeout - (time.monotonic() - started))
+        async with self._lock:
+            reply = await self._request_applied(
+                Frame(Operation.QUERY_CONTEXT, uuid.uuid4(), 1),
+                timeout=remaining,
+            )
+        if reply is None or not reply.frame.text:
+            return None
+        try:
+            return decode_context_snapshot(
+                reply.frame.text,
+                process_id=reply.process_id,
+                process_name=reply.process_name,
+            )
+        except ValueError as exc:
+            _LOGGER.warning(
+                "TSF context response rejected process=%s pid=%d error=%s",
+                reply.process_name or "unknown",
+                reply.process_id,
+                type(exc).__name__,
+            )
+            return None
 
     @staticmethod
     def _status_name(status: int) -> str:

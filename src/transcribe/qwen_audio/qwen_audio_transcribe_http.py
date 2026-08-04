@@ -11,6 +11,7 @@ import httpx
 
 from src.infra.cosmic import console
 from src.infra.user_lexicon import load_words as load_user_lexicon_words
+from src.polish.textbox_context import has_meaningful_textbox_text
 from src.provider.provider_settings import (
     get_bool as ps_get_bool,
     get_int as ps_get_int,
@@ -501,7 +502,7 @@ def _truncate_context_text(value: Any, max_chars: int) -> str:
 
 def _textbox_context_snippet(captured: Any, max_chars: int) -> str:
     text = str(getattr(captured, "text", "") or "").replace("\x00", "")
-    if not text.strip():
+    if not has_meaningful_textbox_text(text):
         return ""
     if len(text) <= max_chars:
         return text.strip()
@@ -512,13 +513,15 @@ def _textbox_context_snippet(captured: Any, max_chars: int) -> str:
     except Exception:
         caret_offset = None
     if caret_offset is None or not 0 <= caret_offset <= len(text):
-        return text[-max_chars:].strip()
+        snippet = text[-max_chars:].strip()
+        return snippet if has_meaningful_textbox_text(snippet) else ""
 
     before = max_chars // 2
     start = max(0, caret_offset - before)
     end = min(len(text), start + max_chars)
     start = max(0, end - max_chars)
-    return text[start:end].strip()
+    snippet = text[start:end].strip()
+    return snippet if has_meaningful_textbox_text(snippet) else ""
 
 
 def build_asr_context_messages(request_context: Any) -> list[dict[str, Any]]:

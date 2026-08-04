@@ -59,6 +59,10 @@ def test_windows_pipe_request_ack_round_trip():
                     break
                 await asyncio.sleep(0.01)
             assert broker.client_count == 1
+            context_request = Frame(Operation.QUERY_CONTEXT, uuid.uuid4(), 1)
+            context_response = await broker.request(context_request, timeout=1.0)
+            assert context_response is not None
+            assert context_response.frame.text.startswith("CWCTX1\n")
             request = Frame(Operation.BEGIN, uuid.uuid4(), 1, "管道端到端")
             response = await broker.request(request, timeout=1.0)
             assert response is not None
