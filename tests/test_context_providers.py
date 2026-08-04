@@ -1,5 +1,6 @@
 import asyncio
 
+from src.polish import context_providers
 from src.polish.context_providers import (
     ContextCaptureOptions,
     ContextProvider,
@@ -31,7 +32,13 @@ class StubProvider(ContextProvider):
         return self.result
 
 
-def test_registry_prefers_tsf_context_without_calling_uia():
+def test_registry_prefers_tsf_context_without_calling_uia(monkeypatch):
+    gui_prints = []
+    monkeypatch.setattr(
+        context_providers.console,
+        "print",
+        lambda message, **_kwargs: gui_prints.append(message),
+    )
     tsf_context = TextBoxContext(text="TSF 上下文", source="tsf")
     tsf = StubProvider("tsf", tsf_context)
     uia = StubProvider("uia", TextBoxContext(text="UIA 上下文", source="uia"))
@@ -42,9 +49,16 @@ def test_registry_prefers_tsf_context_without_calling_uia():
     assert captured is tsf_context
     assert tsf.calls == 1
     assert uia.calls == 0
+    assert gui_prints == ["上下文已获取（TSF）"]
 
 
-def test_registry_treats_empty_tsf_snapshot_as_authoritative():
+def test_registry_treats_empty_tsf_snapshot_as_authoritative(monkeypatch):
+    gui_prints = []
+    monkeypatch.setattr(
+        context_providers.console,
+        "print",
+        lambda message, **_kwargs: gui_prints.append(message),
+    )
     tsf_context = TextBoxContext(text="", source="tsf")
     tsf = StubProvider("tsf", tsf_context)
     uia = StubProvider("uia", TextBoxContext(text="UIA 上下文", source="uia"))
@@ -54,9 +68,16 @@ def test_registry_treats_empty_tsf_snapshot_as_authoritative():
 
     assert captured is tsf_context
     assert uia.calls == 0
+    assert gui_prints == ["上下文已获取，为空，跳过"]
 
 
-def test_registry_falls_back_to_uia_when_tsf_is_unavailable():
+def test_registry_falls_back_to_uia_when_tsf_is_unavailable(monkeypatch):
+    gui_prints = []
+    monkeypatch.setattr(
+        context_providers.console,
+        "print",
+        lambda message, **_kwargs: gui_prints.append(message),
+    )
     uia_context = TextBoxContext(text="UIA 上下文", source="uia")
     tsf = StubProvider("tsf", None)
     uia = StubProvider("uia", uia_context)
@@ -67,6 +88,22 @@ def test_registry_falls_back_to_uia_when_tsf_is_unavailable():
     assert captured is uia_context
     assert tsf.calls == 1
     assert uia.calls == 1
+    assert gui_prints == ["上下文已获取（UI Automation）"]
+
+
+def test_registry_reports_final_capture_failure(monkeypatch):
+    gui_prints = []
+    monkeypatch.setattr(
+        context_providers.console,
+        "print",
+        lambda message, **_kwargs: gui_prints.append(message),
+    )
+    registry = ContextProviderRegistry(
+        (StubProvider("tsf", None), StubProvider("uia", None))
+    )
+
+    assert asyncio.run(registry.capture(ContextCaptureOptions())) is None
+    assert gui_prints == ["上下文获取失败，跳过"]
 
 
 def test_registry_continues_after_provider_error():

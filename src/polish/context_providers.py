@@ -3,12 +3,18 @@ import logging
 from dataclasses import dataclass
 from typing import Protocol
 
+from src.infra.cosmic import console
 from src.tsf_ipc import get_tsf_speech_tip_bridge
 
-from .textbox_context import TextBoxContext, get_active_textbox_context
+from .textbox_context import (
+    TextBoxContext,
+    get_active_textbox_context,
+    has_meaningful_textbox_text,
+)
 
 
 _LOGGER = logging.getLogger(__name__)
+_PROVIDER_LABELS = {"tsf": "TSF", "uia": "UI Automation"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,7 +109,19 @@ class ContextProviderRegistry:
                     captured.process_id or "unknown",
                     len(captured.text),
                 )
+                if has_meaningful_textbox_text(captured.text):
+                    provider_label = _PROVIDER_LABELS.get(
+                        provider.name.casefold(),
+                        provider.name,
+                    )
+                    console.print(
+                        f"上下文已获取（{provider_label}）",
+                        style="#888888",
+                    )
+                else:
+                    console.print("上下文已获取，为空，跳过", style="#888888")
                 return captured
+        console.print("上下文获取失败，跳过", style="#888888")
         return None
 
 
