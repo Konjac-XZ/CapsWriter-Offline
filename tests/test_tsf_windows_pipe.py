@@ -62,9 +62,10 @@ def test_windows_pipe_request_ack_round_trip():
             request = Frame(Operation.BEGIN, uuid.uuid4(), 1, "管道端到端")
             response = await broker.request(request, timeout=1.0)
             assert response is not None
-            assert response.session_id == request.session_id
-            assert response.revision == request.revision
-            assert response.status == Status.APPLIED
+            assert response.frame.session_id == request.session_id
+            assert response.frame.revision == request.revision
+            assert response.frame.status == Status.APPLIED
+            assert response.process_id == 1234
         finally:
             client.wait(timeout=2.0)
             broker.stop()
@@ -135,8 +136,8 @@ def test_negative_ack_waits_for_possible_applied_ack_from_another_client():
     async def exercise() -> None:
         broker = WindowsNamedPipeBroker("unused")
         broker._loop = asyncio.get_running_loop()
-        first = _PipeClient(1)
-        second = _PipeClient(2)
+        first = _PipeClient(1, process_id=111, process_name="Background.exe")
+        second = _PipeClient(2, process_id=222, process_name="ChatGPT.exe")
         broker._clients = {1: first, 2: second}
         request = Frame(Operation.REVISE, uuid.uuid4(), 7, "最终文本")
         response_task = asyncio.create_task(broker.request(request, timeout=1.0))
@@ -161,7 +162,11 @@ def test_negative_ack_waits_for_possible_applied_ack_from_another_client():
             status=Status.APPLIED,
         )
         broker._resolve_ack(2, applied)
-        assert await response_task == applied
+        response = await response_task
+        assert response is not None
+        assert response.frame == applied
+        assert response.process_id == 222
+        assert response.process_name == "ChatGPT.exe"
 
     asyncio.run(exercise())
 
@@ -190,7 +195,7 @@ def test_request_returns_negative_after_every_target_client_rejects():
             )
         response = await response_task
         assert response is not None
-        assert response.status == Status.EDIT_SESSION_FAILED
+        assert response.frame.status == Status.EDIT_SESSION_FAILED
 
     asyncio.run(exercise())
 
@@ -216,5 +221,30 @@ def test_request_times_out_when_connected_client_does_not_ack():
         broker._clients = {1: _PipeClient(1)}
         request = Frame(Operation.REVISE, uuid.uuid4(), 2, "等待确认")
         assert await broker.request(request, timeout=0.01) is None
+
+    asyncio.run(exercise())
+
+
+def test_unsolicited_composition_event_is_dispatched_on_event_loop():
+    async def exercise() -> None:
+        broker = WindowsNamedPipeBroker("unused")
+        broker._loop = asyncio.get_running_loop()
+        received = []
+        delivered = asyncio.Event()
+
+        def receive(frame):
+            received.append(frame)
+            delivered.set()
+
+        broker.set_event_handler(receive)
+        frame = Frame(
+            Operation.COMPOSITION_TERMINATED,
+            uuid.uuid4(),
+            7,
+            status=Status.APPLIED,
+        )
+        broker._dispatch_event(frame)
+        await asyncio.wait_for(delivered.wait(), timeout=1.0)
+        assert received == [frame]
 
     asyncio.run(exercise())

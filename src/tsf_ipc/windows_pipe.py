@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import logging
 import platform
 import queue
 import threading
 import uuid
 from ctypes import wintypes
 from dataclasses import dataclass, field
+from typing import Callable
 
 from .protocol import (
     HEADER,
@@ -40,6 +42,8 @@ TOKEN_QUERY = 0x0008
 TOKEN_USER = 1
 SDDL_REVISION_1 = 1
 
+_LOGGER = logging.getLogger("capswriter.tsf.pipe")
+
 
 class SECURITY_ATTRIBUTES(ctypes.Structure):
     _fields_ = [
@@ -70,6 +74,8 @@ class OVERLAPPED(ctypes.Structure):
 @dataclass(slots=True)
 class _PipeClient:
     handle: int
+    process_id: int = 0
+    process_name: str | None = None
     outgoing: queue.Queue[tuple[Frame, bytes] | None] = field(
         default_factory=lambda: queue.Queue(maxsize=256)
     )
@@ -81,9 +87,16 @@ class _PipeClient:
 
 @dataclass(slots=True)
 class _PendingRequest:
-    future: asyncio.Future[Frame | None]
+    future: asyncio.Future[BrokerReply | None]
     client_handles: set[int]
-    last_negative_ack: Frame | None = None
+    last_negative_ack: BrokerReply | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class BrokerReply:
+    frame: Frame
+    process_id: int = 0
+    process_name: str | None = None
 
 
 class WindowsNamedPipeBroker:
@@ -100,6 +113,7 @@ class WindowsNamedPipeBroker:
         self._clients_lock = threading.Lock()
         self._pending: dict[tuple[uuid.UUID, int, int], list[_PendingRequest]] = {}
         self._pending_lock = threading.Lock()
+        self._event_handler: Callable[[Frame], None] | None = None
 
     @property
     def client_count(self) -> int:
@@ -129,6 +143,10 @@ class WindowsNamedPipeBroker:
         self._ready.wait(timeout=0.5)
         return self._ready.is_set() and self._startup_error is None
 
+    def set_event_handler(self, handler: Callable[[Frame], None] | None) -> None:
+        """Receive unsolicited lifecycle events on the broker event loop."""
+        self._event_handler = handler
+
     def stop(self) -> None:
         self._stop.set()
         if platform.system() == "Windows" and hasattr(self, "_kernel32"):
@@ -155,10 +173,10 @@ class WindowsNamedPipeBroker:
                 client.service_thread.join(timeout=1.0)
         self._fail_pending(RuntimeError("TSF named-pipe broker stopped"))
 
-    async def request(self, frame: Frame, timeout: float) -> Frame | None:
+    async def request(self, frame: Frame, timeout: float) -> BrokerReply | None:
         loop = self._loop or asyncio.get_running_loop()
         key = (frame.session_id, frame.revision, int(frame.operation))
-        future: asyncio.Future[Frame | None] = loop.create_future()
+        future: asyncio.Future[BrokerReply | None] = loop.create_future()
         encoded = encode_frame(frame)
         with self._clients_lock:
             clients = list(self._clients.values())
@@ -501,8 +519,20 @@ class WindowsNamedPipeBroker:
                 if payload is None:
                     return
                 frame = decode_frame(header, payload)
-                if frame.is_ack:
+                if frame.operation == int(Operation.HELLO):
+                    client.process_id = int(frame.status)
+                    client.process_name = self._safe_process_name(client.process_id)
+                    _LOGGER.info(
+                        "TIP connected pid=%d process=%s handle=%d clients=%d",
+                        client.process_id,
+                        client.process_name or "unknown",
+                        client.handle,
+                        self.client_count,
+                    )
+                elif frame.is_ack:
                     self._resolve_ack(client.handle, frame)
+                else:
+                    self._dispatch_event(frame)
         except Exception:
             return
         finally:
@@ -516,18 +546,27 @@ class WindowsNamedPipeBroker:
 
     def _resolve_ack(self, client_handle: int, frame: Frame) -> None:
         key = (frame.session_id, frame.revision, frame.acknowledged_operation)
+        with self._clients_lock:
+            client = self._clients.get(client_handle)
+            reply = BrokerReply(
+                frame,
+                process_id=client.process_id if client is not None else 0,
+                process_name=client.process_name if client is not None else None,
+            )
         with self._pending_lock:
             requests = list(self._pending.get(key, ()))
-            completions: list[tuple[asyncio.Future[Frame | None], Frame | None]] = []
+            completions: list[
+                tuple[asyncio.Future[BrokerReply | None], BrokerReply | None]
+            ] = []
             for request in requests:
                 if client_handle not in request.client_handles:
                     continue
                 if frame.status == int(Status.APPLIED):
                     request.client_handles.clear()
-                    completions.append((request.future, frame))
+                    completions.append((request.future, reply))
                     continue
                 request.client_handles.discard(client_handle)
-                request.last_negative_ack = frame
+                request.last_negative_ack = reply
                 if not request.client_handles:
                     completions.append((request.future, request.last_negative_ack))
         if not completions or self._loop is None:
@@ -535,12 +574,28 @@ class WindowsNamedPipeBroker:
         for future, result in completions:
             self._loop.call_soon_threadsafe(self._set_future_result, future, result)
 
+    def _dispatch_event(self, frame: Frame) -> None:
+        if self._loop is not None and self._event_handler is not None:
+            self._loop.call_soon_threadsafe(self._event_handler, frame)
+
     @staticmethod
     def _set_future_result(
-        future: asyncio.Future[Frame | None], frame: Frame | None
+        future: asyncio.Future[BrokerReply | None], reply: BrokerReply | None
     ) -> None:
         if not future.done():
-            future.set_result(frame)
+            future.set_result(reply)
+
+    @staticmethod
+    def _safe_process_name(process_id: int) -> str | None:
+        if not process_id:
+            return None
+        try:
+            import psutil
+
+            name = psutil.Process(process_id).name()
+        except Exception:
+            return None
+        return name.strip() or None
 
     def _remove_pending(
         self,
@@ -568,7 +623,9 @@ class WindowsNamedPipeBroker:
             self._loop.call_soon_threadsafe(self._set_future_exception, future, error)
 
     @staticmethod
-    def _set_future_exception(future: asyncio.Future[Frame], error: Exception) -> None:
+    def _set_future_exception(
+        future: asyncio.Future[BrokerReply], error: Exception
+    ) -> None:
         if not future.done():
             future.set_exception(error)
 
@@ -576,6 +633,11 @@ class WindowsNamedPipeBroker:
         with self._clients_lock:
             client = self._clients.pop(handle, None)
         if client is not None:
+            _LOGGER.info(
+                "TIP disconnected pid=%d handle=%d",
+                client.process_id,
+                client.handle,
+            )
             try:
                 client.outgoing.put_nowait(None)
             except queue.Full:
@@ -588,7 +650,7 @@ class WindowsNamedPipeBroker:
 
     def _resolve_disconnect(self, handle: int) -> None:
         with self._pending_lock:
-            completions: list[asyncio.Future[Frame | None]] = []
+            completions: list[asyncio.Future[BrokerReply | None]] = []
             for requests in self._pending.values():
                 for request in requests:
                     if handle not in request.client_handles:

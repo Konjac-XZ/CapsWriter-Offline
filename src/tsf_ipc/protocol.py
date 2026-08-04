@@ -19,6 +19,7 @@ class Operation(IntEnum):
     COMMIT = 3
     CANCEL = 4
     PING = 5
+    COMPOSITION_TERMINATED = 6
     ACK_FLAG = 0x8000
 
 

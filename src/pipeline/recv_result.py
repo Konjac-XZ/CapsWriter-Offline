@@ -104,6 +104,7 @@ async def recv_result():
             if current_tid is not None:
                 current_tid = str(current_tid)
             polish_prefetch_task = message.get("polish_prefetch_task")
+            polish_enabled_for_text = False
             if current_tid is not None:
                 Cosmic.active_task_id = current_tid
             if _is_abandoned(current_tid):
@@ -269,7 +270,8 @@ async def recv_result():
                 # 润色开启时，优先由 TSF Composition 承载可修订的 full text。
                 # BEGIN 未获得前台 TIP 的 APPLIED ACK 时保留旧的键入回退。
                 tsf_owned = False
-                if current_tid is not None and is_llm_polish_enabled():
+                llm_polish_enabled = is_llm_polish_enabled()
+                if current_tid is not None and llm_polish_enabled:
                     tsf_owned = await tsf_bridge.begin_or_revise(
                         current_tid,
                         text,
@@ -279,6 +281,7 @@ async def recv_result():
                     not tsf_owned
                     and not tsf_bridge.owns_task(current_tid)
                     and not is_full_text_revision
+                    and not llm_polish_enabled
                 ):
                     # A full-text hypothesis may revise its unstable suffix.
                     # The legacy keyboard fallback can only append, so suppress
@@ -307,6 +310,34 @@ async def recv_result():
                             "TSF 最终提交与取消均未确认，已抑制剪贴板回退以避免重复上屏。",
                             style="yellow",
                         )
+                elif current_tid is not None and getattr(
+                    tsf_bridge,
+                    "take_confirmed_termination_rollback",
+                    lambda _task_id: False,
+                )(current_tid):
+                    # The TIP erased the externally terminated partial
+                    # composition using its write edit cookie. A complete
+                    # final paste is now safe and cannot duplicate that text.
+                    await type_final(text)
+                    final_output_succeeded = True
+                    console.print(
+                        "TSF Composition 被宿主提前终止；未完成原文已回滚，"
+                        "已使用完整最终文本安全回退。",
+                        style="yellow",
+                    )
+                elif current_tid is not None and getattr(
+                    tsf_bridge,
+                    "take_failed_termination_rollback",
+                    lambda _task_id: False,
+                )(current_tid):
+                    # The host ended the composition but the TIP could not
+                    # prove that all partial text was erased. Pasting would
+                    # risk duplicating or corrupting user text.
+                    console.print(
+                        "TSF Composition 被宿主提前终止，且无法确认未完成原文已完整回滚；"
+                        "已抑制最终文本回退以避免重复上屏。",
+                        style="yellow",
+                    )
                 elif has_incremental_transcript and getattr(
                     Cosmic, "_transcript_had_deltas", False
                 ):

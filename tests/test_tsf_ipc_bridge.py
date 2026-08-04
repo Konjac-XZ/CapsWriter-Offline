@@ -4,18 +4,29 @@ import pytest
 
 from src.tsf_ipc.bridge import TsfSpeechTipBridge
 from src.tsf_ipc.protocol import CompositionStyle, Frame, Operation, Status
+from src.tsf_ipc.windows_pipe import BrokerReply
 
 
 class FakeBroker:
     startup_error: Exception | None = None
 
-    def __init__(self, default_status=Status.APPLIED, responses=None):
+    def __init__(
+        self,
+        default_status=Status.APPLIED,
+        responses=None,
+        *,
+        process_id=1234,
+        process_name="Editor.exe",
+    ):
         self.default_status = default_status
         self.responses = {
             int(operation): list(values)
             for operation, values in (responses or {}).items()
         }
         self.frames: list[Frame] = []
+        self.event_handler = None
+        self.process_id = process_id
+        self.process_name = process_name
 
     def start(self, loop=None):
         return True
@@ -31,16 +42,27 @@ class FakeBroker:
             raise response
         if response is None:
             return None
-        return Frame(
-            int(Operation.ACK_FLAG) | int(frame.operation),
-            frame.session_id,
-            frame.revision,
-            status=response,
+        return BrokerReply(
+            Frame(
+                int(Operation.ACK_FLAG) | int(frame.operation),
+                frame.session_id,
+                frame.revision,
+                status=response,
+            ),
+            process_id=self.process_id,
+            process_name=self.process_name,
         )
 
     def broadcast(self, frame):
         self.frames.append(frame)
         return 1
+
+    def set_event_handler(self, handler):
+        self.event_handler = handler
+
+    def emit_event(self, frame):
+        assert self.event_handler is not None
+        self.event_handler(frame)
 
 
 @pytest.fixture
@@ -89,6 +111,93 @@ def test_bridge_sends_full_text_revisions_then_commits(enable_bridge):
         CompositionStyle.POLISHING,
         CompositionStyle.POLISHING,
         0,
+    ]
+
+
+def test_chatgpt_single_line_polishing_keeps_streaming(enable_bridge):
+    broker = FakeBroker(process_name="ChatGPT.exe")
+    bridge = TsfSpeechTipBridge(broker)
+
+    async def exercise():
+        assert await bridge.begin_or_revise("task-1", "原文") is True
+        assert (
+            await bridge.begin_or_revise(
+                "task-1", "单行润色", CompositionStyle.POLISHING
+            )
+            is True
+        )
+
+    asyncio.run(exercise())
+
+    assert [frame.operation for frame in broker.frames] == [
+        Operation.BEGIN,
+        Operation.REVISE,
+    ]
+
+
+def test_chatgpt_multiline_revision_cancels_before_sending_it(enable_bridge):
+    broker = FakeBroker(process_name="ChatGPT.exe")
+    bridge = TsfSpeechTipBridge(broker)
+
+    async def exercise():
+        assert await bridge.begin_or_revise("task-1", "原文") is True
+        assert (
+            await bridge.begin_or_revise(
+                "task-1", "第一段\n第二段", CompositionStyle.POLISHING
+            )
+            is False
+        )
+        assert bridge.owns_task("task-1") is False
+
+    asyncio.run(exercise())
+
+    assert [frame.operation for frame in broker.frames] == [
+        Operation.BEGIN,
+        Operation.CANCEL,
+    ]
+
+
+def test_chatgpt_failed_preemptive_cancel_blocks_revisions_and_commit(enable_bridge):
+    broker = FakeBroker(
+        responses={
+            Operation.CANCEL: [Status.EDIT_SESSION_FAILED, Status.APPLIED],
+        },
+        process_name="ChatGPT.exe",
+    )
+    bridge = TsfSpeechTipBridge(broker)
+
+    async def exercise():
+        assert await bridge.begin_or_revise("task-1", "原文") is True
+        assert await bridge.begin_or_revise("task-1", "第一段\n第二段") is False
+        assert bridge.owns_task("task-1") is True
+        assert await bridge.begin_or_revise("task-1", "后续单行 token") is False
+        assert await bridge.commit("task-1", "最终\n文本") is False
+        assert await bridge.cancel("task-1") is True
+
+    asyncio.run(exercise())
+
+    assert [frame.operation for frame in broker.frames] == [
+        Operation.BEGIN,
+        Operation.CANCEL,
+        Operation.CANCEL,
+    ]
+
+
+def test_chatgpt_multiline_final_commit_defers_to_confirmed_cancel(enable_bridge):
+    broker = FakeBroker(process_name="ChatGPT.exe")
+    bridge = TsfSpeechTipBridge(broker)
+
+    async def exercise():
+        assert await bridge.begin_or_revise("task-1", "原文") is True
+        assert await bridge.commit("task-1", "最终\n文本") is False
+        assert bridge.owns_task("task-1") is True
+        assert await bridge.cancel("task-1") is True
+
+    asyncio.run(exercise())
+
+    assert [frame.operation for frame in broker.frames] == [
+        Operation.BEGIN,
+        Operation.CANCEL,
     ]
 
 
@@ -219,3 +328,70 @@ def test_cancel_only_releases_state_after_applied_ack(enable_bridge):
     asyncio.run(exercise())
 
     assert [frame.revision for frame in broker.frames] == [1, 2, 3]
+
+
+def test_external_termination_releases_ownership_after_confirmed_rollback(
+    enable_bridge,
+):
+    broker = FakeBroker()
+    bridge = TsfSpeechTipBridge(broker)
+
+    assert asyncio.run(bridge.begin_or_revise("task-1", "未完成原文")) is True
+    begin = broker.frames[0]
+    broker.emit_event(
+        Frame(
+            Operation.COMPOSITION_TERMINATED,
+            begin.session_id,
+            begin.revision,
+            status=Status.APPLIED,
+        )
+    )
+
+    assert bridge.owns_task("task-1") is False
+    assert bridge.take_confirmed_termination_rollback("task-1") is True
+    assert bridge.take_confirmed_termination_rollback("task-1") is False
+
+
+def test_external_termination_does_not_allow_fallback_when_rollback_failed(
+    enable_bridge,
+):
+    broker = FakeBroker()
+    bridge = TsfSpeechTipBridge(broker)
+
+    assert asyncio.run(bridge.begin_or_revise("task-1", "未完成原文")) is True
+    begin = broker.frames[0]
+    broker.emit_event(
+        Frame(
+            Operation.COMPOSITION_TERMINATED,
+            begin.session_id,
+            begin.revision,
+            status=Status.EDIT_SESSION_FAILED,
+        )
+    )
+
+    assert bridge.owns_task("task-1") is False
+    assert bridge.take_confirmed_termination_rollback("task-1") is False
+    assert bridge.take_failed_termination_rollback("task-1") is True
+    assert bridge.take_failed_termination_rollback("task-1") is False
+
+
+def test_chatgpt_does_not_trust_applied_external_termination_rollback(
+    enable_bridge,
+):
+    broker = FakeBroker(process_name="ChatGPT.exe")
+    bridge = TsfSpeechTipBridge(broker)
+
+    assert asyncio.run(bridge.begin_or_revise("task-1", "未完成原文")) is True
+    begin = broker.frames[0]
+    broker.emit_event(
+        Frame(
+            Operation.COMPOSITION_TERMINATED,
+            begin.session_id,
+            begin.revision,
+            status=Status.APPLIED,
+        )
+    )
+
+    assert bridge.owns_task("task-1") is False
+    assert bridge.take_confirmed_termination_rollback("task-1") is False
+    assert bridge.take_failed_termination_rollback("task-1") is True

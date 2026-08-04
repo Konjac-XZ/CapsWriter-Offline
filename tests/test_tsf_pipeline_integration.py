@@ -5,7 +5,10 @@ import pytest
 
 from src.infra.cosmic import Cosmic
 from src.pipeline import recv_result as pipeline
+from src.tsf_ipc.bridge import TsfSpeechTipBridge
 from src.tsf_ipc.protocol import CompositionStyle
+from src.tsf_ipc.protocol import Frame, Operation, Status
+from src.tsf_ipc.windows_pipe import BrokerReply
 
 
 class OneMessageQueue:
@@ -48,6 +51,8 @@ class FakeTsfBridge:
         self.cancels = []
         self.commit_result = commit_result
         self.cancel_result = cancel_result
+        self.termination_rollback_tasks = set()
+        self.failed_termination_rollback_tasks = set()
 
     async def begin_or_revise(
         self, task_id, text, style=CompositionStyle.TRANSCRIPTION
@@ -71,6 +76,18 @@ class FakeTsfBridge:
             self.owned_task = None
         return self.cancel_result
 
+    def take_confirmed_termination_rollback(self, task_id):
+        if task_id not in self.termination_rollback_tasks:
+            return False
+        self.termination_rollback_tasks.remove(task_id)
+        return True
+
+    def take_failed_termination_rollback(self, task_id):
+        if task_id not in self.failed_termination_rollback_tasks:
+            return False
+        self.failed_termination_rollback_tasks.remove(task_id)
+        return True
+
 
 class RejectingTsfBridge(FakeTsfBridge):
     async def begin_or_revise(
@@ -87,6 +104,46 @@ class OwnedButUnconfirmedTsfBridge(FakeTsfBridge):
         self.owned_task = task_id
         self.revisions.append((task_id, text, style))
         return False
+
+
+class ChatGptAckBroker:
+    startup_error = None
+
+    def __init__(self, cancel_status=Status.APPLIED):
+        self.frames = []
+        self.cancel_status = cancel_status
+        self.event_handler = None
+
+    def start(self, loop=None):
+        return True
+
+    def stop(self):
+        return None
+
+    async def request(self, frame, timeout):
+        self.frames.append(frame)
+        status = (
+            self.cancel_status
+            if frame.operation == Operation.CANCEL
+            else Status.APPLIED
+        )
+        return BrokerReply(
+            Frame(
+                int(Operation.ACK_FLAG) | int(frame.operation),
+                frame.session_id,
+                frame.revision,
+                status=status,
+            ),
+            process_id=1234,
+            process_name="ChatGPT.exe",
+        )
+
+    def broadcast(self, frame):
+        self.frames.append(frame)
+        return 1
+
+    def set_event_handler(self, handler):
+        self.event_handler = handler
 
 
 @pytest.mark.parametrize(
@@ -262,6 +319,160 @@ def test_unconfirmed_revision_does_not_fall_back_while_composition_is_owned(
         ("task-realtime", "临时文本", CompositionStyle.TRANSCRIPTION)
     ]
     assert typed == []
+
+
+def test_polishing_never_sends_append_only_transcript_to_keyboard_fallback(
+    monkeypatch,
+):
+    bridge = RejectingTsfBridge()
+    typed = []
+    message = {
+        "task_id": "task-realtime",
+        "is_final": False,
+        "is_transcript_delta": True,
+        "text": "说到一半的原文",
+        "time_start": 1.0,
+        "time_submit": 1.1,
+        "time_complete": 1.2,
+        "source": "mic",
+        "stream": True,
+    }
+    Cosmic.queue_out = cast(Any, OneMessageQueue(message))
+    Cosmic.abandon_requested = False
+    Cosmic.abandoned_task_ids.clear()
+    Cosmic.active_task_id = None
+    Cosmic._transcript_had_deltas = False
+
+    monkeypatch.setattr(pipeline, "get_tsf_speech_tip_bridge", lambda: bridge)
+    monkeypatch.setattr(pipeline, "is_llm_polish_enabled", lambda: True)
+    monkeypatch.setattr(pipeline, "regex_replace", lambda text: text)
+    monkeypatch.setattr("keyboard.write", typed.append)
+
+    asyncio.run(pipeline.recv_result())
+
+    assert typed == []
+    assert Cosmic._transcript_had_deltas is False
+
+
+def test_confirmed_external_termination_rollback_allows_complete_final_fallback(
+    monkeypatch,
+):
+    bridge = RejectingTsfBridge()
+    bridge.termination_rollback_tasks.add("task-terminated")
+    typed = []
+
+    async def fake_polish(_text, **_kwargs):
+        return "完整润色文本"
+
+    async def fake_type_result(text):
+        typed.append(text)
+
+    message = _final_message("task-terminated")
+    message["has_incremental_transcript"] = True
+    message["stream"] = True
+    _configure_final_message_test(monkeypatch, bridge, message, fake_polish)
+    monkeypatch.setattr(pipeline, "type_result", fake_type_result)
+    monkeypatch.setattr(
+        pipeline, "record_input_characters", lambda _text, **_kwargs: None
+    )
+    monkeypatch.setattr("src.keyboard.play_music.play_completion_sound", lambda: None)
+
+    asyncio.run(pipeline.recv_result())
+
+    assert typed == ["完整润色文本"]
+
+
+def test_failed_external_termination_rollback_suppresses_duplicate_final_fallback(
+    monkeypatch,
+):
+    bridge = RejectingTsfBridge()
+    bridge.failed_termination_rollback_tasks.add("task-terminated")
+    typed = []
+
+    async def fake_polish(_text, **_kwargs):
+        return "完整润色文本"
+
+    async def fake_type_result(text):
+        typed.append(text)
+
+    message = _final_message("task-terminated")
+    _configure_final_message_test(monkeypatch, bridge, message, fake_polish)
+    monkeypatch.setattr(pipeline, "type_result", fake_type_result)
+    monkeypatch.setattr("src.keyboard.play_music.play_completion_sound", lambda: None)
+
+    asyncio.run(pipeline.recv_result())
+
+    assert typed == []
+
+
+def test_chatgpt_multiline_polish_cancels_then_pastes_final_once(monkeypatch):
+    broker = ChatGptAckBroker()
+    bridge = TsfSpeechTipBridge(broker)
+    typed = []
+
+    async def fake_polish(_text, *, on_text=None, **_kwargs):
+        assert on_text is not None
+        await on_text("第一段\n1. 列表")
+        return "第一段\n1. 完整列表"
+
+    async def fake_type_result(text):
+        typed.append(text)
+
+    _configure_final_message_test(
+        monkeypatch, bridge, _final_message("task-chatgpt"), fake_polish
+    )
+    monkeypatch.setattr("src.tsf_ipc.bridge.platform.system", lambda: "Windows")
+    monkeypatch.setattr(
+        "src.tsf_ipc.bridge.Config.tsf_speech_tip_enabled", True, raising=False
+    )
+    monkeypatch.setattr(pipeline, "type_result", fake_type_result)
+    monkeypatch.setattr(
+        pipeline, "record_input_characters", lambda _text, **_kwargs: None
+    )
+    monkeypatch.setattr("src.keyboard.play_music.play_completion_sound", lambda: None)
+
+    asyncio.run(pipeline.recv_result())
+
+    assert typed == ["第一段\n1. 完整列表"]
+    assert [frame.operation for frame in broker.frames] == [
+        Operation.BEGIN,
+        Operation.CANCEL,
+    ]
+
+
+def test_chatgpt_failed_multiline_cancel_never_revises_commits_or_pastes(
+    monkeypatch,
+):
+    broker = ChatGptAckBroker(cancel_status=Status.EDIT_SESSION_FAILED)
+    bridge = TsfSpeechTipBridge(broker)
+    typed = []
+
+    async def fake_polish(_text, *, on_text=None, **_kwargs):
+        assert on_text is not None
+        await on_text("第一段\n第二段")
+        await on_text("第一段\n第二段继续")
+        return "第一段\n最终文本"
+
+    async def fake_type_result(text):
+        typed.append(text)
+
+    _configure_final_message_test(
+        monkeypatch, bridge, _final_message("task-chatgpt"), fake_polish
+    )
+    monkeypatch.setattr("src.tsf_ipc.bridge.platform.system", lambda: "Windows")
+    monkeypatch.setattr(
+        "src.tsf_ipc.bridge.Config.tsf_speech_tip_enabled", True, raising=False
+    )
+    monkeypatch.setattr(pipeline, "type_result", fake_type_result)
+    monkeypatch.setattr("src.keyboard.play_music.play_completion_sound", lambda: None)
+
+    asyncio.run(pipeline.recv_result())
+
+    assert typed == []
+    assert broker.frames[0].operation == Operation.BEGIN
+    assert all(frame.operation == Operation.CANCEL for frame in broker.frames[1:])
+    assert Operation.REVISE not in [frame.operation for frame in broker.frames]
+    assert Operation.COMMIT not in [frame.operation for frame in broker.frames]
 
 
 def _configure_final_message_test(monkeypatch, bridge, message, fake_polish):

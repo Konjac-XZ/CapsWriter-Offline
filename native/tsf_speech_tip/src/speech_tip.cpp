@@ -468,9 +468,41 @@ public:
     }
 
     STDMETHODIMP OnCompositionTerminated(
-        TfEditCookie /*edit_cookie*/,
+        TfEditCookie edit_cookie,
         ITfComposition* composition) override {
         if (composition_ == composition) {
+            if (ending_composition_) {
+                return S_OK;
+            }
+            const auto terminated_session = active_session_;
+            const auto terminated_revision = last_revision_;
+            Status rollback_status = Status::EditSessionFailed;
+            ITfRange* range = nullptr;
+            if (context_ != nullptr &&
+                SUCCEEDED(composition->GetRange(&range)) &&
+                range != nullptr) {
+                const HRESULT text_result = range->SetText(
+                    edit_cookie,
+                    0,
+                    original_selection_text_.data(),
+                    static_cast<LONG>(original_selection_text_.size()));
+                HRESULT selection_result = E_FAIL;
+                if (SUCCEEDED(text_result)) {
+                    TF_SELECTION selection{};
+                    selection.range = range;
+                    selection.style = original_selection_style_;
+                    selection_result = context_->SetSelection(
+                        edit_cookie, 1, &selection);
+                }
+                if (caps_writer::tsf::CanEndCancellation(
+                        text_result, selection_result)) {
+                    ClearDisplayAttribute(context_, range, edit_cookie);
+                    rollback_status = Status::Applied;
+                }
+                range->Release();
+            }
+            SendCompositionTerminated(
+                terminated_session, terminated_revision, rollback_status);
             ClearCompositionState();
         }
         return S_OK;
@@ -839,7 +871,9 @@ private:
         composition->AddRef();
         ITfRange* range = nullptr;
         composition->GetRange(&range);
+        ending_composition_ = true;
         const HRESULT result = composition->EndComposition(edit_cookie);
+        ending_composition_ = false;
         composition->Release();
         if (SUCCEEDED(result)) {
             ClearDisplayAttribute(context, range, edit_cookie);
@@ -885,7 +919,9 @@ private:
             return Status::InactiveSession;
         }
         composition->AddRef();
+        ending_composition_ = true;
         const HRESULT end_result = composition->EndComposition(edit_cookie);
+        ending_composition_ = false;
         composition->Release();
         if (SUCCEEDED(end_result)) {
             ClearDisplayAttribute(context, range, edit_cookie);
@@ -990,13 +1026,19 @@ private:
                 const DWORD wait_result = WaitForMultipleObjects(
                     static_cast<DWORD>(std::size(waits)), waits, FALSE, INFINITE);
                 if (wait_result == WAIT_OBJECT_0) {
-                    if (stop_pipe_.load() || ShouldDisconnectPipe()) {
+                    if (stop_pipe_.load()) {
                         CancelIoEx(pipe, &overlapped);
                         WaitForSingleObject(read_event, INFINITE);
                         GetOverlappedResult(pipe, &overlapped, &read, FALSE);
                         return false;
                     }
                     if (!FlushOutgoing(pipe)) {
+                        CancelIoEx(pipe, &overlapped);
+                        WaitForSingleObject(read_event, INFINITE);
+                        GetOverlappedResult(pipe, &overlapped, &read, FALSE);
+                        return false;
+                    }
+                    if (ShouldDisconnectPipe()) {
                         CancelIoEx(pipe, &overlapped);
                         WaitForSingleObject(read_event, INFINITE);
                         GetOverlappedResult(pipe, &overlapped, &read, FALSE);
@@ -1052,10 +1094,10 @@ private:
                 continue;
             }
             while (!stop_pipe_.load()) {
-                if (ShouldDisconnectPipe()) {
+                if (!FlushOutgoing(connected_pipe)) {
                     break;
                 }
-                if (!FlushOutgoing(connected_pipe)) {
+                if (ShouldDisconnectPipe()) {
                     break;
                 }
                 auto frame = std::make_unique<Frame>();
@@ -1129,6 +1171,33 @@ private:
         }
     }
 
+    void SendCompositionTerminated(
+        const std::array<std::uint8_t, 16>& session_id,
+        std::uint64_t revision,
+        Status rollback_status) {
+        if (!connected_.load()) {
+            return;
+        }
+        FrameHeader event{};
+        event.magic = caps_writer::tsf::kMagic;
+        event.version = caps_writer::tsf::kVersion;
+        event.operation = static_cast<std::uint16_t>(
+            Operation::CompositionTerminated);
+        event.revision = revision;
+        event.session_id = session_id;
+        event.status = static_cast<std::uint32_t>(rollback_status);
+        {
+            std::scoped_lock lock(outgoing_mutex_);
+            if (outgoing_.size() >= kMaximumOutgoingFrames) {
+                outgoing_.pop_front();
+            }
+            outgoing_.push_back(event);
+        }
+        if (pipe_wake_event_ != nullptr) {
+            SetEvent(pipe_wake_event_);
+        }
+    }
+
     bool FlushOutgoing(HANDLE pipe) {
         while (!stop_pipe_.load()) {
             FrameHeader response{};
@@ -1181,6 +1250,7 @@ private:
     ITfContext* context_ = nullptr;
     ITfComposition* composition_ = nullptr;
     std::atomic<bool> composition_active_{false};
+    bool ending_composition_ = false;
     std::array<std::uint8_t, 16> active_session_{};
     std::uint64_t last_revision_ = 0;
     caps_writer::tsf::EditSessionQueue edit_queue_;

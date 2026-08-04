@@ -18,6 +18,7 @@ enum class Operation : std::uint16_t {
     Commit = 3,
     Cancel = 4,
     Ping = 5,
+    CompositionTerminated = 6,
     AckFlag = 0x8000,
 };
 
