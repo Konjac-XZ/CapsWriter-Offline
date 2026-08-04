@@ -20,6 +20,7 @@ enum class Operation : std::uint16_t {
     Ping = 5,
     CompositionTerminated = 6,
     QueryContext = 7,
+    EditSessionWatchdog = 8,
     AckFlag = 0x8000,
 };
 
@@ -32,6 +33,7 @@ enum class Status : std::uint32_t {
     InactiveSession = 5,
     Queued = 6,
     InvalidFrame = 7,
+    EditSessionTimeout = 8,
 };
 
 // Request frames use FrameHeader::status for visual composition state. ACK

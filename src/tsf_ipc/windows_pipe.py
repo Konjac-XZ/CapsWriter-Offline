@@ -549,6 +549,15 @@ class WindowsNamedPipeBroker:
                 elif frame.is_ack:
                     self._resolve_ack(client.handle, frame)
                 else:
+                    if frame.operation == int(Operation.EDIT_SESSION_WATCHDOG):
+                        _LOGGER.warning(
+                            "TIP edit session watchdog recovered pid=%d process=%s "
+                            "session=%s revision=%d",
+                            client.process_id,
+                            client.process_name or "unknown",
+                            frame.session_id.hex[:8],
+                            frame.revision,
+                        )
                     self._dispatch_event(frame)
         except Exception:
             return

@@ -21,6 +21,7 @@ class Operation(IntEnum):
     PING = 5
     COMPOSITION_TERMINATED = 6
     QUERY_CONTEXT = 7
+    EDIT_SESSION_WATCHDOG = 8
     ACK_FLAG = 0x8000
 
 
@@ -33,6 +34,7 @@ class Status(IntEnum):
     INACTIVE_SESSION = 5
     QUEUED = 6
     INVALID_FRAME = 7
+    EDIT_SESSION_TIMEOUT = 8
 
 
 class CompositionStyle(IntEnum):

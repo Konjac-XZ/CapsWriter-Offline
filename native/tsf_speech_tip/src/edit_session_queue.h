@@ -45,6 +45,13 @@ public:
 
     void Complete() noexcept { outstanding_ = false; }
 
+    std::deque<Frame> AbandonAndDrain() noexcept {
+        outstanding_ = false;
+        std::deque<Frame> abandoned;
+        abandoned.swap(pending_);
+        return abandoned;
+    }
+
     void Reset() noexcept {
         outstanding_ = false;
         pending_.clear();

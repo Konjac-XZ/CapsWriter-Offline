@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -20,6 +21,7 @@
 #include "edit_session_policy.h"
 #include "display_attributes.h"
 #include "context_snapshot.h"
+#include "edit_session_watchdog.h"
 #include "protocol.h"
 
 using caps_writer::tsf::CompositionStyle;
@@ -61,6 +63,10 @@ constexpr wchar_t kProfileDescription[] = L"CapsWriter Speech Composition (Exper
 constexpr wchar_t kWindowClassName[] = L"CapsWriter.TsfSpeechTip.Dispatch.v1";
 constexpr UINT kPipeFrameMessage = WM_APP + 0x341;
 constexpr UINT kPumpEditQueueMessage = WM_APP + 0x342;
+constexpr UINT kForegroundChangedMessage = WM_APP + 0x343;
+constexpr UINT_PTR kEditSessionWatchdogTimer = 1;
+constexpr UINT kEditSessionWatchdogTimeoutMs = 750;
+constexpr ULONGLONG kEditSessionRetryCooldownMs = 1000;
 constexpr DWORD kDisconnectedRetryInitialMs = 100;
 constexpr DWORD kDisconnectedRetryMaximumMs = 5000;
 constexpr std::size_t kMaximumOutgoingFrames = 256;
@@ -292,7 +298,11 @@ private:
 
 class EditSession final : public ITfEditSession {
 public:
-    EditSession(TextService* service, ITfContext* context, Frame frame) noexcept;
+    EditSession(
+        TextService* service,
+        ITfContext* context,
+        Frame frame,
+        std::uint64_t request_id) noexcept;
 
     STDMETHODIMP QueryInterface(REFIID iid, void** object) override;
     STDMETHODIMP_(ULONG) AddRef() override;
@@ -306,6 +316,7 @@ private:
     TextService* service_;
     ITfContext* context_;
     Frame frame_;
+    std::uint64_t request_id_;
 };
 
 class TextService final
@@ -445,6 +456,7 @@ public:
 
     STDMETHODIMP Deactivate() override {
         UnregisterForegroundHook();
+        ResetEditSessionRecovery();
         stop_pipe_.store(true);
         if (pipe_wake_event_ != nullptr) {
             SetEvent(pipe_wake_event_);
@@ -548,7 +560,24 @@ public:
         return status == Status::Applied ? S_OK : S_FALSE;
     }
 
-    void CompleteEditSession() {
+    HRESULT ApplyEditIfCurrent(
+        ITfContext* context,
+        const Frame& frame,
+        TfEditCookie edit_cookie,
+        std::uint64_t request_id) {
+        if (!edit_watchdog_.IsCurrent(request_id)) {
+            return S_FALSE;
+        }
+        return ApplyEdit(context, frame, edit_cookie);
+    }
+
+    void CompleteEditSession(std::uint64_t request_id) {
+        if (!edit_watchdog_.Complete(request_id)) {
+            return;
+        }
+        DisarmEditSessionTimer();
+        outstanding_frame_.reset();
+        SafeRelease(outstanding_context_);
         edit_queue_.Complete();
         // Do not request the next asynchronous edit session recursively from
         // inside DoEditSession. Pump it after TSF has unwound this callback.
@@ -612,6 +641,18 @@ private:
             }
             return 0;
         }
+        if (message == kForegroundChangedMessage) {
+            if (service != nullptr) {
+                service->HandleForegroundChanged();
+            }
+            return 0;
+        }
+        if (message == WM_TIMER && wparam == kEditSessionWatchdogTimer) {
+            if (service != nullptr) {
+                service->HandleEditSessionTimeout();
+            }
+            return 0;
+        }
         return DefWindowProcW(window, message, wparam, lparam);
     }
 
@@ -628,6 +669,13 @@ private:
         if (found != foreground_hooks_.end() &&
             found->second->pipe_wake_event_ != nullptr) {
             SetEvent(found->second->pipe_wake_event_);
+            if (found->second->dispatch_window_ != nullptr) {
+                PostMessageW(
+                    found->second->dispatch_window_,
+                    kForegroundChangedMessage,
+                    0,
+                    0);
+            }
         }
     }
 
@@ -714,10 +762,191 @@ private:
         return foreground_process == GetCurrentProcessId();
     }
 
+    ITfContext* GetFocusedContext() const noexcept {
+        if (thread_manager_ == nullptr) {
+            return nullptr;
+        }
+        ITfDocumentMgr* document_manager = nullptr;
+        ITfContext* context = nullptr;
+        HRESULT result = thread_manager_->GetFocus(&document_manager);
+        if (SUCCEEDED(result) && document_manager != nullptr) {
+            result = document_manager->GetTop(&context);
+        }
+        SafeRelease(document_manager);
+        if (FAILED(result)) {
+            SafeRelease(context);
+        }
+        return context;
+    }
+
+    static bool SameComIdentity(IUnknown* left, IUnknown* right) noexcept {
+        if (left == nullptr || right == nullptr) {
+            return left == right;
+        }
+        IUnknown* left_identity = nullptr;
+        IUnknown* right_identity = nullptr;
+        const HRESULT left_result = left->QueryInterface(
+            IID_IUnknown, reinterpret_cast<void**>(&left_identity));
+        const HRESULT right_result = right->QueryInterface(
+            IID_IUnknown, reinterpret_cast<void**>(&right_identity));
+        const bool same = SUCCEEDED(left_result) && SUCCEEDED(right_result) &&
+            left_identity == right_identity;
+        SafeRelease(left_identity);
+        SafeRelease(right_identity);
+        return same;
+    }
+
+    void DisarmEditSessionTimer() noexcept {
+        if (dispatch_window_ != nullptr) {
+            KillTimer(dispatch_window_, kEditSessionWatchdogTimer);
+        }
+    }
+
+    bool ArmEditSessionWatchdog(
+        std::uint64_t request_id,
+        const Frame& frame,
+        ITfContext* context) {
+        outstanding_frame_ = frame;
+        SafeRelease(outstanding_context_);
+        outstanding_context_ = context;
+        outstanding_context_->AddRef();
+        if (SetTimer(
+                dispatch_window_,
+                kEditSessionWatchdogTimer,
+                kEditSessionWatchdogTimeoutMs,
+                nullptr) != 0) {
+            return true;
+        }
+        edit_watchdog_.Complete(request_id);
+        outstanding_frame_.reset();
+        SafeRelease(outstanding_context_);
+        return false;
+    }
+
+    void SendEditSessionWatchdogEvent(const Frame& expired) {
+        if (!connected_.load()) {
+            return;
+        }
+        Frame event{};
+        event.header.magic = caps_writer::tsf::kMagic;
+        event.header.version = caps_writer::tsf::kVersion;
+        event.header.operation = static_cast<std::uint16_t>(
+            Operation::EditSessionWatchdog);
+        event.header.session_id = expired.header.session_id;
+        event.header.revision = expired.header.revision;
+        event.header.status = static_cast<std::uint32_t>(
+            Status::EditSessionTimeout);
+        {
+            std::scoped_lock lock(outgoing_mutex_);
+            if (outgoing_.size() >= kMaximumOutgoingFrames) {
+                outgoing_.pop_front();
+            }
+            outgoing_.push_back(event);
+        }
+    }
+
+    void RequestPipeRestart() noexcept {
+        restart_pipe_.store(true);
+        if (pipe_wake_event_ != nullptr) {
+            SetEvent(pipe_wake_event_);
+        }
+    }
+
+    void HandleEditSessionTimeout() {
+        const auto expired_id = edit_watchdog_.Expire();
+        if (!expired_id.has_value() || !outstanding_frame_.has_value()) {
+            return;
+        }
+        DisarmEditSessionTimer();
+        Frame expired = std::move(*outstanding_frame_);
+        outstanding_frame_.reset();
+        SafeRelease(quarantined_context_);
+        quarantined_context_ = outstanding_context_;
+        outstanding_context_ = nullptr;
+        edit_session_quarantined_ = true;
+        saw_background_since_timeout_ = false;
+        quarantine_retry_after_ = GetTickCount64() + kEditSessionRetryCooldownMs;
+
+        auto abandoned = edit_queue_.AbandonAndDrain();
+        SendAck(expired, Status::EditSessionTimeout);
+        for (const Frame& pending : abandoned) {
+            SendAck(pending, Status::EditSessionTimeout);
+        }
+        SendEditSessionWatchdogEvent(expired);
+        RequestPipeRestart();
+    }
+
+    void EnqueueRecoveryCancel() {
+        if (composition_ == nullptr || context_ == nullptr) {
+            return;
+        }
+        Frame cancel{};
+        cancel.header.magic = caps_writer::tsf::kMagic;
+        cancel.header.version = caps_writer::tsf::kVersion;
+        cancel.header.operation = static_cast<std::uint16_t>(Operation::Cancel);
+        cancel.header.session_id = active_session_;
+        cancel.header.revision = last_revision_ + 1;
+        edit_queue_.Push(std::move(cancel));
+    }
+
+    void RecoverEditSessionQueue() {
+        edit_session_quarantined_ = false;
+        saw_background_since_timeout_ = false;
+        quarantine_retry_after_ = 0;
+        SafeRelease(quarantined_context_);
+        EnqueueRecoveryCancel();
+    }
+
+    bool TryRecoverEditSessionQueue() {
+        if (!edit_session_quarantined_) {
+            return true;
+        }
+        ITfContext* focused = GetFocusedContext();
+        const bool context_changed = focused != nullptr &&
+            !SameComIdentity(focused, quarantined_context_);
+        SafeRelease(focused);
+        const bool cooldown_elapsed = GetTickCount64() >= quarantine_retry_after_;
+        if (!context_changed && !saw_background_since_timeout_ &&
+            !cooldown_elapsed) {
+            return false;
+        }
+        RecoverEditSessionQueue();
+        return true;
+    }
+
+    void HandleForegroundChanged() {
+        if (!edit_session_quarantined_) {
+            return;
+        }
+        if (!IsForegroundProcess()) {
+            saw_background_since_timeout_ = true;
+            return;
+        }
+        if (saw_background_since_timeout_) {
+            RecoverEditSessionQueue();
+            DispatchNextEdit();
+        }
+    }
+
+    void ResetEditSessionRecovery() noexcept {
+        DisarmEditSessionTimer();
+        edit_watchdog_.Reset();
+        outstanding_frame_.reset();
+        SafeRelease(outstanding_context_);
+        SafeRelease(quarantined_context_);
+        edit_session_quarantined_ = false;
+        saw_background_since_timeout_ = false;
+        quarantine_retry_after_ = 0;
+    }
+
     void QueueEdit(Frame frame) {
         const auto operation = static_cast<Operation>(frame.header.operation);
         if (operation == Operation::Ping) {
             SendAck(frame, Status::Applied);
+            return;
+        }
+        if (!TryRecoverEditSessionQueue()) {
+            SendAck(frame, Status::EditSessionTimeout);
             return;
         }
         if ((operation == Operation::Begin || operation == Operation::QueryContext) &&
@@ -744,13 +973,8 @@ private:
                 context->AddRef();
             } else if (operation == Operation::Begin ||
                        operation == Operation::QueryContext) {
-                ITfDocumentMgr* document_manager = nullptr;
-                HRESULT result = thread_manager_->GetFocus(&document_manager);
-                if (SUCCEEDED(result) && document_manager != nullptr) {
-                    result = document_manager->GetTop(&context);
-                    document_manager->Release();
-                }
-                if (FAILED(result) || context == nullptr) {
+                context = GetFocusedContext();
+                if (context == nullptr) {
                     SendAck(frame, Status::NoContext);
                     edit_queue_.Complete();
                     continue;
@@ -767,10 +991,19 @@ private:
             }
 
             Frame request_frame = frame;
+            const std::uint64_t request_id = edit_watchdog_.Begin();
             auto* edit_session = new (std::nothrow) EditSession(
-                this, context, std::move(frame));
+                this, context, std::move(frame), request_id);
             if (edit_session == nullptr) {
+                edit_watchdog_.Complete(request_id);
                 context->Release();
+                SendAck(request_frame, Status::EditSessionFailed);
+                edit_queue_.Complete();
+                continue;
+            }
+            if (!ArmEditSessionWatchdog(request_id, request_frame, context)) {
+                context->Release();
+                edit_session->Release();
                 SendAck(request_frame, Status::EditSessionFailed);
                 edit_queue_.Complete();
                 continue;
@@ -787,8 +1020,13 @@ private:
             context->Release();
             edit_session->Release();
             if (FAILED(request_result) || FAILED(session_result)) {
-                SendAck(request_frame, Status::EditSessionFailed);
-                edit_queue_.Complete();
+                if (edit_watchdog_.Complete(request_id)) {
+                    DisarmEditSessionTimer();
+                    outstanding_frame_.reset();
+                    SafeRelease(outstanding_context_);
+                    SendAck(request_frame, Status::EditSessionFailed);
+                    edit_queue_.Complete();
+                }
                 continue;
             }
             return;
@@ -1277,7 +1515,7 @@ private:
                         GetOverlappedResult(pipe, &overlapped, &read, FALSE);
                         return false;
                     }
-                    if (ShouldDisconnectPipe()) {
+                    if (restart_pipe_.exchange(false) || ShouldDisconnectPipe()) {
                         CancelIoEx(pipe, &overlapped);
                         WaitForSingleObject(read_event, INFINITE);
                         GetOverlappedResult(pipe, &overlapped, &read, FALSE);
@@ -1336,7 +1574,7 @@ private:
                 if (!FlushOutgoing(connected_pipe)) {
                     break;
                 }
-                if (ShouldDisconnectPipe()) {
+                if (restart_pipe_.exchange(false) || ShouldDisconnectPipe()) {
                     break;
                 }
                 auto frame = std::make_unique<Frame>();
@@ -1494,6 +1732,7 @@ private:
     std::thread pipe_thread_;
     std::atomic<bool> stop_pipe_{false};
     std::atomic<bool> connected_{false};
+    std::atomic<bool> restart_pipe_{false};
     HANDLE pipe_wake_event_ = nullptr;
     HWINEVENTHOOK foreground_hook_ = nullptr;
     std::mutex outgoing_mutex_;
@@ -1506,13 +1745,27 @@ private:
     std::array<std::uint8_t, 16> active_session_{};
     std::uint64_t last_revision_ = 0;
     caps_writer::tsf::EditSessionQueue edit_queue_;
+    caps_writer::tsf::EditSessionWatchdogState edit_watchdog_;
+    std::optional<Frame> outstanding_frame_;
+    ITfContext* outstanding_context_ = nullptr;
+    ITfContext* quarantined_context_ = nullptr;
+    bool edit_session_quarantined_ = false;
+    bool saw_background_since_timeout_ = false;
+    ULONGLONG quarantine_retry_after_ = 0;
     std::wstring original_selection_text_;
     TF_SELECTIONSTYLE original_selection_style_{};
 
 };
 
-EditSession::EditSession(TextService* service, ITfContext* context, Frame frame) noexcept
-    : service_(service), context_(context), frame_(std::move(frame)) {
+EditSession::EditSession(
+    TextService* service,
+    ITfContext* context,
+    Frame frame,
+    std::uint64_t request_id) noexcept
+    : service_(service),
+      context_(context),
+      frame_(std::move(frame)),
+      request_id_(request_id) {
     service_->AddRef();
     context_->AddRef();
 }
@@ -1546,8 +1799,9 @@ STDMETHODIMP_(ULONG) EditSession::Release() {
 }
 
 STDMETHODIMP EditSession::DoEditSession(TfEditCookie edit_cookie) {
-    const HRESULT result = service_->ApplyEdit(context_, frame_, edit_cookie);
-    service_->CompleteEditSession();
+    const HRESULT result = service_->ApplyEditIfCurrent(
+        context_, frame_, edit_cookie, request_id_);
+    service_->CompleteEditSession(request_id_);
     return result;
 }
 

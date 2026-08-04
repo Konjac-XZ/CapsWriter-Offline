@@ -6,8 +6,10 @@
 
 #include "edit_session_queue.h"
 #include "edit_session_policy.h"
+#include "edit_session_watchdog.h"
 
 using caps_writer::tsf::EditSessionQueue;
+using caps_writer::tsf::EditSessionWatchdogState;
 using caps_writer::tsf::Frame;
 using caps_writer::tsf::Operation;
 
@@ -134,6 +136,38 @@ void TestCancelAndBeginRemainOrderingBoundaries() {
     }
 }
 
+void TestWatchdogMakesLateCallbacksStale() {
+    EditSessionWatchdogState watchdog;
+    const std::uint64_t first = watchdog.Begin();
+    Check(watchdog.IsCurrent(first), "new edit request should be current");
+
+    const auto expired = watchdog.Expire();
+    Check(expired.has_value() && *expired == first, "wrong edit request expired");
+    Check(!watchdog.IsCurrent(first), "expired edit request remained current");
+    Check(!watchdog.Complete(first), "late callback completed a recovered request");
+
+    const std::uint64_t second = watchdog.Begin();
+    Check(second != first, "recovery reused an edit request generation");
+    Check(!watchdog.Complete(first), "late callback completed the next generation");
+    Check(watchdog.Complete(second), "current edit callback did not complete");
+}
+
+void TestAbandonDrainsPendingFrames() {
+    constexpr std::array<std::uint8_t, 16> session{1};
+    EditSessionQueue queue;
+    queue.Push(MakeFrame(Operation::Begin, session, 1));
+    queue.Push(MakeFrame(Operation::Cancel, session, 2));
+    Check(queue.StartNext().has_value(), "BEGIN should become outstanding");
+
+    auto abandoned = queue.AbandonAndDrain();
+    Check(!queue.outstanding(), "abandoned edit remained outstanding");
+    Check(abandoned.size() == 1, "pending recovery boundary was not drained");
+    Check(
+        abandoned.front().header.operation ==
+            static_cast<std::uint16_t>(Operation::Cancel),
+        "wrong pending frame was drained");
+}
+
 void TestCancellationEndsOnlyAfterTextAndSelectionRestore() {
     using caps_writer::tsf::CanEndCancellation;
 
@@ -154,6 +188,8 @@ int main() {
     TestCoalescesOnlyConsecutiveSameSessionRevisions();
     TestCommitIsAFenceForPendingRevision();
     TestCancelAndBeginRemainOrderingBoundaries();
+    TestWatchdogMakesLateCallbacksStale();
+    TestAbandonDrainsPendingFrames();
     TestCancellationEndsOnlyAfterTextAndSelectionRestore();
     return 0;
 }

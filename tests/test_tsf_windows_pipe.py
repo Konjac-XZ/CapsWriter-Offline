@@ -229,7 +229,14 @@ def test_request_times_out_when_connected_client_does_not_ack():
     asyncio.run(exercise())
 
 
-def test_unsolicited_composition_event_is_dispatched_on_event_loop():
+@pytest.mark.parametrize(
+    ("operation", "status"),
+    [
+        (Operation.COMPOSITION_TERMINATED, Status.APPLIED),
+        (Operation.EDIT_SESSION_WATCHDOG, Status.EDIT_SESSION_TIMEOUT),
+    ],
+)
+def test_unsolicited_tip_event_is_dispatched_on_event_loop(operation, status):
     async def exercise() -> None:
         broker = WindowsNamedPipeBroker("unused")
         broker._loop = asyncio.get_running_loop()
@@ -242,10 +249,10 @@ def test_unsolicited_composition_event_is_dispatched_on_event_loop():
 
         broker.set_event_handler(receive)
         frame = Frame(
-            Operation.COMPOSITION_TERMINATED,
+            operation,
             uuid.uuid4(),
             7,
-            status=Status.APPLIED,
+            status=status,
         )
         broker._dispatch_event(frame)
         await asyncio.wait_for(delivered.wait(), timeout=1.0)
