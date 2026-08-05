@@ -4,10 +4,20 @@ Handles dynamic loading and switching between transcription providers.
 """
 
 import os
-import yaml
+import tempfile
 from pathlib import Path
-from typing import Dict, Any, Optional, List
-from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+
+import yaml
+
+from src.provider.domain import (
+    InputMode,
+    ModeConfig,
+    ModelConfig,
+    ModelRef,
+    ProviderConfig,
+    ResolvedModel,
+)
 
 
 class PromptManager:
@@ -152,53 +162,43 @@ class PromptManager:
 prompt_manager = PromptManager()
 
 
-@dataclass
-class ProviderConfig:
-    """Configuration for a single transcription provider."""
-
-    name: str
-    type: str
-    description: str
-    settings: Dict[str, Any]
-    enabled: bool
-    hidden: bool = False
-
-
 class ProviderManager:
-    """Manages transcription provider configurations."""
+    """Load a provider/model catalog and persist the selected model separately."""
 
-    def __init__(self, config_dir: Optional[Path] = None):
+    def __init__(
+        self,
+        config_dir: Optional[Path] = None,
+        state_path: Optional[Path] = None,
+    ):
         # src/provider/ → src/ → project root → config/providers/
         self.config_dir = (
             config_dir or Path(__file__).parent.parent.parent / "config" / "providers"
         )
+        self.state_path = state_path or self.config_dir.parent / "transcription_state.yaml"
         self.providers: Dict[str, ProviderConfig] = {}
         self.active_provider: Optional[str] = None
+        self.active_model: Optional[ModelRef] = None
+        self._mode_preferences: dict[str, InputMode] = {}
         self.load_providers()
 
     def load_providers(self) -> None:
-        """Load all provider configurations from YAML files."""
+        """Load versioned providers without rewriting legacy files."""
         if not self.config_dir.exists():
-            self.config_dir.mkdir(parents=True, exist_ok=True)
+            self.providers.clear()
+            self.active_provider = None
+            self.active_model = None
             return
 
         self.providers.clear()
-        enabled_providers = []
+        enabled_providers: list[tuple[str, float]] = []
 
         for yaml_file in sorted(self.config_dir.glob("*.yaml")):
             try:
                 with open(yaml_file, "r", encoding="utf-8") as f:
-                    data = yaml.safe_load(f)
+                    data = yaml.safe_load(f) or {}
 
                 provider_id = yaml_file.stem
-                provider = ProviderConfig(
-                    name=data["name"],
-                    type=data["type"],
-                    description=data["description"],
-                    settings=data["settings"],
-                    enabled=data.get("enabled", False),
-                    hidden=data.get("hidden", False),
-                )
+                provider = self._parse_provider(provider_id, data)
 
                 self.providers[provider_id] = provider
 
@@ -209,24 +209,247 @@ class ProviderManager:
             except Exception as e:
                 print(f"Error loading provider config {yaml_file}: {e}")
 
-        # Set active provider: prefer the most recently modified if multiple are enabled
-        if enabled_providers:
-            # Sort by modification time, take the most recent
-            enabled_providers.sort(key=lambda x: x[1], reverse=True)
-            self.active_provider = enabled_providers[0][0]
+        enabled_providers.sort(key=lambda item: item[1], reverse=True)
+        self._load_state()
+        if self.active_model not in set(self.iter_model_refs(include_hidden=True)):
+            self.active_model = self._legacy_or_first_model(enabled_providers)
+        self.active_provider = (
+            self.active_model.provider_id if self.active_model is not None else None
+        )
+        for provider_id, provider in self.providers.items():
+            provider.enabled = provider_id == self.active_provider
 
-            # If multiple providers are enabled (shouldn't happen), fix it
-            if len(enabled_providers) > 1:
-                print(
-                    f"Warning: Multiple providers enabled, selecting {self.active_provider}"
+    def _parse_provider(self, provider_id: str, data: dict[str, Any]) -> ProviderConfig:
+        settings = dict(data.get("settings") or {})
+        raw_models = data.get("models")
+        legacy = not isinstance(raw_models, dict) or not raw_models
+        models = (
+            self._parse_legacy_model(settings)
+            if legacy
+            else self._parse_models(raw_models)
+        )
+        if not models:
+            raise ValueError("provider must declare at least one model")
+        return ProviderConfig(
+            id=provider_id,
+            name=str(data["name"]),
+            type=str(data["type"]).strip().lower(),
+            description=str(data.get("description") or ""),
+            settings=settings,
+            models=models,
+            enabled=bool(data.get("enabled", False)),
+            hidden=bool(data.get("hidden", False)),
+            schema_version=int(data.get("schema_version", 1 if legacy else 2)),
+            legacy=legacy,
+        )
+
+    def _parse_models(self, raw_models: dict[str, Any]) -> dict[str, ModelConfig]:
+        models: dict[str, ModelConfig] = {}
+        for model_id, raw in raw_models.items():
+            if not isinstance(raw, dict):
+                raise ValueError(f"model {model_id!r} must be a mapping")
+            model_settings = dict(raw.get("settings") or {})
+            upstream = str(
+                raw.get("upstream_model") or model_settings.get("model") or model_id
+            ).strip()
+            raw_modes = raw.get("modes") or {InputMode.FILE_UPLOAD.value: {}}
+            modes: dict[InputMode, ModeConfig] = {}
+            if isinstance(raw_modes, list):
+                raw_modes = {str(mode): {} for mode in raw_modes}
+            if not isinstance(raw_modes, dict):
+                raise ValueError(f"model {model_id!r} modes must be a mapping or list")
+            for mode_name, mode_data in raw_modes.items():
+                mode = InputMode(str(mode_name))
+                if mode_data is None:
+                    mode_data = {}
+                if not isinstance(mode_data, dict):
+                    raise ValueError(f"model {model_id!r} mode {mode.value} is invalid")
+                mode_settings = dict(mode_data.get("settings") or mode_data)
+                modes[mode] = ModeConfig(mode_settings)
+            models[str(model_id)] = ModelConfig(
+                id=str(model_id),
+                name=str(raw.get("name") or upstream),
+                upstream_model=upstream,
+                settings=model_settings,
+                modes=modes,
+                incremental_output=bool(raw.get("incremental_output", False)),
+                default_mode=InputMode(
+                    str(raw.get("default_mode", InputMode.FILE_UPLOAD.value))
+                ),
+            )
+        return models
+
+    def _parse_legacy_model(self, settings: dict[str, Any]) -> dict[str, ModelConfig]:
+        upstream = str(settings.get("model") or "default")
+        modes: dict[InputMode, ModeConfig] = {
+            InputMode.FILE_UPLOAD: ModeConfig({"model": upstream})
+        }
+        if "realtime" in settings:
+            live_model = str(settings.get("realtime_model") or upstream)
+            modes[InputMode.LIVE_AUDIO] = ModeConfig({"model": live_model})
+        return {
+            "default": ModelConfig(
+                id="default",
+                name=upstream,
+                upstream_model=upstream,
+                settings={},
+                modes=modes,
+                incremental_output=bool(settings.get("stream", False)),
+                default_mode=(
+                    InputMode.LIVE_AUDIO
+                    if bool(settings.get("realtime", False))
+                    else InputMode.FILE_UPLOAD
+                ),
+            )
+        }
+
+    def _load_state(self) -> None:
+        self.active_model = None
+        self._mode_preferences.clear()
+        if not self.state_path.exists():
+            return
+        try:
+            data = yaml.safe_load(self.state_path.read_text(encoding="utf-8")) or {}
+            active = data.get("active_model") or {}
+            if isinstance(active, dict) and active.get("provider_id") and active.get(
+                "model_id"
+            ):
+                self.active_model = ModelRef(
+                    str(active["provider_id"]), str(active["model_id"])
                 )
-                # Disable all others and save the corrected state
-                for pid, p in self.providers.items():
-                    p.enabled = pid == self.active_provider
-                self.save_provider_states()
+            for key, value in (data.get("model_modes") or {}).items():
+                self._mode_preferences[str(key)] = InputMode(str(value))
+        except Exception as exc:
+            print(f"Error loading transcription state {self.state_path}: {exc}")
 
-            # Initialize environment variables for the active provider
-            self._set_environment_for_active_provider()
+    def _legacy_or_first_model(
+        self, enabled_providers: list[tuple[str, float]]
+    ) -> Optional[ModelRef]:
+        for provider_id, _mtime in enabled_providers:
+            provider = self.providers.get(provider_id)
+            if provider and provider.models:
+                return ModelRef(provider_id, next(iter(provider.models)))
+        return next(self.iter_model_refs(), None)
+
+    def iter_model_refs(self, include_hidden: bool = False):
+        for provider_id, provider in self.providers.items():
+            if provider.hidden and not include_hidden:
+                continue
+            for model_id in provider.models:
+                yield ModelRef(provider_id, model_id)
+
+    def list_models(self, include_hidden: bool = False) -> List[Dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        for ref in self.iter_model_refs(include_hidden=include_hidden):
+            provider = self.providers[ref.provider_id]
+            model = provider.models[ref.model_id]
+            result.append(
+                {
+                    "ref": ref,
+                    "provider_id": ref.provider_id,
+                    "model_id": ref.model_id,
+                    "provider_name": provider.name,
+                    "name": model.name,
+                    "label": f"{model.name} · {provider.name}",
+                    "input_modes": model.input_modes,
+                    "incremental_output": model.incremental_output,
+                    "active": ref == self.active_model,
+                }
+            )
+        return result
+
+    def get_model(self, ref: ModelRef) -> Optional[ModelConfig]:
+        provider = self.providers.get(ref.provider_id)
+        return provider.models.get(ref.model_id) if provider else None
+
+    def get_active_model_ref(self) -> Optional[ModelRef]:
+        return self.active_model
+
+    def get_model_mode(self, ref: ModelRef) -> InputMode:
+        model = self.get_model(ref)
+        if model is None:
+            raise KeyError(ref.key)
+        preferred = self._mode_preferences.get(ref.key)
+        if preferred in model.input_modes:
+            return preferred
+        if model.default_mode in model.input_modes:
+            return model.default_mode
+        if InputMode.FILE_UPLOAD in model.input_modes:
+            return InputMode.FILE_UPLOAD
+        return next(iter(model.input_modes))
+
+    def resolve_model(
+        self, ref: Optional[ModelRef] = None, mode: Optional[InputMode] = None
+    ) -> ResolvedModel:
+        ref = ref or self.active_model
+        if ref is None:
+            raise RuntimeError("No transcription model is configured")
+        provider = self.providers.get(ref.provider_id)
+        model = self.get_model(ref)
+        if provider is None or model is None:
+            raise KeyError(f"Unknown transcription model: {ref.key}")
+        from src.transcribe.providers import make_provider
+
+        adapter = make_provider(provider.type)
+        unsupported = model.input_modes - adapter.supported_input_modes()
+        if unsupported:
+            names = ", ".join(sorted(item.value for item in unsupported))
+            raise ValueError(
+                f"Model {ref.key} declares modes unsupported by {provider.type}: {names}"
+            )
+        return ResolvedModel.create(provider, model, mode or self.get_model_mode(ref))
+
+    def get_active_model(self) -> Optional[ResolvedModel]:
+        try:
+            return self.resolve_model()
+        except (KeyError, RuntimeError, ValueError):
+            return None
+
+    def set_active_model(self, ref: ModelRef) -> bool:
+        if self.get_model(ref) is None:
+            return False
+        self.active_model = ref
+        self.active_provider = ref.provider_id
+        for provider_id, provider in self.providers.items():
+            provider.enabled = provider_id == ref.provider_id
+        return self._save_state()
+
+    def set_model_mode(self, ref: ModelRef, mode: InputMode) -> bool:
+        model = self.get_model(ref)
+        if model is None or mode not in model.input_modes:
+            return False
+        self._mode_preferences[ref.key] = mode
+        return self._save_state()
+
+    def _save_state(self) -> bool:
+        if self.active_model is None:
+            return False
+        data = {
+            "schema_version": 1,
+            "active_model": {
+                "provider_id": self.active_model.provider_id,
+                "model_id": self.active_model.model_id,
+            },
+            "model_modes": {
+                key: mode.value for key, mode in sorted(self._mode_preferences.items())
+            },
+        }
+        try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            self._atomic_dump(self.state_path, data)
+            return True
+        except Exception as exc:
+            print(f"Error saving transcription state {self.state_path}: {exc}")
+            return False
+
+    @staticmethod
+    def _atomic_dump(path: Path, data: dict[str, Any]) -> None:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=path.parent, delete=False, suffix=".tmp"
+        ) as handle:
+            yaml.safe_dump(data, handle, allow_unicode=True, sort_keys=False)
+            temporary = Path(handle.name)
+        os.replace(temporary, path)
 
     def _set_environment_for_active_provider(self) -> None:
         """Set environment variables for the currently active provider."""
@@ -251,52 +474,27 @@ class ProviderManager:
         return None
 
     def get_active_provider_type(self) -> Optional[str]:
-        p = self.get_active_provider()
-        return p.type if p else None
+        model = self.get_active_model()
+        return model.adapter_type if model else None
 
     def get_active_settings(self) -> Dict[str, Any]:
-        p = self.get_active_provider()
-        return dict(p.settings) if p and p.settings else {}
+        model = self.get_active_model()
+        return dict(model.settings) if model else {}
 
     def set_active_provider(self, provider_id: str) -> bool:
-        """Set the active provider and update environment variables."""
-        if provider_id not in self.providers:
+        """Compatibility facade selecting the provider's first model."""
+        provider = self.providers.get(provider_id)
+        if provider is None or not provider.models:
             return False
-
-        # We no longer export settings to env; only track active id internally
-
-        # Handlers will read settings from ProviderManager instead.
-
-        # Update enabled status in configs
-        for pid, p in self.providers.items():
-            p.enabled = pid == provider_id
-
-        self.active_provider = provider_id
-        self.save_provider_states()
-        return True
+        return self.set_active_model(ModelRef(provider_id, next(iter(provider.models))))
 
     def clear_env_settings(self) -> None:
         """No-op in YAML-first mode; kept for backward compatibility."""
         return
 
     def save_provider_states(self) -> None:
-        """Save current enabled states back to YAML files."""
-        for provider_id, provider in self.providers.items():
-            yaml_file = self.config_dir / f"{provider_id}.yaml"
-            if yaml_file.exists():
-                try:
-                    with open(yaml_file, "r", encoding="utf-8") as f:
-                        data = yaml.safe_load(f)
-
-                    data["enabled"] = provider.enabled
-
-                    with open(yaml_file, "w", encoding="utf-8") as f:
-                        yaml.safe_dump(
-                            data, f, default_flow_style=False, allow_unicode=True
-                        )
-
-                except Exception as e:
-                    print(f"Error saving provider state {yaml_file}: {e}")
+        """Compatibility facade; active selection now lives in the state file."""
+        self._save_state()
 
     def list_providers(self, include_hidden: bool = False) -> List[Dict[str, Any]]:
         """List selectable providers, optionally including hidden configurations."""
@@ -308,6 +506,7 @@ class ProviderManager:
                 "description": provider.description,
                 "enabled": provider.enabled,
                 "hidden": provider.hidden,
+                "models": len(provider.models),
             }
             for provider_id, provider in self.providers.items()
             if include_hidden or not provider.hidden
@@ -414,38 +613,11 @@ class ProviderManager:
         return False
 
     def update_provider_model(self, provider_id: str, model: str) -> bool:
-        """Update model setting for a provider and save to file."""
-        if provider_id not in self.providers:
+        """Legacy-only compatibility; v2 model catalogs are declarative."""
+        provider = self.providers.get(provider_id)
+        if provider is None or not provider.legacy:
             return False
-
-        provider = self.providers[provider_id]
-        provider.settings["model"] = model
-
-        # If this is the active provider, update environment
-        if provider.enabled:
-            os.environ["TRANSCRIBE_MODEL"] = model
-
-        # Save to YAML file
-        yaml_file = self.config_dir / f"{provider_id}.yaml"
-        if yaml_file.exists():
-            try:
-                with open(yaml_file, "r", encoding="utf-8") as f:
-                    data = yaml.safe_load(f)
-
-                data["settings"]["model"] = model
-
-                with open(yaml_file, "w", encoding="utf-8") as f:
-                    yaml.safe_dump(
-                        data, f, default_flow_style=False, allow_unicode=True
-                    )
-
-                return True
-
-            except Exception as e:
-                print(f"Error updating provider model {yaml_file}: {e}")
-                return False
-
-        return False
+        return self.update_provider_setting(provider_id, "model", model)
 
     def update_provider_setting(self, provider_id: str, key: str, value: Any) -> bool:
         """Update one provider setting and persist it to the provider YAML."""

@@ -7,7 +7,11 @@ from __future__ import annotations
 
 import os
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Iterable, Optional
+
+from src.provider.domain import ResolvedModel
 
 try:
     from src.provider.provider_config import provider_manager
@@ -15,7 +19,29 @@ except Exception:  # pragma: no cover
     provider_manager = None  # type: ignore
 
 
+_resolved_model: ContextVar[ResolvedModel | None] = ContextVar(
+    "resolved_transcription_model", default=None
+)
+
+
+@contextmanager
+def use_resolved_model(model: ResolvedModel):
+    """Bind immutable request settings while a provider adapter is executing."""
+    token = _resolved_model.set(model)
+    try:
+        yield
+    finally:
+        _resolved_model.reset(token)
+
+
+def get_resolved_model() -> ResolvedModel | None:
+    return _resolved_model.get()
+
+
 def _active_settings() -> dict[str, Any]:
+    resolved = _resolved_model.get()
+    if resolved is not None:
+        return dict(resolved.settings)
     if provider_manager is None:  # pragma: no cover
         return {}
     try:
