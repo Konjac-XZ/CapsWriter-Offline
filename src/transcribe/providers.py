@@ -69,7 +69,9 @@ class TranscriptionProvider(ABC):
                 f"not {self.name()!r}"
             )
         if InputMode.FILE_UPLOAD not in request.model.input_modes:
-            raise ValueError(f"Model {request.model.ref.key} does not support file upload")
+            raise ValueError(
+                f"Model {request.model.ref.key} does not support file upload"
+            )
         with use_resolved_model(request.model):
             raw = await self._transcribe_request_tuple(request)
         text, status, submitted, completed, metadata = raw

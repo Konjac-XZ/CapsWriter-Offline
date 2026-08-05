@@ -5,6 +5,7 @@ Handles dynamic loading and switching between transcription providers.
 
 import os
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -174,7 +175,9 @@ class ProviderManager:
         self.config_dir = (
             config_dir or Path(__file__).parent.parent.parent / "config" / "providers"
         )
-        self.state_path = state_path or self.config_dir.parent / "transcription_state.yaml"
+        self.state_path = (
+            state_path or self.config_dir.parent / "transcription_state.yaml"
+        )
         self.providers: Dict[str, ProviderConfig] = {}
         self.active_provider: Optional[str] = None
         self.active_model: Optional[ModelRef] = None
@@ -211,7 +214,7 @@ class ProviderManager:
 
         enabled_providers.sort(key=lambda item: item[1], reverse=True)
         self._load_state()
-        if self.active_model not in set(self.iter_model_refs(include_hidden=True)):
+        if self.active_model not in set(self.iter_model_refs()):
             self.active_model = self._legacy_or_first_model(enabled_providers)
         self.active_provider = (
             self.active_model.provider_id if self.active_model is not None else None
@@ -282,11 +285,13 @@ class ProviderManager:
     def _parse_legacy_model(self, settings: dict[str, Any]) -> dict[str, ModelConfig]:
         upstream = str(settings.get("model") or "default")
         modes: dict[InputMode, ModeConfig] = {
-            InputMode.FILE_UPLOAD: ModeConfig({"model": upstream})
+            InputMode.FILE_UPLOAD: ModeConfig({"model": upstream, "realtime": False})
         }
         if "realtime" in settings:
             live_model = str(settings.get("realtime_model") or upstream)
-            modes[InputMode.LIVE_AUDIO] = ModeConfig({"model": live_model})
+            modes[InputMode.LIVE_AUDIO] = ModeConfig(
+                {"model": live_model, "realtime": True}
+            )
         return {
             "default": ModelConfig(
                 id="default",
@@ -311,8 +316,10 @@ class ProviderManager:
         try:
             data = yaml.safe_load(self.state_path.read_text(encoding="utf-8")) or {}
             active = data.get("active_model") or {}
-            if isinstance(active, dict) and active.get("provider_id") and active.get(
-                "model_id"
+            if (
+                isinstance(active, dict)
+                and active.get("provider_id")
+                and active.get("model_id")
             ):
                 self.active_model = ModelRef(
                     str(active["provider_id"]), str(active["model_id"])
@@ -327,7 +334,7 @@ class ProviderManager:
     ) -> Optional[ModelRef]:
         for provider_id, _mtime in enabled_providers:
             provider = self.providers.get(provider_id)
-            if provider and provider.models:
+            if provider and not provider.hidden and provider.models:
                 return ModelRef(provider_id, next(iter(provider.models)))
         return next(self.iter_model_refs(), None)
 
@@ -397,7 +404,12 @@ class ProviderManager:
             raise ValueError(
                 f"Model {ref.key} declares modes unsupported by {provider.type}: {names}"
             )
-        return ResolvedModel.create(provider, model, mode or self.get_model_mode(ref))
+        resolved = ResolvedModel.create(
+            provider, model, mode or self.get_model_mode(ref)
+        )
+        if resolved.adapter_type != adapter.name():
+            resolved = replace(resolved, adapter_type=adapter.name())
+        return resolved
 
     def get_active_model(self) -> Optional[ResolvedModel]:
         try:
@@ -408,18 +420,37 @@ class ProviderManager:
     def set_active_model(self, ref: ModelRef) -> bool:
         if self.get_model(ref) is None:
             return False
+        previous_model = self.active_model
+        previous_provider = self.active_provider
+        previous_enabled = {
+            provider_id: provider.enabled
+            for provider_id, provider in self.providers.items()
+        }
         self.active_model = ref
         self.active_provider = ref.provider_id
         for provider_id, provider in self.providers.items():
             provider.enabled = provider_id == ref.provider_id
-        return self._save_state()
+        if self._save_state():
+            return True
+        self.active_model = previous_model
+        self.active_provider = previous_provider
+        for provider_id, enabled in previous_enabled.items():
+            self.providers[provider_id].enabled = enabled
+        return False
 
     def set_model_mode(self, ref: ModelRef, mode: InputMode) -> bool:
         model = self.get_model(ref)
         if model is None or mode not in model.input_modes:
             return False
+        previous = self._mode_preferences.get(ref.key)
         self._mode_preferences[ref.key] = mode
-        return self._save_state()
+        if self._save_state():
+            return True
+        if previous is None:
+            self._mode_preferences.pop(ref.key, None)
+        else:
+            self._mode_preferences[ref.key] = previous
+        return False
 
     def _save_state(self) -> bool:
         if self.active_model is None:

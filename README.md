@@ -102,6 +102,10 @@ Launcher behavior: before starting, it terminates any existing running `start_cl
 ## Configuration
 
 - Providers: Edit YAML files in `config/providers/`
+- Provider YAML can declare multiple transcription models. The main GUI selects a
+  unique `model · provider` pair and derives the live-audio switch from that
+  model's capabilities. See [provider/model configuration](docs/provider-model-config.md)
+  for schema-v2 examples and the legacy migration command.
 - Gemini: Fill `config/providers/gemini.yaml` (or set `GEMINI_API_KEY`/`GOOGLE_API_KEY`) and enable the provider before use
 - Qwen Audio Legacy: The `qwen-audio-legacy` realtime path uses the official `OmniRealtimeConversation` SDK for `qwen3-asr-flash-realtime`; disabling `流式音频` keeps its existing official-SDK final-file path. Set `workspace_id` and clear an explicit `realtime_url` to use the region-specific workspace endpoint automatically.
 - Qwen Audio 3.0 ASR: Set `DASHSCOPE_API_KEY`, then select `阿里百炼 (qwen-audio)` in the GUI. The provider uses the official `Recognition` SDK with `qwen-audio-3.0-asr-flash-streaming` by default and falls back to final-file HTTP transcription when streaming fails. The GUI `流式音频` switch controls this behavior. Optionally fill `workspace_id` in `config/providers/qwen_audio_3.yaml` to use the dedicated Beijing or Singapore workspace endpoint.

@@ -2,11 +2,13 @@ import asyncio
 import io
 import time
 from types import SimpleNamespace
+from typing import cast
 
 from src.audio import send_audio
 from src.polish import llm_polish
 from src.polish import context_providers
 from src.polish.textbox_context import TextBoxContext
+from src.provider.domain import InputMode, ModelRef, ResolvedModel
 from src.transcribe.qwen_audio import qwen_audio_transcribe_http as qwen_audio
 
 
@@ -234,7 +236,6 @@ def test_asr_history_records_even_when_polish_history_is_disabled(monkeypatch):
 
 
 def test_asr_context_timeout_does_not_cancel_shared_capture(monkeypatch):
-    monkeypatch.setattr(send_audio, "_is_qwen_audio_provider", lambda: True)
     monkeypatch.setattr(qwen_audio, "should_use_asr_context", lambda: True)
     monkeypatch.setattr(
         qwen_audio,
@@ -248,7 +249,10 @@ def test_asr_context_timeout_does_not_cancel_shared_capture(monkeypatch):
             return "context"
 
         task = asyncio.create_task(slow_capture())
-        context, timed_out = await send_audio._await_qwen_asr_context(task)
+        context, timed_out = await send_audio._await_qwen_asr_context(
+            task,
+            cast(ResolvedModel, SimpleNamespace(adapter_type="qwen-audio")),
+        )
         assert context is None
         assert timed_out is True
         assert task.cancelled() is False
@@ -265,14 +269,12 @@ def test_submit_payload_passes_shared_context_to_qwen(monkeypatch):
     marker = object()
     received = {}
 
-    monkeypatch.setattr(send_audio, "_is_qwen_audio_provider", lambda: True)
     monkeypatch.setattr(
         send_audio,
         "_await_qwen_asr_context",
-        lambda task: _resolved_context(task, marker),
+        lambda task, _model: _resolved_context(task, marker),
     )
     monkeypatch.setattr(send_audio, "should_polish_text", lambda text: False)
-    monkeypatch.setattr(send_audio, "get_incremental_results_flag", lambda: False)
 
     async def fake_transcribe_audio(*args, **kwargs):
         received["context"] = kwargs.get("request_context")
@@ -300,6 +302,16 @@ def test_submit_payload_passes_shared_context_to_qwen(monkeypatch):
             source="test",
             cache_retry_audio=False,
             polish_prefetch_task=context_task,
+            resolved_model=cast(
+                ResolvedModel,
+                SimpleNamespace(
+                    adapter_type="qwen-audio",
+                    input_mode=InputMode.FILE_UPLOAD,
+                    input_modes={InputMode.FILE_UPLOAD},
+                    ref=ModelRef("qwen", "flash"),
+                    incremental_output=False,
+                ),
+            ),
         )
         message = await send_audio.Cosmic.queue_out.get()
         return submitted, message

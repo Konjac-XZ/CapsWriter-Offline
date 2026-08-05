@@ -6,7 +6,7 @@ import argparse
 import os
 import shutil
 import tempfile
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -30,9 +30,7 @@ def migrate_provider_data(data: dict[str, Any]) -> dict[str, Any]:
         "file_upload": {"settings": {"model": upstream_model, "realtime": False}}
     }
     if realtime_present:
-        modes["live_audio"] = {
-            "settings": {"model": realtime_model, "realtime": True}
-        }
+        modes["live_audio"] = {"settings": {"model": realtime_model, "realtime": True}}
 
     migrated["schema_version"] = 2
     migrated["settings"] = shared
@@ -59,11 +57,11 @@ def _atomic_write(path: Path, data: dict[str, Any]) -> None:
 
 def migrate_directory(config_dir: Path, *, write: bool = False) -> list[Path]:
     changed: list[Path] = []
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     for path in sorted(config_dir.glob("*.yaml")):
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         if not isinstance(raw, dict):
-            raise ValueError(f"Provider config is not a mapping: {path}")
+            raise TypeError(f"Provider config is not a mapping: {path}")
         migrated = migrate_provider_data(raw)
         if migrated == raw:
             continue
@@ -92,7 +90,9 @@ def main() -> int:
     action = "Migrated" if args.write else "Would migrate"
     for path in changed:
         print(f"{action}: {path}")
-    print(f"{len(changed)} provider file(s) {'changed' if args.write else 'need migration'}")
+    print(
+        f"{len(changed)} provider file(s) {'changed' if args.write else 'need migration'}"
+    )
     return 0
 
 

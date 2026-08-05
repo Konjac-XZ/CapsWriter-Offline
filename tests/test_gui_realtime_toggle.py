@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from typing import cast
 
-from PySide6.QtWidgets import QApplication, QCheckBox
+from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox
 
 from src.provider.domain import InputMode, ModelRef
 from start_client_gui import GUI
@@ -88,3 +88,33 @@ def test_realtime_toggle_persists_mode_for_selected_model():
     assert manager.updates == [(ref, InputMode.LIVE_AUDIO)]
     assert messages == [("语音识别已切换为流式音频模式",)]
     assert restarts == [True]
+
+
+def test_model_combo_keeps_duplicate_names_as_distinct_provider_refs():
+    app = QApplication.instance() or QApplication([])
+    alpha = ModelRef("alpha", "shared")
+    beta = ModelRef("beta", "shared")
+    manager = SimpleNamespace(
+        list_models=lambda: [
+            {"ref": alpha, "label": "Shared ASR · Alpha"},
+            {"ref": beta, "label": "Shared ASR · Beta"},
+        ],
+        get_active_model_ref=lambda: beta,
+    )
+    combo = QComboBox()
+    messages = []
+    owner = SimpleNamespace(
+        provider_manager=manager,
+        model_combo=combo,
+        log_message=lambda message: messages.append(message),
+    )
+
+    GUI.populate_model_combo(cast(GUI, owner))
+
+    assert combo.count() == 2
+    assert combo.itemData(0) == alpha
+    assert combo.itemData(1) == beta
+    assert combo.currentData() == beta
+    assert messages == ["转录模型选择器已准备就绪，共 2 个选项"]
+    combo.deleteLater()
+    app.processEvents()

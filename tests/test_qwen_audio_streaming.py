@@ -475,7 +475,7 @@ def test_sdk_stop_timeout_returns_empty_result_for_http_fallback(monkeypatch):
 
 def test_empty_streaming_result_continues_to_http_upload(monkeypatch):
     from src.audio import send_audio as send_audio_module
-    from src.provider.domain import InputMode
+    from src.provider.domain import InputMode, ModelRef
 
     class EmptyStreamingSession:
         async def finish(self):
@@ -492,7 +492,13 @@ def test_empty_streaming_result_continues_to_http_upload(monkeypatch):
             now,
             None,
             EmptyStreamingSession(),
-            SimpleNamespace(input_modes={InputMode.FILE_UPLOAD}),
+            SimpleNamespace(
+                ref=ModelRef("qwen", "flash"),
+                input_modes={InputMode.FILE_UPLOAD},
+                upstream_model="qwen-flash",
+                input_mode=InputMode.LIVE_AUDIO,
+                settings={},
+            ),
         )
 
     async def fake_prefetch():

@@ -327,9 +327,7 @@ def _create_streaming_session(
         return None
     provider = make_provider(resolved_model.adapter_type)
     if InputMode.LIVE_AUDIO not in provider.supported_input_modes():
-        raise ValueError(
-            f"适配器 {provider.name()} 不支持模型声明的实时音频模式"
-        )
+        raise ValueError(f"适配器 {provider.name()} 不支持模型声明的实时音频模式")
     try:
         from src.transcribe.qwen_audio_legacy.settings import (
             should_show_realtime_logs,

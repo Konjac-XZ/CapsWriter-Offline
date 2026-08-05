@@ -115,6 +115,51 @@ def test_model_mode_preferences_are_persisted_per_composite_ref(tmp_path):
     assert reloaded.get_model_mode(second) is InputMode.LIVE_AUDIO
 
 
+def test_hidden_or_removed_state_selection_falls_back_to_visible_model(tmp_path):
+    config_dir = tmp_path / "providers"
+    config_dir.mkdir()
+    model = {"default": {"upstream_model": "model", "modes": ["file_upload"]}}
+    hidden = _v2_provider("Hidden", "openai", model)
+    hidden["hidden"] = True
+    _write_provider(config_dir / "hidden.yaml", hidden)
+    _write_provider(
+        config_dir / "visible.yaml", _v2_provider("Visible", "openai", model)
+    )
+    state_path = tmp_path / "state.yaml"
+    state_path.write_text(
+        yaml.safe_dump(
+            {"active_model": {"provider_id": "hidden", "model_id": "default"}}
+        ),
+        encoding="utf-8",
+    )
+
+    manager = ProviderManager(config_dir, state_path=state_path)
+
+    assert manager.get_active_model_ref() == ModelRef("visible", "default")
+
+
+def test_failed_state_write_rolls_back_in_memory_selection(tmp_path, monkeypatch):
+    config_dir = tmp_path / "providers"
+    config_dir.mkdir()
+    _write_provider(
+        config_dir / "openai.yaml",
+        _v2_provider(
+            "OpenAI",
+            "openai",
+            {
+                "one": {"upstream_model": "one", "modes": ["file_upload"]},
+                "two": {"upstream_model": "two", "modes": ["file_upload"]},
+            },
+        ),
+    )
+    manager = ProviderManager(config_dir, state_path=tmp_path / "state.yaml")
+    original = manager.get_active_model_ref()
+    monkeypatch.setattr(manager, "_save_state", lambda: False)
+
+    assert manager.set_active_model(ModelRef("openai", "two")) is False
+    assert manager.get_active_model_ref() == original
+
+
 def test_legacy_stream_and_realtime_are_independent_capabilities(tmp_path):
     config_dir = tmp_path / "providers"
     config_dir.mkdir()
@@ -171,8 +216,9 @@ def test_migration_dry_run_backup_write_and_idempotence(tmp_path):
     migrated = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert migrated["schema_version"] == 2
     assert migrated["models"]["default"]["default_mode"] == "live_audio"
-    assert migrated["models"]["default"]["modes"]["live_audio"]["settings"][
-        "model"
-    ] == "live-model"
+    assert (
+        migrated["models"]["default"]["modes"]["live_audio"]["settings"]["model"]
+        == "live-model"
+    )
     assert migrate_directory(config_dir, write=True) == []
     assert migrate_provider_data(migrated) == migrated
