@@ -1,9 +1,11 @@
 import asyncio
 import base64
 import json
+from typing import Any, cast
 
 import httpx
 
+from src.infra.cosmic import Cosmic
 from src.transcribe.providers import XiaomiProvider, make_provider
 from src.transcribe.xiaomi import xiaomi_transcribe_http as xiaomi
 
@@ -200,3 +202,20 @@ def test_stream_transcribe_joins_deltas_and_emits_cumulative_text(monkeypatch):
     assert t_submit == 10.0
     assert t_complete == 10.3
     assert emitted == ["hello", "hello world"]
+
+
+def test_xiaomi_cumulative_delta_is_marked_as_full_text_revision():
+    messages = []
+
+    class Queue:
+        async def put(self, message):
+            messages.append(message)
+
+    original_queue = Cosmic.queue_out
+    Cosmic.queue_out = cast(Any, Queue())
+    try:
+        asyncio.run(xiaomi._emit_transcript_delta("task-1", "累计全文", 1.0, 2.0, 3.0))
+    finally:
+        Cosmic.queue_out = original_queue
+
+    assert messages[0]["transcript_revision_mode"] == "full_text"

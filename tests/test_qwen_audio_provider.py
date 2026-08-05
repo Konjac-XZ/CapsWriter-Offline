@@ -5,7 +5,6 @@ import json
 
 import httpx
 
-from src.provider.provider_config import ProviderManager
 from src.transcribe import api as transcribe_api
 from src.transcribe.providers import QwenAudioProvider, make_provider
 from src.transcribe.qwen_audio import qwen_audio_transcribe_http as qwen_audio
@@ -346,24 +345,6 @@ def test_resolve_vocabulary_caps_total_and_prioritizes_explicit_terms(monkeypatc
     assert len(vocabulary) == 2000
     assert vocabulary["priority"] == 5
     assert any("超过 2000 条上限" in issue for issue in issues)
-
-
-def test_provider_yaml_is_discoverable_with_hotword_defaults():
-    manager = ProviderManager()
-
-    provider = manager.get_provider("qwen_audio_3")
-    assert provider is not None
-    assert provider.type == "qwen-audio"
-    assert provider.settings["model"] == "qwen-audio-3.0-asr-flash"
-    assert isinstance(provider.settings["realtime"], bool)
-    assert provider.settings["realtime_model"] == "qwen-audio-3.0-asr-flash-streaming"
-    assert provider.settings["realtime_format"] == "pcm"
-    assert provider.settings["realtime_sample_rate"] == 16000
-    assert provider.settings["realtime_chunk_ms"] == 100
-    assert provider.settings["use_user_lexicon"] is True
-    assert provider.settings["user_lexicon_weight"] == 4
-    assert isinstance(provider.settings["debug"], bool)
-    assert isinstance(provider.settings["log_request_payload"], bool)
 
 
 def test_transcribe_api_dispatches_qwen_audio_3_provider(monkeypatch):

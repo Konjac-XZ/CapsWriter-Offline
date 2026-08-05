@@ -279,6 +279,9 @@ async def _emit_transcript_delta(
             "source": "mic",
             "is_transcript_delta": True,
             "stream": True,
+            # Xiaomi SSE events are accumulated into a replaceable full-text
+            # snapshot, not append-only keystrokes.
+            "transcript_revision_mode": "full_text",
         }
     )
 
