@@ -80,23 +80,6 @@ from src.gui.lexicon_editor_client import LexiconEditorProcessClient
 from src.gui.prompt_editor import PromptEditDialog
 
 
-_REALTIME_TOGGLE_PROVIDER_TYPES = frozenset(
-    {
-        "qwen-audio-legacy",
-        "qwen-audio",
-        "dashscope",
-        "bytedance",
-    }
-)
-
-
-def _supports_realtime_toggle(provider: Any) -> bool:
-    return (
-        str(getattr(provider, "type", "") or "").strip().lower()
-        in _REALTIME_TOGGLE_PROVIDER_TYPES
-    )
-
-
 from src.gui.startup_profiler import StartupProfileOptions, StartupProfiler
 from src.gui.tray_process_client import TrayProcessClient
 from src.gui.worker_output_router import WorkerOutputRouter
@@ -274,18 +257,24 @@ class GUI(QMainWindow):
             self.provider_manager.load_providers()
 
             providers = self.provider_manager.list_providers()
-            self.log_message(f"已加载 {len(providers)} 个转录服务商配置")
+            models = self.provider_manager.list_models()
+            self.log_message(
+                f"已加载 {len(providers)} 个转录服务商、{len(models)} 个转录模型"
+            )
             for provider in providers:
                 status = "启用" if provider["enabled"] else "禁用"
                 self.log_message(
                     f"  - {provider['name']} ({provider['type']}) [{status}]", "#888888"
                 )
 
-            active = self.provider_manager.get_active_provider()
+            active = self.provider_manager.get_active_model()
             if active:
-                self.log_message(f"当前活动服务商: {active.name}", "#008000")
+                self.log_message(
+                    f"当前转录模型: {active.model_name} · {active.provider_name}",
+                    "#008000",
+                )
             else:
-                self.log_message("未找到活动的转录服务商", "#ff8800")
+                self.log_message("未找到可用的转录模型", "#ff8800")
 
         except ImportError as e:
             self.log_message(f"无法导入 provider_config: {e}", "#ff0000")
@@ -362,7 +351,6 @@ class GUI(QMainWindow):
             pass
         # Refresh UI combos now that providers are available
         try:
-            self.populate_provider_combo()
             self.populate_model_combo()
             self.sync_asr_realtime_control()
         except Exception:
@@ -641,13 +629,13 @@ class GUI(QMainWindow):
         provider_row.setSpacing(6)
         provider_row.setContentsMargins(0, 0, 0, 0)
 
-        self.provider_combo = QComboBox()
-        self._configure_collapsible_combo(self.provider_combo)
-        provider_field, self.provider_label = self._build_combo_field(
-            "转录服务商:", self.provider_combo
+        self.model_combo = QComboBox()
+        self._configure_collapsible_combo(self.model_combo)
+        provider_field, self.model_label = self._build_combo_field(
+            "转录模型:", self.model_combo
         )
-        self.populate_provider_combo()
-        self.provider_combo.currentTextChanged.connect(self.on_provider_changed)
+        self.populate_model_combo()
+        self.model_combo.currentIndexChanged.connect(self.on_model_changed)
         provider_row.addWidget(provider_field, 1)
 
         self.modify_prompt_button = QPushButton("编辑 ASR 提示词")
@@ -790,28 +778,10 @@ class GUI(QMainWindow):
 
         self._sync_context_toggle_states()
 
-        # Model row (only for OpenAI-type providers)
-        self.model_row = QHBoxLayout()
-        self.model_row.setSpacing(6)
-        self.model_row.setContentsMargins(0, 0, 0, 0)
-        self.model_combo = QComboBox()
-        self._configure_collapsible_combo(self.model_combo, editable=True)
-        model_field, self.model_label = self._build_combo_field(
-            "模型:", self.model_combo
-        )
-        self.model_combo.currentTextChanged.connect(self.on_model_changed)
-        self.model_row.addWidget(model_field, 1)
-        self.model_row.addStretch()
-        model_field.setVisible(False)
-        self.model_container = model_field
-
         self.provider_layout.addLayout(provider_row)
         self.provider_layout.addLayout(prompt_action_row)
         self.provider_layout.addLayout(action_row)
-        self.provider_layout.addLayout(self.model_row)
 
-        # Populate initial lists according to active provider
-        self.populate_model_combo()
         self.sync_asr_realtime_control()
 
     def sync_asr_realtime_control(self):
@@ -821,14 +791,21 @@ class GUI(QMainWindow):
 
         visible = False
         checked = False
-        if self.provider_manager and hasattr(self, "provider_combo"):
-            provider_id = self.provider_combo.currentData()
-            if provider_id is not None:
-                provider = self.provider_manager.get_provider(provider_id)
-                if provider and _supports_realtime_toggle(provider):
-                    visible = True
-                    settings = provider.settings or {}
-                    checked = bool(settings.get("realtime", False))
+        if self.provider_manager and hasattr(self, "model_combo"):
+            from src.provider.domain import InputMode, ModelRef
+
+            ref = self.model_combo.currentData()
+            if isinstance(ref, ModelRef):
+                model = self.provider_manager.get_model(ref)
+                if model is not None:
+                    visible = {
+                        InputMode.FILE_UPLOAD,
+                        InputMode.LIVE_AUDIO,
+                    }.issubset(model.input_modes)
+                    checked = (
+                        self.provider_manager.get_model_mode(ref)
+                        is InputMode.LIVE_AUDIO
+                    )
 
         self.asr_realtime_checkbox.blockSignals(True)
         try:
@@ -885,14 +862,13 @@ class GUI(QMainWindow):
             self.append_colored_line("转录服务商配置系统未初始化", "#ff5555")
             return
 
-        provider_id = (
-            self.provider_combo.currentData()
-            if hasattr(self, "provider_combo")
-            else None
-        )
-        if not provider_id:
-            self.append_colored_line("请先选择转录服务商", "#ff5555")
+        from src.provider.domain import ModelRef
+
+        ref = self.model_combo.currentData() if hasattr(self, "model_combo") else None
+        if not isinstance(ref, ModelRef):
+            self.append_colored_line("请先选择转录模型", "#ff5555")
             return
+        provider_id = ref.provider_id
 
         initial_text = self._resolve_prompt_text_for_provider(provider_id)
 
@@ -1039,21 +1015,23 @@ class GUI(QMainWindow):
         """Persist the selected ASR realtime/file upload mode."""
         if not self.provider_manager:
             return
-        current_data = (
-            self.provider_combo.currentData()
-            if hasattr(self, "provider_combo")
-            else None
-        )
-        if current_data is None:
+        from src.provider.domain import InputMode, ModelRef
+
+        ref = self.model_combo.currentData() if hasattr(self, "model_combo") else None
+        if not isinstance(ref, ModelRef):
             return
-        provider = self.provider_manager.get_provider(current_data)
-        if not provider or not _supports_realtime_toggle(provider):
+        model = self.provider_manager.get_model(ref)
+        if model is None or not {
+            InputMode.FILE_UPLOAD,
+            InputMode.LIVE_AUDIO,
+        }.issubset(model.input_modes):
             return
 
         ok = False
         try:
-            ok = self.provider_manager.update_provider_setting(
-                current_data, "realtime", bool(checked)
+            ok = self.provider_manager.set_model_mode(
+                ref,
+                InputMode.LIVE_AUDIO if checked else InputMode.FILE_UPLOAD,
             )
         except Exception:
             ok = False
@@ -1069,212 +1047,53 @@ class GUI(QMainWindow):
             )
             self.sync_asr_realtime_control()
 
-    def populate_provider_combo(self):
-        """Populate the provider combo box with available providers."""
-        # Avoid emitting currentTextChanged while we rebuild items to prevent
-        # unintended provider switches on startup.
-        self.provider_combo.blockSignals(True)
-        try:
-            self.provider_combo.clear()
-
-            if not self.provider_manager:
-                self.provider_combo.addItem("转录服务商配置系统未初始化", None)
-                return
-
-            providers = self.provider_manager.list_providers() or []
-            if not providers:
-                self.provider_combo.addItem("未找到转录服务商配置", None)
-                self.log_message("未找到任何转录服务商配置文件")
-                return
-
-            # Normalize active provider id for robust matching (case-insensitive)
-            try:
-                active_id_raw = getattr(self.provider_manager, "active_provider", None)
-                active_id_norm = (
-                    str(active_id_raw).strip().lower()
-                    if active_id_raw is not None
-                    else None
-                )
-            except Exception:
-                active_id_norm = None
-
-            active_index: int | None = None
-
-            for i, provider_info in enumerate(providers):
-                display_name = provider_info["name"]
-                pid = provider_info.get("id")
-                self.provider_combo.addItem(display_name, pid)
-
-                if active_id_norm is not None and pid is not None:
-                    try:
-                        if str(pid).strip().lower() == active_id_norm:
-                            active_index = i
-                    except Exception:
-                        pass
-
-            # Select the active provider if we found it; otherwise leave the first item selected
-            if active_index is not None:
-                # Only change if different to avoid needless churn
-                if self.provider_combo.currentIndex() != active_index:
-                    self.provider_combo.setCurrentIndex(active_index)
-
-            self.log_message(f"转录服务商选择器已准备就绪，共 {len(providers)} 个选项")
-        finally:
-            self.provider_combo.blockSignals(False)
-
-    def on_provider_changed(self, display_name: str):
-        """Handle provider selection change."""
-        if not self.provider_manager:
-            return
-
-        current_data = self.provider_combo.currentData()
-        if current_data is None:
-            return
-
-        # Skip if selection equals current active provider (avoid redundant switches on startup)
-        try:
-            active_id = getattr(self.provider_manager, "active_provider", None)
-            if (
-                active_id is not None
-                and str(current_data).strip().lower() == str(active_id).strip().lower()
-            ):
-                return
-        except Exception:
-            pass
-
-        provider_id = current_data
-        if self.provider_manager.set_active_provider(provider_id):
-            provider = self.provider_manager.get_provider(provider_id)
-            if provider:
-                self.append_colored_line(f"已切换至转录服务商: {provider.name}")
-                # Restart workers to apply new provider settings
-                self.restart_children_with_env()
-                # Refresh model selector visibility and values
-                self.populate_model_combo()
-                # Refresh provider-specific controls
-                self.sync_asr_realtime_control()
-
-    def _collect_known_openai_models(self) -> list[str]:
-        """Collect a reasonable list of model options for OpenAI-compatible providers.
-
-        - Gather models referenced in provider YAMLs
-        - Include any current env setting
-        - Add a small set of sensible defaults
-        """
-        models: list[str] = []
-        try:
-            if self.provider_manager:
-                for p in self.provider_manager.providers.values():
-                    if getattr(p, "type", "").lower() == "openai":
-                        m = (
-                            (p.settings or {}).get("model")
-                            if hasattr(p, "settings")
-                            else None
-                        )
-                        if isinstance(m, str) and m.strip():
-                            models.append(m.strip())
-        except Exception:
-            pass
-        # Add env value if present
-        try:
-            m_env = os.getenv("TRANSCRIBE_MODEL")
-            if m_env and m_env.strip():
-                models.append(m_env.strip())
-        except Exception:
-            pass
-        # Sensible defaults
-        models.extend(
-            [
-                "gpt-4o-transcribe",
-                "gpt-4o-mini-transcribe",
-                "whisper-1",
-            ]
-        )
-        # De-duplicate while preserving order
-        seen = set()
-        uniq: list[str] = []
-        for m in models:
-            if m not in seen:
-                uniq.append(m)
-                seen.add(m)
-        return uniq
-
     def populate_model_combo(self):
-        """Update the model dropdown based on the currently selected provider.
-
-        Visible only for OpenAI-type providers. Sets current value from provider.settings.model
-        (or env TRANSCRIBE_MODEL) and offers a small curated list plus any discovered values.
-        """
-        # Default to hidden
-        if hasattr(self, "model_container"):
-            self.model_container.setVisible(False)
-
-        if not self.provider_manager:
+        """Populate the flattened, declarative provider/model catalog."""
+        if not hasattr(self, "model_combo"):
             return
-
-        current_data = self.provider_combo.currentData()
-        if current_data is None:
-            return
-
-        provider = self.provider_manager.get_provider(current_data)
-        if not provider:
-            return
-
-        if getattr(provider, "type", "").lower() != "openai":
-            # Non-OpenAI providers don't use this selection
-            return
-
-        # At this point, show controls
-        if hasattr(self, "model_container"):
-            self.model_container.setVisible(True)
-
-        # Determine current model value
-        current_model = None
-        try:
-            current_model = (provider.settings or {}).get("model")
-        except Exception:
-            current_model = None
-        if not current_model:
-            current_model = os.getenv("TRANSCRIBE_MODEL", "gpt-4o-transcribe")
-
-        # Populate list
-        options = self._collect_known_openai_models()
         self.model_combo.blockSignals(True)
         try:
             self.model_combo.clear()
-            for opt in options:
-                self.model_combo.addItem(opt)
-            # Set current text, allowing custom entries
-            self.model_combo.setEditText(str(current_model))
+            if not self.provider_manager:
+                self.model_combo.addItem("转录模型配置系统未初始化", None)
+                return
+            models = self.provider_manager.list_models() or []
+            if not models:
+                self.model_combo.addItem("未找到转录模型配置", None)
+                return
+            active = self.provider_manager.get_active_model_ref()
+            active_index = 0
+            for index, model_info in enumerate(models):
+                ref = model_info["ref"]
+                self.model_combo.addItem(model_info["label"], ref)
+                if ref == active:
+                    active_index = index
+            self.model_combo.setCurrentIndex(active_index)
+            self.log_message(f"转录模型选择器已准备就绪，共 {len(models)} 个选项")
         finally:
             self.model_combo.blockSignals(False)
 
-    def on_model_changed(self, model_name: str):
-        """Handle model selection change for OpenAI providers: persist and restart workers."""
+    def on_model_changed(self, _index: int):
+        """Persist the selected provider/model pair and restart workers."""
         if not self.provider_manager:
             return
-        current_data = self.provider_combo.currentData()
-        if current_data is None:
+        from src.provider.domain import ModelRef
+
+        ref = self.model_combo.currentData()
+        if not isinstance(ref, ModelRef):
             return
-        provider = self.provider_manager.get_provider(current_data)
-        if not provider or getattr(provider, "type", "").lower() != "openai":
+        if ref == self.provider_manager.get_active_model_ref():
             return
-        model = (model_name or "").strip()
-        if not model:
-            return
-        # Persist to provider config (also updates env when active)
-        ok = False
-        try:
-            ok = self.provider_manager.update_provider_model(current_data, model)
-        except Exception:
-            ok = False
-        if ok:
-            self.append_colored_line(f"已切换转录模型: {model}")
-            # Restart workers to apply model change
+        if self.provider_manager.set_active_model(ref):
+            resolved = self.provider_manager.resolve_model(ref)
+            self.append_colored_line(
+                f"已切换转录模型: {resolved.model_name} · {resolved.provider_name}"
+            )
+            self.sync_asr_realtime_control()
             self.restart_children_with_env()
         else:
             self.append_colored_line(
-                "更新模型失败（请检查配置文件权限或格式）", "#ff5555"
+                "更新转录模型失败（请检查状态文件权限或配置）", "#ff5555"
             )
 
     def scroll_to_bottom(self):
@@ -1526,44 +1345,16 @@ class GUI(QMainWindow):
             self.append_plain_line("================")
             return
 
-        active = self.provider_manager.get_active_provider()
+        active = self.provider_manager.get_active_model()
         if active:
-            self.append_plain_line(f"转录服务提供商: {active.name} ({active.type})")
-
-            # Show provider-specific settings
-            if hasattr(active, "settings") and active.settings:
-                if active.type.lower() == "openai":
-                    base_url = active.settings.get("base_url", "(none)")
-                    model = active.settings.get("model", "(none)")
-                    temperature = active.settings.get("temperature", "(none)")
-                    self.append_plain_line(f"转录基础 URL: {base_url}")
-                    self.append_plain_line(f"转录模型: {model}")
-                    self.append_plain_line(f"转录温度: {temperature}")
-
-                    # Show resolved prompt (inline, preset, or global default)
-                    try:
-                        from src.provider.provider_config import provider_manager as _pm
-
-                        resolved_prompt = _pm.get_provider_prompt()
-                    except Exception:
-                        resolved_prompt = active.settings.get("prompt")
-                    if resolved_prompt:
-                        prompt_normalized = " ".join(
-                            line.strip()
-                            for line in str(resolved_prompt).splitlines()
-                            if line.strip()
-                        )
-                        max_len = 1000
-                        prompt_to_show = (
-                            prompt_normalized
-                            if len(prompt_normalized) <= max_len
-                            else prompt_normalized[: max_len - 3] + "..."
-                        )
-                        self.append_plain_line(f"转录提示: {prompt_to_show}")
-                    else:
-                        self.append_plain_line("转录提示: (none)")
+            self.append_plain_line(
+                f"转录模型: {active.model_name} · {active.provider_name}"
+            )
+            self.append_plain_line(f"转录适配器: {active.adapter_type}")
+            self.append_plain_line(f"上游模型: {active.upstream_model}")
+            self.append_plain_line(f"音频模式: {active.input_mode.value}")
         else:
-            self.append_plain_line("转录服务提供商: 未配置")
+            self.append_plain_line("转录模型: 未配置")
 
         self.append_plain_line("================")
 
@@ -1657,7 +1448,6 @@ class GUI(QMainWindow):
         try:
             if self.provider_manager:
                 self.provider_manager.load_providers()
-                self.populate_provider_combo()
                 self.populate_model_combo()
                 self.sync_asr_realtime_control()
                 self.log_message("已重新加载转录服务商配置")
@@ -1988,8 +1778,6 @@ class GUI(QMainWindow):
         widgets: list[QWidget] = [self.text_box_client]
         if hasattr(self, "daily_input_count_label"):
             widgets.append(self.daily_input_count_label)
-        if hasattr(self, "provider_combo"):
-            widgets.append(self.provider_combo)
         if hasattr(self, "modify_prompt_button"):
             widgets.append(self.modify_prompt_button)
         if hasattr(self, "edit_polish_prompt_button"):
