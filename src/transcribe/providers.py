@@ -2,13 +2,23 @@ from __future__ import annotations
 
 import io
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, Type
 
-from src.provider.provider_settings import (
-    get_str as ps_get_str,
-    get_bool as ps_get_bool,
+from src.provider.domain import (
+    InputMode,
+    ResolvedModel,
+    TranscriptionRequest,
+    TranscriptionResult,
 )
-from src.transcribe.streaming import StreamingTranscriptionSession
+from src.provider.provider_settings import (
+    get_bool as ps_get_bool,
+    get_str as ps_get_str,
+    use_resolved_model,
+)
+from src.transcribe.streaming import (
+    BoundStreamingTranscriptionSession,
+    StreamingTranscriptionSession,
+)
 
 
 class TranscriptionProvider(ABC):
@@ -40,6 +50,56 @@ class TranscriptionProvider(ABC):
         time_start: float,
     ) -> StreamingTranscriptionSession:
         raise NotImplementedError(f"{self.name()} does not support streaming input")
+
+    def supported_input_modes(self) -> frozenset[InputMode]:
+        modes = {InputMode.FILE_UPLOAD}
+        if (
+            type(self).create_streaming_session
+            is not TranscriptionProvider.create_streaming_session
+        ):
+            modes.add(InputMode.LIVE_AUDIO)
+        return frozenset(modes)
+
+    async def transcribe_request(
+        self, request: TranscriptionRequest
+    ) -> TranscriptionResult:
+        if canonical_provider_type(request.model.adapter_type) != self.name():
+            raise ValueError(
+                f"Resolved model requires adapter {request.model.adapter_type!r}, "
+                f"not {self.name()!r}"
+            )
+        if InputMode.FILE_UPLOAD not in request.model.input_modes:
+            raise ValueError(f"Model {request.model.ref.key} does not support file upload")
+        with use_resolved_model(request.model):
+            raw = await self._transcribe_request_tuple(request)
+        text, status, submitted, completed, metadata = raw
+        return TranscriptionResult(
+            text, status, submitted, completed, metadata
+        ).with_model_metadata(request.model)
+
+    async def _transcribe_request_tuple(
+        self, request: TranscriptionRequest
+    ) -> Tuple[str, int, float, float, Dict[str, Any]]:
+        return await self.transcribe(
+            request.payload_buf,
+            request.payload_mime,
+            request.task_id,
+            request.time_start,
+            request.record_stop,
+            request.max_retries,
+            request.base_delay,
+        )
+
+    def create_bound_streaming_session(
+        self, model: ResolvedModel, task_id: str, time_start: float
+    ) -> StreamingTranscriptionSession:
+        if model.input_mode is not InputMode.LIVE_AUDIO:
+            raise ValueError(f"Model {model.ref.key} is not in live-audio mode")
+        if InputMode.LIVE_AUDIO not in self.supported_input_modes():
+            raise ValueError(f"Adapter {self.name()} does not support live audio")
+        with use_resolved_model(model):
+            session = self.create_streaming_session(task_id, time_start)
+        return BoundStreamingTranscriptionSession(session, model)
 
 
 class OpenAIProvider(TranscriptionProvider):
@@ -298,6 +358,20 @@ class QwenAudioProvider(TranscriptionProvider):
             request_context,
         )
 
+    async def _transcribe_request_tuple(
+        self, request: TranscriptionRequest
+    ) -> Tuple[str, int, float, float, Dict[str, Any]]:
+        return await self.transcribe(
+            request.payload_buf,
+            request.payload_mime,
+            request.task_id,
+            request.time_start,
+            request.record_stop,
+            request.max_retries,
+            request.base_delay,
+            request.request_context,
+        )
+
 
 class SonioxProvider(TranscriptionProvider):
     def name(self) -> str:
@@ -490,33 +564,50 @@ class ByteDanceProvider(TranscriptionProvider):
         )
 
 
+_PROVIDER_REGISTRY: dict[str, Type[TranscriptionProvider]] = {
+    "openai": OpenAIProvider,
+    "replicate": ReplicateProvider,
+    "elevenlabs": ElevenLabsProvider,
+    "qwen-audio-legacy": QwenAudioLegacyProvider,
+    "qwen-audio": QwenAudioProvider,
+    "soniox": SonioxProvider,
+    "gemini": GeminiProvider,
+    "openrouter": OpenRouterProvider,
+    "xiaomi": XiaomiProvider,
+    "bytedance": ByteDanceProvider,
+}
+
+_PROVIDER_ALIASES = {
+    "oai": "openai",
+    "eleven-labs": "elevenlabs",
+    "xi": "elevenlabs",
+    "dashscope": "qwen-audio-legacy",
+    "alibabacloud": "qwen-audio-legacy",
+    "qwen_audio_3": "qwen-audio",
+    "qwen-audio-3": "qwen-audio",
+    "qwen_audio": "qwen-audio",
+    "alibaba_qwen_audio_3": "qwen-audio",
+    "soniox-rest": "soniox",
+    "soniox_http": "soniox",
+    "google-gemini": "gemini",
+    "google": "gemini",
+    "open-router": "openrouter",
+    "mimo": "xiaomi",
+    "xiaomi-mimo": "xiaomi",
+    "doubao": "bytedance",
+    "volcengine": "bytedance",
+    "volc": "bytedance",
+}
+
+
+def canonical_provider_type(kind: str) -> str:
+    normalized = str(kind or "").strip().lower()
+    return _PROVIDER_ALIASES.get(normalized, normalized)
+
+
 def make_provider(kind: str) -> TranscriptionProvider:
-    kind = (kind or "").strip().lower()
-    if kind in ("openai", "oai"):
-        return OpenAIProvider()
-    if kind == "replicate":
-        return ReplicateProvider()
-    if kind in ("elevenlabs", "eleven-labs", "xi"):
-        return ElevenLabsProvider()
-    if kind in ("qwen-audio-legacy", "dashscope", "alibabacloud"):
-        return QwenAudioLegacyProvider()
-    if kind in (
-        "qwen-audio",
-        "qwen_audio_3",
-        "qwen-audio-3",
-        "qwen_audio",
-        "alibaba_qwen_audio_3",
-    ):
-        return QwenAudioProvider()
-    if kind in ("soniox", "soniox-rest", "soniox_http"):
-        return SonioxProvider()
-    if kind in ("gemini", "google-gemini", "google"):
-        return GeminiProvider()
-    if kind in ("openrouter", "open-router"):
-        return OpenRouterProvider()
-    if kind in ("xiaomi", "mimo", "xiaomi-mimo"):
-        return XiaomiProvider()
-    if kind in ("bytedance", "doubao", "volcengine", "volc"):
-        return ByteDanceProvider()
-    # Default
-    return OpenAIProvider()
+    canonical = canonical_provider_type(kind)
+    provider_class = _PROVIDER_REGISTRY.get(canonical)
+    if provider_class is None:
+        raise ValueError(f"Unknown transcription provider adapter: {kind!r}")
+    return provider_class()

@@ -1,11 +1,11 @@
-import os
 import io
-from typing import Any, Dict, Tuple, cast
+from typing import Any, Dict, Tuple
 
+from src.provider.domain import ResolvedModel, TranscriptionRequest
 from src.transcribe.openai.openai_transcribe_http import (
     is_incremental_results_enabled as _get_incremental_results_flag,
 )
-from src.transcribe.providers import QwenAudioProvider, make_provider
+from src.transcribe.providers import make_provider
 
 # Import provider manager for dynamic configuration
 try:
@@ -30,29 +30,7 @@ def get_stream_flag() -> bool:
 def initialize_providers() -> None:
     """Initialize provider configurations on startup."""
     if provider_manager is not None:
-        # Load providers and set active one in environment
         provider_manager.load_providers()
-        active_provider = provider_manager.get_active_provider()
-        if active_provider:
-            # Set environment variables based on active provider
-            provider_id = None
-            for pid, provider in provider_manager.providers.items():
-                if provider.enabled:
-                    provider_id = pid
-                    break
-
-            if provider_id:
-                provider_manager.set_active_provider(provider_id)
-
-
-async def _run_openai(*args, **kwargs):
-    provider = make_provider("openai")
-    return await provider.transcribe(*args)
-
-
-async def _run_replicate(*args, **kwargs):
-    provider = make_provider("replicate")
-    return await provider.transcribe(*args)
 
 
 async def transcribe_audio(
@@ -64,6 +42,7 @@ async def transcribe_audio(
     max_retries: int,
     base_delay: float,
     request_context: Any = None,
+    resolved_model: ResolvedModel | None = None,
 ) -> Tuple[str, int, float, float, Dict[str, Any]]:
     """Provider-agnostic transcription entry point.
 
@@ -73,80 +52,27 @@ async def transcribe_audio(
     if isinstance(payload_buf, (bytes, bytearray, memoryview)):
         payload_buf = io.BytesIO(bytes(payload_buf))
 
-    provider = None
-    if provider_manager is not None:
-        try:
-            ptype = provider_manager.get_active_provider_type()
-            provider = (ptype or "").strip().lower() or None
-        except Exception:
-            provider = None
-    if not provider:
-        # Back-compat fallback
-        provider = os.getenv("TRANSCRIBE_PROVIDER", "openai").strip().lower()
-    if provider in (
-        "openai",
-        "replicate",
-        "elevenlabs",
-        "qwen-audio-legacy",
-        "dashscope",
-        "alibabacloud",
-        "qwen-audio",
-        "qwen_audio_3",
-        "qwen-audio-3",
-        "qwen_audio",
-        "alibaba_qwen_audio_3",
-        "soniox",
-        "soniox-rest",
-        "soniox_http",
-        "gemini",
-        "google-gemini",
-        "google",
-        "openrouter",
-        "open-router",
-        "xiaomi",
-        "mimo",
-        "xiaomi-mimo",
-        "bytedance",
-        "doubao",
-        "volcengine",
-        "volc",
-    ):
-        prov = make_provider(provider)
-        if provider in (
-            "qwen-audio",
-            "qwen_audio_3",
-            "qwen-audio-3",
-            "qwen_audio",
-            "alibaba_qwen_audio_3",
-        ):
-            qwen_provider = cast(QwenAudioProvider, prov)
-            return await qwen_provider.transcribe(
-                payload_buf,
-                payload_mime,
-                task_id,
-                time_start,
-                record_stop,
-                max_retries,
-                base_delay,
-                request_context=request_context,
-            )
-        return await prov.transcribe(
-            payload_buf,
-            payload_mime,
-            task_id,
-            time_start,
-            record_stop,
-            max_retries,
-            base_delay,
-        )
-    # Fallback to openai for unknown values
-    prov = make_provider("openai")
-    return await prov.transcribe(
-        payload_buf,
-        payload_mime,
-        task_id,
-        time_start,
-        record_stop,
-        max_retries,
-        base_delay,
+    if resolved_model is None:
+        if provider_manager is None:
+            raise RuntimeError("Transcription provider catalog is unavailable")
+        resolved_model = provider_manager.resolve_model()
+    provider = make_provider(resolved_model.adapter_type)
+    request = TranscriptionRequest(
+        payload_buf=payload_buf,
+        payload_mime=payload_mime,
+        task_id=task_id,
+        time_start=time_start,
+        record_stop=record_stop,
+        max_retries=max_retries,
+        base_delay=base_delay,
+        request_context=request_context,
+        model=resolved_model,
+    )
+    result = await provider.transcribe_request(request)
+    return (
+        result.text,
+        result.status_code,
+        result.time_submit,
+        result.time_complete,
+        dict(result.transport),
     )

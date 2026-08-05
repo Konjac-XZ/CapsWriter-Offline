@@ -116,14 +116,10 @@ def _emit_status_overlay(action: str, state: str | None = None) -> None:
 def _active_provider_uses_streaming_input() -> bool:
     try:
         from src.provider.provider_config import provider_manager
-        from src.transcribe.providers import make_provider
+        from src.provider.domain import InputMode
 
-        provider_kind = provider_manager.get_active_provider_type()
-        if not provider_kind:
-            return False
-        return make_provider(
-            str(provider_kind).strip().lower()
-        ).supports_streaming_input()
+        model = provider_manager.get_active_model()
+        return model is not None and model.input_mode is InputMode.LIVE_AUDIO
     except Exception:
         return False
 

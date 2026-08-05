@@ -2,6 +2,7 @@ import asyncio
 import base64
 import io
 import json
+from types import SimpleNamespace
 
 import httpx
 
@@ -348,15 +349,24 @@ def test_resolve_vocabulary_caps_total_and_prioritizes_explicit_terms(monkeypatc
 
 
 def test_transcribe_api_dispatches_qwen_audio_3_provider(monkeypatch):
+    resolved = SimpleNamespace(adapter_type="qwen-audio")
+
     class FakeManager:
         @staticmethod
-        def get_active_provider_type():
-            return "qwen-audio"
+        def resolve_model():
+            return resolved
 
     class FakeProvider:
-        async def transcribe(self, *args, **kwargs):
-            assert kwargs["request_context"] is None
-            return "已接入", 200, 1.0, 2.0, {"provider": "qwen-audio"}
+        async def transcribe_request(self, request):
+            assert request.request_context is None
+            assert request.model is resolved
+            return SimpleNamespace(
+                text="已接入",
+                status_code=200,
+                time_submit=1.0,
+                time_complete=2.0,
+                transport={"provider": "qwen-audio"},
+            )
 
     selected = []
 
@@ -379,7 +389,7 @@ def test_transcribe_api_dispatches_qwen_audio_3_provider(monkeypatch):
         )
     )
 
-    assert selected == ["qwen-audio"]
+    assert selected == [resolved.adapter_type]
     assert result[0] == "已接入"
     assert result[4]["provider"] == "qwen-audio"
 

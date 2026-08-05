@@ -9,6 +9,8 @@ from typing import Any
 
 import numpy as np
 
+from src.provider.domain import InputMode, ResolvedModel
+from src.provider.provider_settings import use_resolved_model
 from src.infra.cosmic import Cosmic, console
 from src.audio.create_file import create_file
 from src.audio.finish_file import finish_file
@@ -25,7 +27,7 @@ from src.infra.gui_output import gui_event
 from src.transcribe.openai.openai_transcribe_audio import preprocess_audio
 from src.transcribe.openai.openai_transcribe_audio import make_audio_payload
 from src.transcribe.openai.openai_transcribe_audio import get_mp3_bitrate
-from src.transcribe.api import transcribe_audio, get_incremental_results_flag
+from src.transcribe.api import transcribe_audio
 from src.transcribe.providers import make_provider
 from src.transcribe.streaming import StreamingTranscriptionSession
 from src.polish.llm_polish import prefetch_request_context, should_polish_text
@@ -149,6 +151,7 @@ async def _submit_payload(
     source: str,
     cache_retry_audio: bool,
     polish_prefetch_task: asyncio.Task | None = None,
+    resolved_model: ResolvedModel | None = None,
 ) -> bool:
     if hasattr(payload_buf, "seek"):
         payload_buf.seek(0)
@@ -176,13 +179,30 @@ async def _submit_payload(
 
     context_task = polish_prefetch_task
     owns_context_task = False
-    if _is_qwen_audio_provider() and context_task is None:
+    if resolved_model is None:
+        from src.provider.provider_config import provider_manager
+
+        resolved_model = provider_manager.resolve_model()
+    fell_back = resolved_model.input_mode is InputMode.LIVE_AUDIO
+    if fell_back:
+        if InputMode.FILE_UPLOAD not in resolved_model.input_modes:
+            raise RuntimeError(
+                f"模型 {resolved_model.ref.key} 不支持文件上传，无法提交录音文件"
+            )
+        from src.provider.provider_config import provider_manager
+
+        resolved_model = provider_manager.resolve_model(
+            resolved_model.ref, InputMode.FILE_UPLOAD
+        )
+    if resolved_model.adapter_type == "qwen-audio" and context_task is None:
         context_task = asyncio.create_task(
             prefetch_request_context(),
             name=f"request_context:{task_id}",
         )
         owns_context_task = True
-    request_context, asr_context_timed_out = await _await_qwen_asr_context(context_task)
+    request_context, asr_context_timed_out = await _await_qwen_asr_context(
+        context_task, resolved_model
+    )
 
     t_presubmit = time.time()
     upload_buf = io.BytesIO(payload_bytes)
@@ -201,9 +221,11 @@ async def _submit_payload(
         max_retries,
         base_delay,
         request_context=request_context,
+        resolved_model=resolved_model,
     )
     if isinstance(transport_info, dict):
         transport_info["asr_context_capture_timed_out"] = asr_context_timed_out
+        transport_info["fell_back"] = fell_back
     if Cosmic.abandon_requested or task_id in Cosmic.abandoned_task_ids:
         return False
 
@@ -229,9 +251,9 @@ async def _submit_payload(
         "time_submit": t_submit,
         "time_complete": t_complete,
         "source": source,
-        "has_incremental_transcript": get_incremental_results_flag(),
+        "has_incremental_transcript": resolved_model.incremental_output,
         # Backward compatibility for older result consumers.
-        "stream": get_incremental_results_flag(),
+        "stream": resolved_model.incremental_output,
         "debug_timing": {
             "queue_delay_ms": max(0.0, (t_finish_entry - record_stop) * 1000.0),
             "wav_ms": max(0.0, encode_ms),
@@ -268,32 +290,11 @@ async def _submit_payload(
     return True
 
 
-def _active_provider_kind() -> str:
-    try:
-        from src.provider.provider_config import provider_manager
-
-        provider = provider_manager.get_active_provider_type()
-        if provider:
-            return str(provider).strip().lower()
-    except Exception:
-        pass
-    return os.getenv("TRANSCRIBE_PROVIDER", "openai").strip().lower()
-
-
-def _is_qwen_audio_provider() -> bool:
-    return _active_provider_kind() in {
-        "qwen-audio",
-        "qwen_audio_3",
-        "qwen-audio-3",
-        "qwen_audio",
-        "alibaba_qwen_audio_3",
-    }
-
-
 async def _await_qwen_asr_context(
     context_task: asyncio.Task | None,
+    resolved_model: ResolvedModel,
 ) -> tuple[object | None, bool]:
-    if not _is_qwen_audio_provider() or context_task is None:
+    if resolved_model.adapter_type != "qwen-audio" or context_task is None:
         return None, False
     try:
         from src.transcribe.qwen_audio.qwen_audio_transcribe_http import (
@@ -301,9 +302,10 @@ async def _await_qwen_asr_context(
             should_use_asr_context,
         )
 
-        if not should_use_asr_context():
-            return None, False
-        timeout = get_asr_context_capture_timeout_seconds()
+        with use_resolved_model(resolved_model):
+            if not should_use_asr_context():
+                return None, False
+            timeout = get_asr_context_capture_timeout_seconds()
         if timeout <= 0:
             if not context_task.done():
                 return None, True
@@ -319,12 +321,15 @@ async def _await_qwen_asr_context(
 
 
 def _create_streaming_session(
-    task_id: str, time_start: float
+    resolved_model: ResolvedModel, task_id: str, time_start: float
 ) -> StreamingTranscriptionSession | None:
-    provider_kind = _active_provider_kind()
-    provider = make_provider(provider_kind)
-    if not provider.supports_streaming_input():
+    if resolved_model.input_mode is not InputMode.LIVE_AUDIO:
         return None
+    provider = make_provider(resolved_model.adapter_type)
+    if InputMode.LIVE_AUDIO not in provider.supported_input_modes():
+        raise ValueError(
+            f"适配器 {provider.name()} 不支持模型声明的实时音频模式"
+        )
     try:
         from src.transcribe.qwen_audio_legacy.settings import (
             should_show_realtime_logs,
@@ -337,7 +342,7 @@ def _create_streaming_session(
             )
     except Exception:
         pass
-    return provider.create_streaming_session(task_id, time_start)
+    return provider.create_bound_streaming_session(resolved_model, task_id, time_start)
 
 
 async def _gather_audio_once(
@@ -350,6 +355,7 @@ async def _gather_audio_once(
     float,
     str | None,
     StreamingTranscriptionSession | None,
+    ResolvedModel | None,
 ]:
     """Read from queue until finish or cancel, write file if enabled, and assemble audio.
 
@@ -362,6 +368,7 @@ async def _gather_audio_once(
     duration = 0.0
     file_path, file = "", None
     streaming_session: StreamingTranscriptionSession | None = None
+    resolved_model: ResolvedModel | None = None
     streamed_chunks = 0
 
     while task := await Cosmic.queue_in.get():
@@ -369,8 +376,13 @@ async def _gather_audio_once(
         ttype = task.get("type")
         if ttype == "begin":
             time_start = task["time"]
+            from src.provider.provider_config import provider_manager
+
+            resolved_model = provider_manager.resolve_model()
             try:
-                streaming_session = _create_streaming_session(task_id, time_start)
+                streaming_session = _create_streaming_session(
+                    resolved_model, task_id, time_start
+                )
                 if streaming_session is not None:
                     await streaming_session.start()
             except Exception as exc:
@@ -439,6 +451,7 @@ async def _gather_audio_once(
                 t_finish_entry,
                 None,
                 streaming_session,
+                resolved_model,
             )
         elif ttype == "cancel":
             # no audio to upload; caller will emit blank result
@@ -456,6 +469,7 @@ async def _gather_audio_once(
                 now,
                 "cancel",
                 None,
+                resolved_model,
             )
 
     # Shouldn't reach here normally
@@ -473,6 +487,7 @@ async def _gather_audio_once(
         now,
         "cancel",
         None,
+        resolved_model,
     )
 
 
@@ -495,6 +510,7 @@ async def send_audio():
             t_finish_entry,
             cancel_reason,
             streaming_session,
+            resolved_model,
         ) = await _gather_audio_once(task_id)
 
         if cancel_reason is not None:
@@ -538,6 +554,17 @@ async def send_audio():
                         t_complete,
                         transport_info,
                     ) = await streaming_session.finish()
+                    transport_info = dict(transport_info or {})
+                    if resolved_model is not None:
+                        transport_info.update(
+                            {
+                                "provider_id": resolved_model.ref.provider_id,
+                                "model_id": resolved_model.ref.model_id,
+                                "upstream_model": resolved_model.upstream_model,
+                                "input_mode": InputMode.LIVE_AUDIO.value,
+                                "fell_back": False,
+                            }
+                        )
             except Exception as exc:
                 console.print(
                     f"实时转写结束失败，回退到录完上传：{exc}", style="bright_yellow"
@@ -594,17 +621,26 @@ async def send_audio():
                     style="bright_yellow",
                 )
 
-        # Preprocess audio (mono/downsample)
-        audio_proc, actual_sr = preprocess_audio(audio_concat)
+        if (
+            resolved_model is not None
+            and InputMode.FILE_UPLOAD not in resolved_model.input_modes
+        ):
+            raise RuntimeError(
+                f"模型 {resolved_model.ref.key} 的实时转写失败，且不支持文件上传回退"
+            )
 
-        # Build payload
-        (
-            payload_buf,
-            payload_mime,
-            encode_ms,
-            payload_sr,
-            payload_ch,
-        ) = await make_audio_payload(audio_proc, actual_sr)
+        if resolved_model is None:
+            raise RuntimeError("录音任务没有绑定转录模型")
+        with use_resolved_model(resolved_model):
+            # Preprocess audio and build the upload for the task-bound model.
+            audio_proc, actual_sr = preprocess_audio(audio_concat)
+            (
+                payload_buf,
+                payload_mime,
+                encode_ms,
+                payload_sr,
+                payload_ch,
+            ) = await make_audio_payload(audio_proc, actual_sr)
 
         message_queued = await _submit_payload(
             payload_buf=payload_buf,
@@ -620,6 +656,7 @@ async def send_audio():
             source="mic",
             cache_retry_audio=False,
             polish_prefetch_task=polish_prefetch_task,
+            resolved_model=resolved_model,
         )
         if message_queued:
             polish_prefetch_task = None

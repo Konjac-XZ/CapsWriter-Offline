@@ -46,6 +46,14 @@ def _canonical_provider_type(provider: str | None) -> str:
 
 def _get_active_provider_type() -> str:
     try:
+        from src.provider.provider_settings import get_resolved_model
+
+        resolved = get_resolved_model()
+        if resolved is not None:
+            return _canonical_provider_type(resolved.adapter_type)
+    except Exception:
+        pass
+    try:
         from src.provider.provider_config import (
             provider_manager,
         )  # local import to avoid cycles
