@@ -106,6 +106,10 @@ async def transcribe_audio(
         "xiaomi",
         "mimo",
         "xiaomi-mimo",
+        "bytedance",
+        "doubao",
+        "volcengine",
+        "volc",
     ):
         prov = make_provider(provider)
         if provider in (

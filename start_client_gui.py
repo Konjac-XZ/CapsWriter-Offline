@@ -78,6 +78,25 @@ from src.gui.app_startup import (
 from src.gui.listening_overlay import StatusOverlayController
 from src.gui.lexicon_editor_client import LexiconEditorProcessClient
 from src.gui.prompt_editor import PromptEditDialog
+
+
+_REALTIME_TOGGLE_PROVIDER_TYPES = frozenset(
+    {
+        "qwen-audio-legacy",
+        "qwen-audio",
+        "dashscope",
+        "bytedance",
+    }
+)
+
+
+def _supports_realtime_toggle(provider: Any) -> bool:
+    return (
+        str(getattr(provider, "type", "") or "").strip().lower()
+        in _REALTIME_TOGGLE_PROVIDER_TYPES
+    )
+
+
 from src.gui.startup_profiler import StartupProfileOptions, StartupProfiler
 from src.gui.tray_process_client import TrayProcessClient
 from src.gui.worker_output_router import WorkerOutputRouter
@@ -345,7 +364,7 @@ class GUI(QMainWindow):
         try:
             self.populate_provider_combo()
             self.populate_model_combo()
-            self.sync_qwen_audio_realtime_control()
+            self.sync_asr_realtime_control()
         except Exception:
             pass
         # Start background workers (core first, helpers staggered)
@@ -643,18 +662,16 @@ class GUI(QMainWindow):
         prompt_action_row.setSpacing(6)
         prompt_action_row.setContentsMargins(0, 0, 0, 0)
 
-        self.qwen_audio_realtime_checkbox = QCheckBox("流式音频")
-        self.qwen_audio_realtime_checkbox.setToolTip(
+        self.asr_realtime_checkbox = QCheckBox("流式音频")
+        self.asr_realtime_checkbox.setToolTip(
             "支持的语音识别服务会在录音时实时发送音频；关闭后改为录音结束后上传文件"
         )
-        self.qwen_audio_realtime_checkbox.setSizePolicy(
+        self.asr_realtime_checkbox.setSizePolicy(
             QSizePolicy.Policy.Fixed,
             QSizePolicy.Policy.Fixed,
         )
-        self.qwen_audio_realtime_checkbox.toggled.connect(
-            self.on_qwen_audio_realtime_toggled
-        )
-        prompt_action_row.addWidget(self.qwen_audio_realtime_checkbox)
+        self.asr_realtime_checkbox.toggled.connect(self.on_asr_realtime_toggled)
+        prompt_action_row.addWidget(self.asr_realtime_checkbox)
         prompt_action_row.addStretch()
 
         self.edit_polish_prompt_button = QPushButton("编辑 LLM 提示词")
@@ -795,11 +812,11 @@ class GUI(QMainWindow):
 
         # Populate initial lists according to active provider
         self.populate_model_combo()
-        self.sync_qwen_audio_realtime_control()
+        self.sync_asr_realtime_control()
 
-    def sync_qwen_audio_realtime_control(self):
-        """Show and sync the Qwen Audio realtime/file mode switch."""
-        if not hasattr(self, "qwen_audio_realtime_checkbox"):
+    def sync_asr_realtime_control(self):
+        """Show and sync the realtime/file mode switch for supported ASR providers."""
+        if not hasattr(self, "asr_realtime_checkbox"):
             return
 
         visible = False
@@ -808,21 +825,17 @@ class GUI(QMainWindow):
             provider_id = self.provider_combo.currentData()
             if provider_id is not None:
                 provider = self.provider_manager.get_provider(provider_id)
-                if provider and getattr(provider, "type", "").lower() in {
-                    "qwen-audio-legacy",
-                    "qwen-audio",
-                    "dashscope",
-                }:
+                if provider and _supports_realtime_toggle(provider):
                     visible = True
                     settings = provider.settings or {}
                     checked = bool(settings.get("realtime", False))
 
-        self.qwen_audio_realtime_checkbox.blockSignals(True)
+        self.asr_realtime_checkbox.blockSignals(True)
         try:
-            self.qwen_audio_realtime_checkbox.setChecked(checked)
-            self.qwen_audio_realtime_checkbox.setVisible(visible)
+            self.asr_realtime_checkbox.setChecked(checked)
+            self.asr_realtime_checkbox.setVisible(visible)
         finally:
-            self.qwen_audio_realtime_checkbox.blockSignals(False)
+            self.asr_realtime_checkbox.blockSignals(False)
 
     def _resolve_prompt_text_for_provider(self, provider_id: str) -> str:
         """Determine the prompt text to show in the editor for the given provider."""
@@ -1022,8 +1035,8 @@ class GUI(QMainWindow):
 
         self.append_colored_line("已请求清除最近上屏消息记录。", "#008000")
 
-    def on_qwen_audio_realtime_toggled(self, checked: bool):
-        """Persist the selected Qwen Audio realtime/file upload mode."""
+    def on_asr_realtime_toggled(self, checked: bool):
+        """Persist the selected ASR realtime/file upload mode."""
         if not self.provider_manager:
             return
         current_data = (
@@ -1034,11 +1047,7 @@ class GUI(QMainWindow):
         if current_data is None:
             return
         provider = self.provider_manager.get_provider(current_data)
-        if not provider or getattr(provider, "type", "").lower() not in {
-            "qwen-audio-legacy",
-            "qwen-audio",
-            "dashscope",
-        }:
+        if not provider or not _supports_realtime_toggle(provider):
             return
 
         ok = False
@@ -1058,7 +1067,7 @@ class GUI(QMainWindow):
                 "更新语音识别音频模式失败（请检查配置文件权限或格式）",
                 "#ff5555",
             )
-            self.sync_qwen_audio_realtime_control()
+            self.sync_asr_realtime_control()
 
     def populate_provider_combo(self):
         """Populate the provider combo box with available providers."""
@@ -1143,7 +1152,7 @@ class GUI(QMainWindow):
                 # Refresh model selector visibility and values
                 self.populate_model_combo()
                 # Refresh provider-specific controls
-                self.sync_qwen_audio_realtime_control()
+                self.sync_asr_realtime_control()
 
     def _collect_known_openai_models(self) -> list[str]:
         """Collect a reasonable list of model options for OpenAI-compatible providers.
@@ -1650,7 +1659,7 @@ class GUI(QMainWindow):
                 self.provider_manager.load_providers()
                 self.populate_provider_combo()
                 self.populate_model_combo()
-                self.sync_qwen_audio_realtime_control()
+                self.sync_asr_realtime_control()
                 self.log_message("已重新加载转录服务商配置")
 
                 # Restart workers to apply any changes

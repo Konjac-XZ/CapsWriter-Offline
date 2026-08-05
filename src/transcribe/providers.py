@@ -443,6 +443,53 @@ class XiaomiProvider(TranscriptionProvider):
         return text_result, status_code, t_submit, t_complete, {"http2": http2_flag}
 
 
+class ByteDanceProvider(TranscriptionProvider):
+    def name(self) -> str:
+        return "bytedance"
+
+    def supports_streaming_input(self) -> bool:
+        from src.transcribe.bytedance.bytedance_transcribe_ws import (
+            should_use_realtime,
+        )
+
+        return should_use_realtime()
+
+    def create_streaming_session(
+        self,
+        task_id: str,
+        time_start: float,
+    ) -> StreamingTranscriptionSession:
+        from src.transcribe.bytedance.bytedance_transcribe_ws import (
+            ByteDanceStreamingSession,
+        )
+
+        return ByteDanceStreamingSession(task_id, time_start)
+
+    async def transcribe(
+        self,
+        payload_buf: io.BytesIO,
+        payload_mime: str,
+        task_id: str,
+        time_start: float,
+        record_stop: float,
+        max_retries: int,
+        base_delay: float,
+    ) -> Tuple[str, int, float, float, Dict[str, Any]]:
+        from src.transcribe.bytedance.bytedance_transcribe_http import (
+            transcribe_with_retries,
+        )
+
+        return await transcribe_with_retries(
+            payload_buf,
+            payload_mime,
+            task_id,
+            time_start,
+            record_stop,
+            max_retries,
+            base_delay,
+        )
+
+
 def make_provider(kind: str) -> TranscriptionProvider:
     kind = (kind or "").strip().lower()
     if kind in ("openai", "oai"):
@@ -469,5 +516,7 @@ def make_provider(kind: str) -> TranscriptionProvider:
         return OpenRouterProvider()
     if kind in ("xiaomi", "mimo", "xiaomi-mimo"):
         return XiaomiProvider()
+    if kind in ("bytedance", "doubao", "volcengine", "volc"):
+        return ByteDanceProvider()
     # Default
     return OpenAIProvider()
