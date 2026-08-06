@@ -225,12 +225,12 @@ class ProviderManager:
     def _parse_provider(self, provider_id: str, data: dict[str, Any]) -> ProviderConfig:
         settings = dict(data.get("settings") or {})
         raw_models = data.get("models")
-        legacy = not isinstance(raw_models, dict) or not raw_models
-        models = (
-            self._parse_legacy_model(settings)
-            if legacy
-            else self._parse_models(raw_models)
-        )
+        if isinstance(raw_models, dict) and raw_models:
+            legacy = False
+            models = self._parse_models(raw_models)
+        else:
+            legacy = True
+            models = self._parse_legacy_model(settings)
         if not models:
             raise ValueError("provider must declare at least one model")
         return ProviderConfig(

@@ -1,0 +1,625 @@
+> **注意：**
+>
+> 此接口为录音文件识别极速版接口，在参数风格、错误码等方面有区别于云 API 接口，请知悉。
+
+## 1. 接口描述
+
+本接口支持使用者通过 HTTPS POST 方式上传一段音频并在极短时间内同步返回识别结果（通常30分钟音频可在10秒内完成识别），可满足音视频字幕、准实时质检等场景下对语音文件识别时效性的要求。
+
+在使用该接口前，需要在语音识别控制台开通服务，并进入 [API 密钥管理页面](https://console.cloud.tencent.com/cam/capi) 新建密钥，生成 AppID、SecretID 和 SecretKey，用于 API 调用时生成签名，签名将用来进行接口鉴权。
+
+## 2. 接口要求
+
+集成录音识别极速版 API 时，需按照以下要求。
+
+| 内容     | 说明                                                         |
+| -------- | ------------------------------------------------------------ |
+| 支持语言 | 支持中文普通话、粤语、英语、韩语、日语、泰语、印度尼西亚语、越南语、马来语、菲律宾语、葡萄牙语、土耳其语、阿拉伯语、西班牙语、印地语、法语、德语、上海话、四川话、武汉话、贵阳话、昆明话、西安话、郑州话、太原话、兰州话、银川话、西宁话、南京话、合肥话、南昌话、长沙话、苏州话、杭州话、济南话、天津话、石家庄话、黑龙江话、吉林话、辽宁话。可通过接口参数 engine_type 设置对应语言类型。 |
+| 音频格式 | wav、pcm、ogg-opus、speex、silk、mp3、m4a、aac、amr          |
+| 使用限制 | 支持 100MB 以内且时长不超过2小时的音频文件，如音频时长大于2小时，建议使用 [录音文件识别](https://cloud.tencent.com/document/product/1093/37823)。 |
+| 请求协议 | HTTPS                                                        |
+| 请求地址 | `https://asr.cloud.tencent.com/asr/flash/v1/<appid>?{请求参数}` |
+| 接口鉴权 | 签名鉴权机制，详情请参见 [签名生成](https://cloud.tencent.com/document/product/1093/52097#sign)。 |
+| 响应格式 | 统一采用 JSON 格式。                                         |
+| 并发限制 | 普通版本单个账号（AppId 维度）免费并发数为20， 大模型1.0版本免费并发数为5，如您有提高并发限制的需求，请 [前往购买](https://buy.cloud.tencent.com/asr)。 |
+
+## 3. 交互流程
+
+![](https://qcloudimg.tencent-cloud.cn/image/document/2f605a253ba48f2ea0e4b8dbbd2ecdea.png)
+
+## 4. 接口调用说明
+
+本接口为 HTTPS 同步调用，包含请求 Header、请求 URL、请求 Body、响应 Response。
+
+- 请求 Header：包含 Host、签名串等信息。
+
+- 请求 URL：包含请求的所有参数。
+
+- 请求 Body：包含音频原始数据。
+
+- 响应 Response：返回识别结果，为 JSON 结构。
+
+  以下为详细说明。
+
+### 4.1 请求 Header 说明
+
+包括 Host、Authorization、Content-Type、Content-Length 四个参数。  
+
+| 参数名称       | 必选 | 类型    | 描述                                                         |
+| -------------- | ---- | ------- | ------------------------------------------------------------ |
+| Host           | 是   | String  | 语音识别服务域名，固定为 asr.cloud.tencent.com。             |
+| Authorization  | 是   | String  | 用户的签名字符串，用于鉴权。详情请参见 [签名生成](https://cloud.tencent.com/document/product/1093/52097#sign)。 |
+| Content-Type   | 是   | String  | application/octet-stream                                     |
+| Content-Length | 是   | Integer | 请求长度，此处对应语音数据字节数，单位：字节。               |
+
+### 4.2 请求参数说明
+
+URL 中的请求参数可包含如下参数：
+
+<table>
+<tr>
+<td rowspan="1" colspan="1" >参数名称</td>
+
+
+<td rowspan="1" colspan="1" >必选</td>
+
+<td rowspan="1" colspan="1" >类型</td>
+
+<td rowspan="1" colspan="1" >描述</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >appid</td>
+
+<td rowspan="1" colspan="1" >是</td>
+
+<td rowspan="1" colspan="1" >Integer</td>
+
+<td rowspan="1" colspan="1" >用户在腾讯云注册账号的 appid，可以进入 <a href="https://console.cloud.tencent.com/cam/capi">API 密钥管理页面 </a> 获取。</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >secretid</td>
+
+<td rowspan="1" colspan="1" >是</td>
+
+<td rowspan="1" colspan="1" >String</td>
+
+<td rowspan="1" colspan="1" >用户在腾讯云注册账号 appid 对应的 SecretID，可以进入 <a href="https://console.cloud.tencent.com/cam/capi">API 密钥管理页面 </a> 获取。<br>示例值：*****Qq1zhZMN8dv0******</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >engine_type</td>
+
+<td rowspan="1" colspan="1" >是</td>
+
+<td rowspan="1" colspan="1" >String</td>
+
+<td rowspan="1" colspan="1" >引擎模型类型<br>识别引擎采用分级计费方案，标记为“大模型1.0版”的引擎适用大模型1.0计费方案，<a href="https://cloud.tencent.com/document/product/1093/35686">点击这里</a> 查看产品计费说明。<br><br>电话场景：<br>- 8k_zh：中文电话通用；<br>- 8k_en：英文电话通用；<br>- <strong>8k_zh_large</strong>：中文电话场景专用大模型引擎【大模型1.0版】。当前模型同时支持中文、上海话、四川话、武汉话、贵阳话、昆明话、西安话、郑州话、太原话、兰州话、银川话、西宁话、南京话、合肥话、南昌话、长沙话、苏州话、杭州话、济南话、天津话、石家庄话、黑龙江话、吉林话、辽宁话、闽南语、客家话、粤语、南宁话方言识别，通过显著提升模型参数规模与语言建模能力，实现对电话音频中复杂场景（如口音干扰、背景噪声）的高精度识别，识别准确率较常规版本大幅提升。<br><br>非电话场景：<br>- <strong>16k_zh_en：</strong>中英粤+9种方言大模型引擎【大模型1.0版】。当前模型同时支持中文、英语、粤语、四川、陕西话、河南话、上海话、湖南话、湖北话、安徽话、闽南和潮汕方言识别，模型参数量极大，语言模型性能增强，针对噪声大、回音大、人声小、人声远等低质量音频的识别准确率极大提升;<br>- <strong>16k_multi_lang</strong>：多语种大模型引擎【大模型1.0版】。当前模型同时支持英语、日语、韩语、阿拉伯语、菲律宾语、法语、印地语、印尼语、马来语、葡萄牙语、西班牙语、泰语、土耳其语、越南语、德语的识别，可实现15个语种的自动识别(句子/段落级别)；<br>- 16k_zh：中文通用；<br>- 16k_zh-PY：中英粤;<br>- 16k_yue：粤语；<br>- 16k_en：英语；<br>- 16k_ja：日语；<br>- 16k_ko：韩语；<br>- 16k_vi：越南语；<br>- 16k_ms：马来语；<br>- 16k_id：印度尼西亚语；<br>- 16k_fil：菲律宾语；<br>- 16k_th：泰语；<br>- 16k_pt：葡萄牙语；<br>- 16k_tr：土耳其语；<br>- 16k_ar：阿拉伯语；<br>- 16k_es: 西班牙语；<br>- 16k_hi: 印地语；<br>- 16k_fr：法语；<br>- 16k_de：德语；<br>示例值：16k_zh</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >voice_format</td>
+
+<td rowspan="1" colspan="1" >是</td>
+
+<td rowspan="1" colspan="1" >String</td>
+
+<td rowspan="1" colspan="1" >音频格式。支持 wav、pcm、ogg-opus、speex、silk、mp3、m4a、aac、amr。<br>示例值：wav</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >timestamp</td>
+
+<td rowspan="1" colspan="1" >是</td>
+
+<td rowspan="1" colspan="1" >Integer</td>
+
+<td rowspan="1" colspan="1" >当前 UNIX 时间戳，如果与当前时间相差超过3分钟，会报签名失败错误。<br>示例值：1745932688</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >speaker_diarization</td>
+
+<td rowspan="1" colspan="1" >否</td>
+
+<td rowspan="1" colspan="1" >Integer</td>
+
+<td rowspan="1" colspan="1" >是否开启说话人分离（目前支持中文普通话引擎），默认为0，0：不开启，1：开启。<br>示例值：0</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >hotword_id</td>
+
+<td rowspan="1" colspan="1" >否</td>
+
+<td rowspan="1" colspan="1" >String</td>
+
+<td rowspan="1" colspan="1" >热词表 id。如不设置该参数，自动生效默认热词表；如设置了该参数，那么将生效对应的热词表。<br>示例值：da3f5f5555cf11eda6da525400aec391</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >customization_id</td>
+
+<td rowspan="1" colspan="1" >否</td>
+
+<td rowspan="1" colspan="1" >String</td>
+
+<td rowspan="1" colspan="1" >自学习模型 id。如设置了该参数，将生效对应的自学习模型。<br>示例值：39bc8e96504511edbd76446a2eb5fd98</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >filter_dirty</td>
+
+<td rowspan="1" colspan="1" >否</td>
+
+<td rowspan="1" colspan="1" >Integer</td>
+
+<td rowspan="1" colspan="1" >是否过滤脏词（目前支持中文普通话引擎），默认为0。0：不过滤脏词；1：过滤脏词；2：将脏词替换为 *。<br>示例值：0</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >filter_modal</td>
+
+<td rowspan="1" colspan="1" >否</td>
+
+<td rowspan="1" colspan="1" >Integer</td>
+
+<td rowspan="1" colspan="1" >是否过滤语气词（目前支持中文普通话引擎），默认为0。0：不过滤语气词；1：部分过滤；2：严格过滤。<br>示例值：0</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >filter_punc</td>
+
+<td rowspan="1" colspan="1" >否</td>
+
+<td rowspan="1" colspan="1" >Integer</td>
+
+<td rowspan="1" colspan="1" >是否过滤标点符号（目前支持中文普通话引擎），默认为0。0：不过滤，1：过滤句末标点，2：过滤所有标点。<br>示例值：0</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >convert_num_mode</td>
+
+<td rowspan="1" colspan="1" >否</td>
+
+<td rowspan="1" colspan="1" >Integer</td>
+
+<td rowspan="1" colspan="1" >是否进行阿拉伯数字智能转换，默认为1。0：全部转为中文数字；1：根据场景智能转换为阿拉伯数字。<br>示例值：1</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >word_info</td>
+
+<td rowspan="1" colspan="1" >否</td>
+
+<td rowspan="1" colspan="1" >Integer</td>
+
+<td rowspan="1" colspan="1" >是否显示词级别时间戳，默认为0。0：不显示；1：显示词时间戳，不包含标点；2：显示词时间戳，包含标点；3：标点符号分段，包含每段时间戳，特别适用于字幕场景（包含词级时间、标点、语速值）。<br>示例值：0</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >first_channel_only</td>
+
+<td rowspan="1" colspan="1" >否</td>
+
+<td rowspan="1" colspan="1" >Integer</td>
+
+<td rowspan="1" colspan="1" >是否只识别首个声道，默认为1。0：识别所有声道；1：识别首个声道。<br><br><strong>注意：</strong>如识别所有声道，则会按照 声道数*音频时长 来计费，例如时长10秒的双声道文件，如识别所有声道，会按照20秒计费。<br>示例值：1</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >sentence_max_length</td>
+
+<td rowspan="1" colspan="1" >否</td>
+
+<td rowspan="1" colspan="1" >Integer</td>
+
+<td rowspan="1" colspan="1" >单标点最多字数，取值范围：[6，40]。默认为0，不开启该功能。该参数可用于字幕生成场景，控制单行字幕最大字数。仅支持 8k_zh、16k_zh 引擎。（目前仅支持 8k zh/16k zh 引擎。）<br>示例值：0</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >hotword_list</td>
+
+<td rowspan="1" colspan="1" >否</td>
+
+<td rowspan="1" colspan="1" >String</td>
+
+<td rowspan="1" colspan="1" >临时热词表：该参数用于提升识别准确率。<br>- 单个热词限制："热词\|权重"，单个热词不超过30个字符（最多10个汉字），权重[1-11]或者100，如：“腾讯云\|5” 或 “ASR\|11”。<br>- 临时热词表限制：多个热词用英文逗号分隔，最多支持128个热词，如：“腾讯云\|10,语音识别\|5,ASR\|11”。<br>- 参数 hotword_id（热词表） 与 hotword_list（临时热词表） 区别：<br>  - hotword_id：热词表。需要先在控制台或接口创建热词表，获得对应 hotword_id 传入参数来使用热词功能。<br>  - hotword_list：临时热词表。每次请求时直接传入临时热词表来使用热词功能，云端不保留临时热词表。适用于有极大量热词需求的用户。<br><br><strong>注意：</strong><br>- 如果同时传入了 hotword_id 和 hotword_list，会优先使用 hotword_list；<br>- 热词权重设置为11时，当前热词将升级为超级热词，建议仅将重要且必须生效的热词设置到11，设置过多权重为11的热词将影响整体字准率。<br>- 热词权重设置为100时，当前热词开启热词增强同音同调替换功能（仅支持 8k_zh,16k_zh，8k_zh_large，16k_zh_en），举例：热词配置“蜜制\|100”时，与“蜜制”同拼音（mizhi）的“秘制”的识别结果会被强制替换成“蜜制”。因此建议客户根据自己的实际情况开启该功能。建议仅将重要且必须生效的热词设置到100，设置过多权重为100的热词将影响整体字准率。<br>示例值：语音助理\|10,ASR 腾讯云\|10</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >input_sample_rate</td>
+
+<td rowspan="1" colspan="1" >否</td>
+
+<td rowspan="1" colspan="1" >Integer</td>
+
+<td rowspan="1" colspan="1" >支持 PCM 格式的 8k 音频在与引擎采样率不匹配的情况下升采样到 16k 后识别，能有效提升识别准确率。仅支持：8000。如：传入 8000 ，则 PCM 音频采样率为 8k，当引擎选用16k_zh， 那么该8k 采样率的 PCM 音频可以在 16k_zh 引擎下正常识别。<br><br><strong>注意：</strong>此参数仅适用于 PCM 格式音频，不传入值将维持默认状态，即默认调用的引擎采样率等于 PCM 音频采样率。<br>示例值：8000</td>
+</tr>
+</table>
+
+### 4.3 请求 Body 说明
+
+请求 Body 中包含音频原始数据，最大不能超过100MB。
+
+### 4.4 响应结果说明
+
+HTTPS 请求返回的响应为 JSON 结构，具体结构说明如下：
+
+<table>
+<tr>
+<td rowspan="1" colspan="1" >参数</td>
+
+
+<td rowspan="1" colspan="1" >类型</td>
+
+<td rowspan="1" colspan="1" >描述</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >code</td>
+
+<td rowspan="1" colspan="1" >Integer</td>
+
+<td rowspan="1" colspan="1" >0：正常，其他，发生错误。<br>示例值：0</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >message</td>
+
+<td rowspan="1" colspan="1" >String</td>
+
+<td rowspan="1" colspan="1" >code 非0时，message 中会有错误消息。<br>示例值：音频解析失败。</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >request_id</td>
+
+<td rowspan="1" colspan="1" >String</td>
+
+<td rowspan="1" colspan="1" >请求唯一标识，请您记录该值，以便排查错误。<br>示例值：6810d6f958de50265f4837b0</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >audio_duration</td>
+
+<td rowspan="1" colspan="1" >Integer</td>
+
+<td rowspan="1" colspan="1" >音频时长，单位为毫秒。<br>示例值：520</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >flash_result</td>
+
+<td rowspan="1" colspan="1" >[]Result</td>
+
+<td rowspan="1" colspan="1" >声道识别结果列表。<br>示例值：[{"text":"野望。","channel_id":0,"sentence_list":[{"text":"野望。","start_time":0,"end_time":520,"speaker_id":0,"emotional_energy":0,"speech_speed":0,"word_list":[{"word":"野望","start_time":10,"end_time":500}]}]}]</td>
+</tr>
+</table>
+
+Result 结构为：
+
+<table>
+<tr>
+<td rowspan="1" colspan="1" >参数</td>
+
+
+<td rowspan="1" colspan="1" >类型</td>
+
+<td rowspan="1" colspan="1" >描述</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >channel_id</td>
+
+<td rowspan="1" colspan="1" >Integer</td>
+
+<td rowspan="1" colspan="1" >声道标识，从0开始，对应音频声道数。<br>示例值：0</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >text</td>
+
+<td rowspan="1" colspan="1" >String</td>
+
+<td rowspan="1" colspan="1" >声道音频完整识别结果。<br>示例值：野望。</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >sentence_list</td>
+
+<td rowspan="1" colspan="1" >[]Sentence</td>
+
+<td rowspan="1" colspan="1" >句子/段落级别的识别结果列表。<br>示例值：[{"text":"野望。","start_time":0,"end_time":520,"speaker_id":0,"emotional_energy":0,"speech_speed":0,"word_list":[{"word":"野望","start_time":10,"end_time":500}]}]</td>
+</tr>
+</table>
+
+Sentence 结构为：
+
+<table>
+<tr>
+<td rowspan="1" colspan="1" >参数</td>
+
+
+<td rowspan="1" colspan="1" >类型</td>
+
+<td rowspan="1" colspan="1" >描述</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >text</td>
+
+<td rowspan="1" colspan="1" >String</td>
+
+<td rowspan="1" colspan="1" >句子/段落级别文本。<br>示例值：野望。</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >start_time</td>
+
+<td rowspan="1" colspan="1" >Integer</td>
+
+<td rowspan="1" colspan="1" >开始时间。<br>示例值：0</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >end_time</td>
+
+<td rowspan="1" colspan="1" >Integer</td>
+
+<td rowspan="1" colspan="1" >结束时间。<br>示例值：520</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >speaker_id</td>
+
+<td rowspan="1" colspan="1" >Integer</td>
+
+<td rowspan="1" colspan="1" >说话人 ID（请求中如果设置了 speaker_diarization，可以按照 speaker_id 来区分说话人）。<br>示例值：1</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >word_list</td>
+
+<td rowspan="1" colspan="1" >[]Word</td>
+
+<td rowspan="1" colspan="1" >词级别的识别结果列表。<br>示例值： [{"word":"我","start_time":380,"end_time":680,"stable_flag":1}]</td>
+</tr>
+</table>
+
+Word 结构为：
+
+<table>
+<tr>
+<td rowspan="1" colspan="1" >参数</td>
+
+
+<td rowspan="1" colspan="1" >类型</td>
+
+<td rowspan="1" colspan="1" >描述</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >word</td>
+
+<td rowspan="1" colspan="1" >String</td>
+
+<td rowspan="1" colspan="1" >词级别文本。<br>示例值：开心</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >start_time</td>
+
+<td rowspan="1" colspan="1" >Integer</td>
+
+<td rowspan="1" colspan="1" >开始时间。<br>示例值：100</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >end_time</td>
+
+<td rowspan="1" colspan="1" >Integer</td>
+
+<td rowspan="1" colspan="1" >结束时间。<br>示例值：500</td>
+</tr>
+</table>
+
+### 4.5 签名生成说明
+
+1. 对所有参数按字典序进行排序，拼接 POST 串 + 请求 URL 作为签名原文，这里以 `appid=125922***`，`SecretID= *****Qq1zhZMN8dv0******` 为例拼接签名原文，如下：
+
+   ``` bash
+   POSTasr.cloud.tencent.com/asr/flash/v1/125922***?engine_type=16k_zh_beta&extra_punc=0&filter_punc=0&first_channel_only=1&hotword_id=584f4d0060d811ed85da525400aec391&reinforce_hotword=0&secretid=*****Qq1zhZMN8dv0******&speaker_diarization=0&timestamp=1673426168&voice_format=wav&word_info=1
+   ```
+
+2. 对签名原文使用 SecretKey 进行 HMAC-SHA1 加密，之后再进行 base64 编码。例如对上一步的签名原文， `SecretKey=*****SkqpeHgqmSz*****`，使用 HMAC-SHA1 算法进行加密并做 base64 编码处理：
+
+   ``` bash
+   Base64Encode(HmacSha1("POSTasr.cloud.tencent.com/asr/flash/v1/125922***?engine_type=16k_zh_beta&extra_punc=0&filter_punc=0&first_channel_only=1&hotword_id=584f4d0060d811ed85da525400aec391&reinforce_hotword=0&secretid=*****Qq1zhZMN8dv0******&speaker_diarization=0&timestamp=1673426168&voice_format=wav&word_info=1", "*****SkqpeHgqmSz*****"))
+   ```
+
+   得到 signature 签名值为：
+
+   ``` bash
+   vLBmoXJ8Oi4YMEuNhpIyrOo+deM=
+   ```
+
+### 4.6 请求示例
+
+用户通过4.5签名生成的签名为 vLBmoXJ8Oi4YMEuNhpIyrOo+deM=，语音数据路径为 /data/test.wav，请求录音识别极速版服务，这里以 curl 请求为例来说明。
+
+``` bash
+curl --data-binary "@/data/test.wav" -H "Authorization:vLBmoXJ8Oi4YMEuNhpIyrOo+deM=" -X POST "https://asr.cloud.tencent.com/asr/flash/v1/125922****?convert_num_mode=1&engine_type=16k_zh&filter_dirty=0&filter_modal=0&filter_punc=0&first_channel_only=1&hotword_id=&secretid=A*********************************0r&speaker_diarization=0&timestamp=1609560089&voice_format=wav&word_info=0"
+```
+
+### 4.7 返回示例
+
+``` bash
+{
+    "request_id":"6098aecab9c686fbfd35adb0",
+    "code":0,
+    "message":"",
+    "audio_duration":2386,
+    "flash_result":[
+        {
+            "text":"腾讯云智能语音欢迎您。",
+            "channel_id":0,
+            "sentence_list":[
+                {
+                    "text":"腾讯云智能语音欢迎您。",
+                    "start_time":0,
+                    "end_time":2386,
+                    "speaker_id":0,
+                    "word_list":[
+                        {
+                            "word":"腾讯云",
+                            "start_time":0,
+                            "end_time":780,
+                            "stable_flag":1
+                        },
+                        {
+                            "word":"智能语音",
+                            "start_time":780,
+                            "end_time":1590,
+                            "stable_flag":1
+                        },
+                        {
+                            "word":"欢迎",
+                            "start_time":1590,
+                            "end_time":1950,
+                            "stable_flag":1
+                        },
+                        {
+                            "word":"您",
+                            "start_time":1950,
+                            "end_time":2250,
+                            "stable_flag":1
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}
+```
+
+## 5. 开发者资源
+
+### SDK
+
+- Tencent Cloud Speech SDK for Python:[GitHub](https://github.com/TencentCloud/tencentcloud-speech-sdk-python),[CNB](https://cnb.cool/tencent/cloud/speech/tencentcloud-speech-sdk-python)
+
+- Tencent Cloud Speech SDK for Go:[GitHub](https://github.com/TencentCloud/tencentcloud-speech-sdk-go),[CNB](https://cnb.cool/tencent/cloud/speech/tencentcloud-speech-sdk-go)
+
+- Tencent Cloud Speech SDK for Java:[GitHub](https://github.com/TencentCloud/tencentcloud-speech-sdk-java),[CNB](https://cnb.cool/tencent/cloud/speech/tencentcloud-speech-sdk-java)
+
+### SDK 调用示例
+
+- [Python 示例](https://github.com/TencentCloud/tencentcloud-speech-sdk-python/blob/master/examples/asr/flashexample.py)
+
+- [Golang 示例](https://github.com/TencentCloud/tencentcloud-speech-sdk-go/blob/master/examples/flashexample/flashexample.go)
+
+- [Java 示例](https://github.com/TencentCloud/tencentcloud-speech-sdk-java-example/blob/main/src/main/java/com/tencentcloud/asrflash/FlashRecognizerExample.java)
+
+## 6. 错误码说明
+
+<table>
+<tr>
+<td rowspan="1" colspan="1" >数值</td>
+
+
+<td rowspan="1" colspan="1" >说明</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >4001</td>
+
+<td rowspan="1" colspan="1" >参数不合法，具体详情参考 message。</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >4002</td>
+
+<td rowspan="1" colspan="1" >鉴权失败。</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >4003</td>
+
+<td rowspan="1" colspan="1" >AppID 服务未开通，请在控制台开通服务。</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >4004</td>
+
+<td rowspan="1" colspan="1" >资源包耗尽，请开通后付费或者购买资源包。</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >4005</td>
+
+<td rowspan="1" colspan="1" >账户欠费停止服务，请及时充值。</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >4006</td>
+
+<td rowspan="1" colspan="1" >账号当前调用并发超限。</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >4007</td>
+
+<td rowspan="1" colspan="1" >音频解码失败，请检查上传音频数据格式与调用参数一致。</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >4008</td>
+
+<td rowspan="1" colspan="1" >客户端数据上传超时。</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >4009</td>
+
+<td rowspan="1" colspan="1" >客户端连接断开。</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >4010</td>
+
+<td rowspan="1" colspan="1" >客户端上传未知文本消息。</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >4011</td>
+
+<td rowspan="1" colspan="1" >音频数据太大。</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >4012</td>
+
+<td rowspan="1" colspan="1" >音频数据为空。</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >5001</td>
+
+<td rowspan="1" colspan="1" >因机器负载过高、网络抖动等导致失败，请重新发起识别。<br><strong>注意：</strong>该问题通常为偶发，少量出现可忽略，发起新识别即可。</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >5002</td>
+
+<td rowspan="1" colspan="1" >音频识别失败，偶发可以忽略，重复出现请提交工单。</td>
+</tr>
+
+<tr>
+<td rowspan="1" colspan="1" >5003</td>
+
+<td rowspan="1" colspan="1" >音频识别超时，偶发可以忽略，重复出现请提交工单。</td>
+</tr>
+</table>
+

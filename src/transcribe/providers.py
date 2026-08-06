@@ -566,6 +566,44 @@ class ByteDanceProvider(TranscriptionProvider):
         )
 
 
+class TencentProvider(TranscriptionProvider):
+    """Tencent Cloud realtime-only ASR provider."""
+
+    def name(self) -> str:
+        return "tencent"
+
+    def supports_streaming_input(self) -> bool:
+        return True
+
+    def supported_input_modes(self) -> frozenset[InputMode]:
+        return frozenset({InputMode.LIVE_AUDIO})
+
+    def create_streaming_session(
+        self,
+        task_id: str,
+        time_start: float,
+    ) -> StreamingTranscriptionSession:
+        from src.transcribe.tencent.tencent_transcribe_ws import (
+            TencentStreamingSession,
+        )
+
+        return TencentStreamingSession(task_id, time_start)
+
+    async def transcribe(
+        self,
+        payload_buf: io.BytesIO,
+        payload_mime: str,
+        task_id: str,
+        time_start: float,
+        record_stop: float,
+        max_retries: int,
+        base_delay: float,
+    ) -> Tuple[str, int, float, float, Dict[str, Any]]:
+        raise NotImplementedError(
+            "Tencent Hy-ASR-3.0-preview supports live audio only; select live_audio mode"
+        )
+
+
 _PROVIDER_REGISTRY: dict[str, Type[TranscriptionProvider]] = {
     "openai": OpenAIProvider,
     "replicate": ReplicateProvider,
@@ -577,6 +615,7 @@ _PROVIDER_REGISTRY: dict[str, Type[TranscriptionProvider]] = {
     "openrouter": OpenRouterProvider,
     "xiaomi": XiaomiProvider,
     "bytedance": ByteDanceProvider,
+    "tencent": TencentProvider,
 }
 
 _PROVIDER_ALIASES = {
@@ -599,6 +638,8 @@ _PROVIDER_ALIASES = {
     "doubao": "bytedance",
     "volcengine": "bytedance",
     "volc": "bytedance",
+    "tencent-cloud": "tencent",
+    "hunyuan-asr": "tencent",
 }
 
 
