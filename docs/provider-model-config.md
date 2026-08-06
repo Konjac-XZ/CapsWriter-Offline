@@ -43,10 +43,12 @@ description: OpenRouter transcription models
 settings:
   api_key: ${OPENROUTER_API_KEY}
   base_url: https://openrouter.ai
+  dump_request_json: false
 models:
   chirp-3:
     name: Chirp 3
     upstream_model: google/chirp-3
+    incremental_output: true
     settings:
       prompt_provider_slug: google-vertex
     modes:
@@ -54,11 +56,37 @@ models:
   gpt-4o-transcribe:
     name: GPT-4o Transcribe
     upstream_model: openai/gpt-4o-transcribe
+    incremental_output: true
     settings:
       prompt_provider_slug: openai
     modes:
       file_upload: {}
+  gpt-transcribe:
+    name: GPT Transcribe
+    upstream_model: openai/gpt-transcribe
+    incremental_output: true
+    settings:
+      prompt_provider_slug: openai
+      languages: [zh-cn, en]
+    modes:
+      file_upload: {}
 ```
+
+OpenRouter's top-level transcription `prompt` is ignored. The adapter therefore
+places context below `provider.options[provider_slug]`: OpenAI transcription
+models receive `prompt`, while Chirp 3 receives Google Speech V2's nested
+`config.features.customPromptConfig`. GPT Transcribe additionally receives the
+GUI user lexicon as `keywords` and its expected languages as `languages`.
+
+All OpenRouter models above stream partial text from a completed file upload,
+so they declare `incremental_output: true`. They do not declare `live_audio`:
+incremental HTTP/SSE output is not a WebSocket Realtime transcription session.
+
+Set `dump_request_json: true` to write the exact JSON body for every OpenRouter
+request attempt to the system temporary directory under
+`CapsWriter-Offline/openrouter-requests`. Dumps include base64 audio, context,
+and keywords, but never the authorization header or API key. The emitted
+`request_dump=...` log line reports the full path for each request ID.
 
 Another provider may also declare `name: GPT-4o Transcribe`; its composite model
 reference remains different because its provider ID differs.

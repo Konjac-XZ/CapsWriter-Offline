@@ -1,4 +1,7 @@
+import asyncio
 import base64
+import json
+from typing import Any, cast
 
 from src.transcribe.openrouter import openrouter_transcribe_http as openrouter
 from src.transcribe.providers import OpenRouterProvider, make_provider
@@ -26,6 +29,7 @@ def test_infer_audio_format_prefers_configured_value(monkeypatch):
 
 def test_build_request_body_includes_openrouter_audio_shape(monkeypatch):
     monkeypatch.setattr(openrouter, "get_model", lambda: "google/chirp-3")
+    monkeypatch.setattr(openrouter, "get_language", lambda: None)
     monkeypatch.setattr(openrouter, "get_temperature", lambda: 0.0)
     monkeypatch.setattr(openrouter, "get_configured_audio_format", lambda: "auto")
     monkeypatch.setattr(openrouter, "should_send_prompt", lambda: False)
@@ -39,6 +43,7 @@ def test_build_request_body_includes_openrouter_audio_shape(monkeypatch):
             "data": audio_b64,
             "format": "wav",
         },
+        "stream": True,
         "temperature": 0.0,
     }
 
@@ -77,7 +82,7 @@ def test_build_request_body_sends_google_speech_v2_prompt_to_google_vertex_optio
             }
         }
     }
-    assert "language" not in body
+    assert body["language"] == "zh"
 
 
 def test_build_google_speech_v2_options_omits_decoding_and_language_without_prompt():
@@ -108,13 +113,191 @@ def test_build_request_body_auto_sends_openai_transcription_prompt(monkeypatch):
             }
         }
     }
+    assert body["language"] == "zh"
+
+
+def test_build_request_body_sends_gpt_transcribe_context_fields(monkeypatch):
+    monkeypatch.setattr(openrouter, "get_model", lambda: "openai/gpt-transcribe")
+    monkeypatch.setattr(openrouter, "get_temperature", lambda: None)
+    monkeypatch.setattr(openrouter, "get_configured_audio_format", lambda: "auto")
+    monkeypatch.setattr(openrouter, "should_send_prompt", lambda: True)
+    monkeypatch.setattr(openrouter, "get_prompt_provider_slug", lambda: "openai")
+    monkeypatch.setattr(openrouter, "get_prompt_option_shape", lambda: "auto")
+    monkeypatch.setattr(
+        openrouter, "ps_get_context_prompt", lambda: "A coding meeting."
+    )
+    monkeypatch.setattr(
+        openrouter, "load_words", lambda: ["OpenRouter", "API", "bad<term>"]
+    )
+    monkeypatch.setattr(
+        openrouter,
+        "ps_get_value",
+        lambda key, env=None, default=None: ["zh-cn", "en"],
+    )
+
+    body = openrouter.build_request_body("audio/wav", "YXVkaW8=")
+
+    assert body["provider"] == {
+        "options": {
+            "openai": {
+                "prompt": "A coding meeting.",
+                "keywords": ["OpenRouter", "API"],
+                "languages": ["zh-cn", "en"],
+            }
+        }
+    }
     assert "language" not in body
+
+
+def test_extract_stream_text_supports_openai_transcript_events():
+    assert openrouter._extract_stream_text(
+        {"type": "transcript.text.delta", "delta": "hello"}
+    ) == ("hello", True)
+    assert openrouter._extract_stream_text(
+        {"type": "transcript.text.done", "text": "hello world"}
+    ) == ("hello world", False)
+
+
+def test_emit_transcript_delta_marks_append_only_stream(monkeypatch):
+    class _Queue:
+        def __init__(self):
+            self.messages = []
+
+        async def put(self, message):
+            self.messages.append(message)
+
+    queue = _Queue()
+    monkeypatch.setattr(openrouter.Cosmic, "queue_out", queue, raising=False)
+
+    asyncio.run(openrouter._emit_transcript_delta("task", "hello", 1.0, 2.0, 3.0))
+
+    assert queue.messages == [
+        {
+            "task_id": "task",
+            "is_final": False,
+            "text": "hello",
+            "time_start": 1.0,
+            "time_stop": 2.0,
+            "time_submit": 3.0,
+            "time_complete": queue.messages[0]["time_complete"],
+            "source": "mic",
+            "is_transcript_delta": True,
+            "stream": True,
+        }
+    ]
+
+
+def test_stream_transcribe_emits_the_complete_accumulated_delta_text(monkeypatch):
+    class _Queue:
+        def __init__(self):
+            self.messages = []
+
+        async def put(self, message):
+            self.messages.append(message)
+
+    class _Response:
+        status_code = 200
+        http_version = "HTTP/2"
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def aiter_lines(self):
+            for line in (
+                'data: {"type":"transcript.text.delta","delta":"hello"}',
+                'data: {"type":"transcript.text.delta","delta":" world"}',
+                'data: {"type":"transcript.text.done","text":"hello world"}',
+                "data: [DONE]",
+            ):
+                yield line
+
+    class _Client:
+        def stream(self, method, url, headers=None, json=None):
+            return _Response()
+
+    queue = _Queue()
+    monkeypatch.setattr(openrouter.Cosmic, "queue_out", queue, raising=False)
+
+    result = asyncio.run(
+        openrouter.stream_transcribe(
+            cast(Any, _Client()),
+            "https://example.test",
+            {},
+            {"stream": True},
+            "task",
+            1.0,
+            2.0,
+        )
+    )
+
+    assert result[0] == "hello world"
+    assert result[1] == 200
+    assert result[4] is True
+    assert queue.messages[-1]["text"] == "hello world"
 
 
 def test_build_prompt_provider_options_supports_flat_prompt(monkeypatch):
     monkeypatch.setattr(openrouter, "get_prompt_option_shape", lambda: "flat")
 
     assert openrouter.build_prompt_provider_options("vocab") == {"prompt": "vocab"}
+
+
+def test_safe_request_summary_does_not_log_context_or_keywords():
+    summary = openrouter._safe_request_summary(
+        {
+            "model": "openai/gpt-transcribe",
+            "provider": {
+                "options": {
+                    "openai": {
+                        "prompt": "private meeting context",
+                        "keywords": ["secret-product", "AC-42"],
+                        "languages": ["zh-cn", "en"],
+                    }
+                }
+            },
+        }
+    )
+
+    assert summary["provider"] == {
+        "options": {
+            "openai": {
+                "keys": ["keywords", "languages", "prompt"],
+                "keywords_count": 2,
+            }
+        }
+    }
+    assert "private meeting context" not in str(summary)
+    assert "secret-product" not in str(summary)
+
+
+def test_dump_request_json_writes_exact_body_to_temp_directory(tmp_path, monkeypatch):
+    request_body = {
+        "model": "openai/gpt-transcribe",
+        "input_audio": {"data": "SECRET_AUDIO_BASE64", "format": "wav"},
+        "stream": True,
+        "provider": {
+            "options": {
+                "openai": {
+                    "prompt": "Private meeting context",
+                    "keywords": ["CapsWriter"],
+                    "languages": ["zh-cn", "en"],
+                }
+            }
+        },
+    }
+    monkeypatch.setattr(openrouter, "should_dump_request_json", lambda: True)
+    monkeypatch.setattr(openrouter, "get_request_dump_dir", lambda: tmp_path)
+
+    path = openrouter.dump_request_json(request_body, "or-00001")
+
+    assert path is not None
+    assert path.parent == tmp_path
+    assert path.name.endswith("_or-00001.json")
+    assert json.loads(path.read_text(encoding="utf-8")) == request_body
+    assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_build_headers_adds_optional_openrouter_metadata(monkeypatch):

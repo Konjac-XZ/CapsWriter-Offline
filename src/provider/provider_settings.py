@@ -142,19 +142,39 @@ def get_int(
     return default if val is None else int(val)
 
 
+def get_context_prompt() -> str:
+    """Return free-form transcription context without user lexicon terms."""
+    resolved = _resolved_model.get()
+    if resolved is not None:
+        settings = resolved.settings
+        custom_prompt = settings.get("prompt")
+        if isinstance(custom_prompt, str) and custom_prompt.strip():
+            return custom_prompt
+
+        preset_name = settings.get("prompt_preset")
+        if isinstance(preset_name, str) and preset_name.strip():
+            if provider_manager is not None:
+                try:
+                    preset = provider_manager.get_prompt_preset(preset_name)
+                    if isinstance(preset, str) and preset.strip():
+                        return preset
+                except Exception:
+                    pass
+
+    if provider_manager is not None:
+        try:
+            prompt = provider_manager.get_provider_prompt()
+            if isinstance(prompt, str) and prompt.strip():
+                return prompt
+        except Exception:
+            pass
+    return os.getenv("TRANSCRIBE_PROMPT", "")
+
+
 def get_prompt() -> str:
     from src.infra.user_lexicon import (
         get_hot_word_block,
     )  # local import to avoid circular deps
 
-    if provider_manager is not None:
-        try:
-            p = provider_manager.get_provider_prompt()
-            if isinstance(p, str) and p.strip():
-                return p + get_hot_word_block()
-        except Exception:
-            pass
-    base = os.getenv("TRANSCRIBE_PROMPT", "")
-    if base:
-        return base + get_hot_word_block()
-    return base
+    base = get_context_prompt()
+    return base + get_hot_word_block() if base else base
