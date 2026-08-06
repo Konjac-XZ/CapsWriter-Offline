@@ -1,10 +1,12 @@
 from types import SimpleNamespace
 from typing import cast
 
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QStandardItemModel
 from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox
 
 from src.provider.domain import InputMode, ModelRef
-from start_client_gui import GUI
+from start_client_gui import AdaptivePopupComboBox, GUI
 
 
 class _ModelCombo:
@@ -90,14 +92,33 @@ def test_realtime_toggle_persists_mode_for_selected_model():
     assert restarts == [True]
 
 
-def test_model_combo_keeps_duplicate_names_as_distinct_provider_refs():
+def test_model_combo_groups_sorts_and_keeps_distinct_provider_refs():
     app = QApplication.instance() or QApplication([])
     alpha = ModelRef("alpha", "shared")
     beta = ModelRef("beta", "shared")
     manager = SimpleNamespace(
         list_models=lambda: [
-            {"ref": alpha, "label": "Shared ASR · Alpha"},
-            {"ref": beta, "label": "Shared ASR · Beta"},
+            {
+                "ref": beta,
+                "provider_id": "beta",
+                "provider_name": "Beta Provider",
+                "model_id": "shared",
+                "name": "Shared ASR",
+            },
+            {
+                "ref": ModelRef("alpha", "zulu"),
+                "provider_id": "alpha",
+                "provider_name": "Alpha Provider",
+                "model_id": "zulu",
+                "name": "Zulu ASR",
+            },
+            {
+                "ref": alpha,
+                "provider_id": "alpha",
+                "provider_name": "Alpha Provider",
+                "model_id": "shared",
+                "name": "Shared ASR",
+            },
         ],
         get_active_model_ref=lambda: beta,
     )
@@ -111,10 +132,57 @@ def test_model_combo_keeps_duplicate_names_as_distinct_provider_refs():
 
     GUI.populate_model_combo(cast(GUI, owner))
 
-    assert combo.count() == 2
-    assert combo.itemData(0) == alpha
-    assert combo.itemData(1) == beta
+    assert combo.count() == 5
+    assert [combo.itemText(index) for index in range(combo.count())] == [
+        "Alpha Provider",
+        "    Shared ASR",
+        "    Zulu ASR",
+        "Beta Provider",
+        "    Shared ASR",
+    ]
+    assert combo.itemData(0) is None
+    assert combo.itemData(1) == alpha
+    assert combo.itemData(2) == ModelRef("alpha", "zulu")
+    assert combo.itemData(3) is None
+    assert combo.itemData(4) == beta
     assert combo.currentData() == beta
-    assert messages == ["转录模型选择器已准备就绪，共 2 个选项"]
+    item_model = cast(QStandardItemModel, combo.model())
+    assert item_model.item(0).isEnabled() is True
+    assert not item_model.item(0).flags() & Qt.ItemFlag.ItemIsSelectable
+    assert item_model.item(0).font().bold() is True
+    assert item_model.item(3).isEnabled() is True
+    assert not item_model.item(3).flags() & Qt.ItemFlag.ItemIsSelectable
+    assert item_model.item(3).font().bold() is True
+    assert messages == ["转录模型选择器已准备就绪，共 3 个选项"]
+    combo.deleteLater()
+    app.processEvents()
+
+
+def test_model_combo_popup_uses_all_rows_when_space_allows():
+    app = QApplication.instance() or QApplication([])
+    combo = AdaptivePopupComboBox()
+    combo.addItems(["Provider", "    Alpha", "    Beta", "    Gamma"])
+    required_height = (
+        sum(combo._popup_row_height(index) for index in range(combo.count())) + 10
+    )
+
+    visible_items = combo._fit_popup_to_available_height(required_height)
+
+    assert visible_items == combo.count()
+    assert combo.maxVisibleItems() == combo.count()
+    combo.deleteLater()
+    app.processEvents()
+
+
+def test_model_combo_popup_scrolls_only_when_space_is_insufficient():
+    app = QApplication.instance() or QApplication([])
+    combo = AdaptivePopupComboBox()
+    combo.addItems(["Provider", "    Alpha", "    Beta", "    Gamma"])
+    one_row_height = combo._popup_row_height(0) + 4
+
+    visible_items = combo._fit_popup_to_available_height(one_row_height)
+
+    assert visible_items == 1
+    assert combo.maxVisibleItems() == 1
     combo.deleteLater()
     app.processEvents()

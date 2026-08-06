@@ -15,6 +15,7 @@ import yaml
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer
 from PySide6.QtGui import (
     QIcon,
+    QStandardItemModel,
     QWheelEvent,
     QTextDocument,
     QTextOption,
@@ -124,6 +125,60 @@ GUI_COLOR_ALIASES = {
     "white": "#000000",
     "bright_white": "#000000",
 }
+
+
+class AdaptivePopupComboBox(QComboBox):
+    """Fit as many popup rows as possible into the space below the control."""
+
+    _POPUP_MARGIN_PX = 6
+
+    def _popup_row_height(self, index: int) -> int:
+        row_height = self.view().sizeHintForRow(index)
+        if row_height <= 0:
+            row_height = self.sizeHint().height()
+        return max(1, row_height)
+
+    def _fit_popup_to_available_height(self, available_height: int) -> int:
+        item_count = self.count()
+        if item_count <= 0:
+            self.setMaxVisibleItems(1)
+            return 0
+
+        view = self.view()
+        chrome_height = max(2, view.frameWidth() * 2 + 2)
+        row_budget = max(1, available_height - chrome_height)
+        used_height = 0
+        visible_items = 0
+        total_row_height = 0
+        for index in range(item_count):
+            row_height = self._popup_row_height(index)
+            total_row_height += row_height
+            if visible_items == 0 or used_height + row_height <= row_budget:
+                used_height += row_height
+                visible_items += 1
+            else:
+                break
+
+        visible_items = min(item_count, max(1, visible_items))
+        self.setMaxVisibleItems(visible_items)
+        view.setMaximumHeight(
+            max(1, min(total_row_height + chrome_height, available_height))
+        )
+        return visible_items
+
+    def showPopup(self) -> None:
+        popup_origin = self.mapToGlobal(QPoint(0, self.height()))
+        screen = QGuiApplication.screenAt(popup_origin) or self.screen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            available_below = (
+                available.bottom() - popup_origin.y() + 1 - self._POPUP_MARGIN_PX
+            )
+            self._fit_popup_to_available_height(max(1, available_below))
+        else:
+            self.setMaxVisibleItems(max(1, self.count()))
+        super().showPopup()
+
 
 GUI_TIMING_SLOW_MS = 100.0
 GUI_TIMER_GAP_MS = 500.0
@@ -629,7 +684,7 @@ class GUI(QMainWindow):
         provider_row.setSpacing(6)
         provider_row.setContentsMargins(0, 0, 0, 0)
 
-        self.model_combo = QComboBox()
+        self.model_combo = AdaptivePopupComboBox()
         self._configure_collapsible_combo(self.model_combo)
         provider_field, self.model_label = self._build_combo_field(
             "转录模型:", self.model_combo
@@ -1048,7 +1103,7 @@ class GUI(QMainWindow):
             self.sync_asr_realtime_control()
 
     def populate_model_combo(self):
-        """Populate the flattened, declarative provider/model catalog."""
+        """Populate a provider-grouped, declarative model catalog."""
         if not hasattr(self, "model_combo"):
             return
         self.model_combo.blockSignals(True)
@@ -1062,13 +1117,62 @@ class GUI(QMainWindow):
                 self.model_combo.addItem("未找到转录模型配置", None)
                 return
             active = self.provider_manager.get_active_model_ref()
-            active_index = 0
-            for index, model_info in enumerate(models):
-                ref = model_info["ref"]
-                self.model_combo.addItem(model_info["label"], ref)
-                if ref == active:
-                    active_index = index
-            self.model_combo.setCurrentIndex(active_index)
+            groups: dict[str, dict[str, Any]] = {}
+            for model_info in models:
+                provider_id = str(model_info["provider_id"])
+                group = groups.setdefault(
+                    provider_id,
+                    {
+                        "provider_id": provider_id,
+                        "provider_name": str(model_info["provider_name"]),
+                        "models": [],
+                    },
+                )
+                group["models"].append(model_info)
+
+            active_index: int | None = None
+            first_model_index: int | None = None
+            item_model = cast(QStandardItemModel, self.model_combo.model())
+            sorted_groups = sorted(
+                groups.values(),
+                key=lambda group: (
+                    group["provider_name"].casefold(),
+                    group["provider_id"].casefold(),
+                ),
+            )
+            for group in sorted_groups:
+                self.model_combo.addItem(group["provider_name"], None)
+                header_index = self.model_combo.count() - 1
+                header_item = item_model.item(header_index)
+                if header_item is not None:
+                    header_item.setFlags(
+                        header_item.flags() & ~Qt.ItemFlag.ItemIsSelectable
+                    )
+                    header_font = header_item.font()
+                    header_font.setBold(True)
+                    header_item.setFont(header_font)
+
+                sorted_models = sorted(
+                    group["models"],
+                    key=lambda model_info: (
+                        str(model_info["name"]).casefold(),
+                        str(model_info["model_id"]).casefold(),
+                    ),
+                )
+                for model_info in sorted_models:
+                    ref = model_info["ref"]
+                    self.model_combo.addItem(f"    {model_info['name']}", ref)
+                    model_index = self.model_combo.count() - 1
+                    if first_model_index is None:
+                        first_model_index = model_index
+                    if ref == active:
+                        active_index = model_index
+
+            selected_index = active_index
+            if selected_index is None:
+                selected_index = first_model_index
+            if selected_index is not None:
+                self.model_combo.setCurrentIndex(selected_index)
             self.log_message(f"转录模型选择器已准备就绪，共 {len(models)} 个选项")
         finally:
             self.model_combo.blockSignals(False)
