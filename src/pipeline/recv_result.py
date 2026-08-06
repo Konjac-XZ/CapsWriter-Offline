@@ -10,7 +10,6 @@ from src.infra.cosmic import Cosmic, console
 from src.infra.daily_input_stats import record_input_characters
 from src.infra.gui_output import gui_event
 from src.pipeline.regex_replace import regex_replace
-from src.pipeline.strip_punc import strip_punc
 from src.pipeline.type_result import type_result
 from src.pipeline.write_md import write_md
 from src.polish.llm_polish import (
@@ -118,10 +117,6 @@ async def recv_result():
                     _emit_status_overlay("hide")
                 continue
 
-            # 增量转录结果：对中间增量不做末尾标点剥离，避免抖动
-            if not is_transcript_delta:
-                text = strip_punc(text)
-
             # 最终结果可选走一次 LLM 润色；保持在正则替换与空白格式化之前
             if is_final:
                 console.print(f"转录原文：{raw_asr}", soft_wrap=True)
@@ -176,7 +171,7 @@ async def recv_result():
                     _emit_status_overlay("hide")
                 continue
 
-            # 正则替换（在 strip_punc 之后、pangu 之前执行）
+            # 正则替换（在 LLM 润色之后、pangu 之前执行）
             text = regex_replace(text)
 
             # # 中文数字 ITN（在正则替换之后、空白格式化之前执行）

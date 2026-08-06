@@ -184,7 +184,7 @@ def test_final_tsf_output_requires_confirmed_commit_or_cancelled_fallback(
     played = []
 
     async def fake_polish(text, *, on_text=None, **_kwargs):
-        assert text == "ASR full text"
+        assert text == "。ASR full text，"
         assert on_text is not None
         await on_text("LLM partial full text")
         return "LLM final full text"
@@ -195,7 +195,7 @@ def test_final_tsf_output_requires_confirmed_commit_or_cancelled_fallback(
     message = {
         "task_id": "task-1",
         "is_final": True,
-        "text": "ASR full text",
+        "text": "。ASR full text，",
         "time_start": 1.0,
         "time_submit": 2.0,
         "time_complete": 3.0,
@@ -210,7 +210,6 @@ def test_final_tsf_output_requires_confirmed_commit_or_cancelled_fallback(
     monkeypatch.setattr(pipeline, "is_llm_polish_enabled", lambda: True)
     monkeypatch.setattr(pipeline, "should_polish_text", lambda _text: True)
     monkeypatch.setattr(pipeline, "polish_text", fake_polish)
-    monkeypatch.setattr(pipeline, "strip_punc", lambda text: text)
     monkeypatch.setattr(pipeline, "regex_replace", lambda text: text)
     monkeypatch.setattr(pipeline.pangu, "spacing_text", lambda text: text)
     monkeypatch.setattr(pipeline, "type_result", fake_type_result)
@@ -229,7 +228,7 @@ def test_final_tsf_output_requires_confirmed_commit_or_cancelled_fallback(
     asyncio.run(pipeline.recv_result())
 
     assert bridge.revisions == [
-        ("task-1", "ASR full text", CompositionStyle.TRANSCRIPTION),
+        ("task-1", "。ASR full text，", CompositionStyle.TRANSCRIPTION),
         ("task-1", "LLM partial full text", CompositionStyle.POLISHING),
     ]
     assert bridge.commits == [("task-1", "LLM final full text")]
@@ -485,7 +484,6 @@ def _configure_final_message_test(monkeypatch, bridge, message, fake_polish):
     monkeypatch.setattr(pipeline, "is_llm_polish_enabled", lambda: True)
     monkeypatch.setattr(pipeline, "should_polish_text", lambda _text: True)
     monkeypatch.setattr(pipeline, "polish_text", fake_polish)
-    monkeypatch.setattr(pipeline, "strip_punc", lambda text: text)
     monkeypatch.setattr(pipeline, "regex_replace", lambda text: text)
     monkeypatch.setattr(pipeline.pangu, "spacing_text", lambda text: text)
     monkeypatch.setattr(pipeline.Config, "save_audio", False)
