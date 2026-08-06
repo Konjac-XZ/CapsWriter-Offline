@@ -82,11 +82,14 @@ All OpenRouter models above stream partial text from a completed file upload,
 so they declare `incremental_output: true`. They do not declare `live_audio`:
 incremental HTTP/SSE output is not a WebSocket Realtime transcription session.
 
-Set `dump_request_json: true` to write the exact JSON body for every OpenRouter
-request attempt to the system temporary directory under
-`CapsWriter-Offline/openrouter-requests`. Dumps include base64 audio, context,
-and keywords, but never the authorization header or API key. The emitted
-`request_dump=...` log line reports the full path for each request ID.
+Every provider supports `dump_request_json`, and the setting defaults to
+`false`. Set it to `true` in that provider's top-level `settings` to write one
+provider-bound request dump under the system temporary directory at
+`CapsWriter-Offline/request-dumps/<provider-id>`. File-upload dumps include the
+audio as Base64; live-audio dumps record the immutable session setup (streamed
+audio chunks are not retained). Effective settings are included for debugging,
+but API keys, secrets, tokens, passwords, and credentials are replaced with
+`***`. The emitted `request_dump=...` log line reports the full path.
 
 Another provider may also declare `name: GPT-4o Transcribe`; its composite model
 reference remains different because its provider ID differs.

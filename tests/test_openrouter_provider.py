@@ -1,6 +1,5 @@
 import asyncio
 import base64
-import json
 from typing import Any, cast
 
 from src.transcribe.openrouter import openrouter_transcribe_http as openrouter
@@ -271,33 +270,6 @@ def test_safe_request_summary_does_not_log_context_or_keywords():
     }
     assert "private meeting context" not in str(summary)
     assert "secret-product" not in str(summary)
-
-
-def test_dump_request_json_writes_exact_body_to_temp_directory(tmp_path, monkeypatch):
-    request_body = {
-        "model": "openai/gpt-transcribe",
-        "input_audio": {"data": "SECRET_AUDIO_BASE64", "format": "wav"},
-        "stream": True,
-        "provider": {
-            "options": {
-                "openai": {
-                    "prompt": "Private meeting context",
-                    "keywords": ["CapsWriter"],
-                    "languages": ["zh-cn", "en"],
-                }
-            }
-        },
-    }
-    monkeypatch.setattr(openrouter, "should_dump_request_json", lambda: True)
-    monkeypatch.setattr(openrouter, "get_request_dump_dir", lambda: tmp_path)
-
-    path = openrouter.dump_request_json(request_body, "or-00001")
-
-    assert path is not None
-    assert path.parent == tmp_path
-    assert path.name.endswith("_or-00001.json")
-    assert json.loads(path.read_text(encoding="utf-8")) == request_body
-    assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_build_headers_adds_optional_openrouter_metadata(monkeypatch):

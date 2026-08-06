@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import io
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Tuple, Type
@@ -18,6 +19,11 @@ from src.provider.provider_settings import (
 from src.transcribe.streaming import (
     BoundStreamingTranscriptionSession,
     StreamingTranscriptionSession,
+)
+from src.transcribe.request_dump import (
+    dump_streaming_session_request,
+    dump_transcription_request,
+    should_dump_request_json,
 )
 
 
@@ -60,6 +66,10 @@ class TranscriptionProvider(ABC):
             modes.add(InputMode.LIVE_AUDIO)
         return frozenset(modes)
 
+    def build_request_dump_body(self, request: TranscriptionRequest) -> Any | None:
+        """Return a transport-specific JSON body, or use the shared logical body."""
+        return None
+
     async def transcribe_request(
         self, request: TranscriptionRequest
     ) -> TranscriptionResult:
@@ -73,6 +83,10 @@ class TranscriptionProvider(ABC):
                 f"Model {request.model.ref.key} does not support file upload"
             )
         with use_resolved_model(request.model):
+            if should_dump_request_json():
+                dump_transcription_request(
+                    request, self.build_request_dump_body(request)
+                )
             raw = await self._transcribe_request_tuple(request)
         text, status, submitted, completed, metadata = raw
         return TranscriptionResult(
@@ -100,6 +114,8 @@ class TranscriptionProvider(ABC):
         if InputMode.LIVE_AUDIO not in self.supported_input_modes():
             raise ValueError(f"Adapter {self.name()} does not support live audio")
         with use_resolved_model(model):
+            if should_dump_request_json():
+                dump_streaming_session_request(model, task_id)
             session = self.create_streaming_session(task_id, time_start)
         return BoundStreamingTranscriptionSession(session, model)
 
@@ -450,6 +466,19 @@ class GeminiProvider(TranscriptionProvider):
 class OpenRouterProvider(TranscriptionProvider):
     def name(self) -> str:
         return "openrouter"
+
+    def build_request_dump_body(self, request: TranscriptionRequest) -> dict[str, Any]:
+        from src.transcribe.openrouter.openrouter_transcribe_http import (
+            build_request_body,
+        )
+
+        position = request.payload_buf.tell()
+        try:
+            request.payload_buf.seek(0)
+            audio_b64 = base64.b64encode(request.payload_buf.read()).decode("ascii")
+        finally:
+            request.payload_buf.seek(position)
+        return build_request_body(request.payload_mime, audio_b64)
 
     async def transcribe(
         self,

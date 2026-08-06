@@ -2,13 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from datetime import datetime
 import io
 import json
-import os
 import random
-from pathlib import Path
-import tempfile
 import time
 from typing import Any, Optional, Tuple
 
@@ -17,7 +13,6 @@ import httpx
 from src.infra.cosmic import Cosmic, console
 from src.infra.user_lexicon import load_words
 from src.provider.provider_settings import (
-    get_bool as ps_get_bool,
     get_float as ps_get_float,
     get_context_prompt as ps_get_context_prompt,
     get_prompt as ps_get_prompt,
@@ -82,54 +77,6 @@ def get_site_name() -> str | None:
 
 def get_configured_audio_format() -> str | None:
     return ps_get_str("audio_format", env="OPENROUTER_AUDIO_FORMAT", default="auto")
-
-
-def should_dump_request_json() -> bool:
-    return ps_get_bool("dump_request_json", env=None, default=False)
-
-
-def get_request_dump_dir() -> Path:
-    return Path(tempfile.gettempdir()) / "CapsWriter-Offline" / "openrouter-requests"
-
-
-def dump_request_json(request_body: dict[str, Any], request_id: str) -> Path | None:
-    """Atomically dump the exact OpenRouter JSON body into the system temp dir."""
-    if not should_dump_request_json():
-        return None
-
-    target_dir = get_request_dump_dir()
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    target = target_dir / f"{timestamp}_{request_id}.json"
-    temp_path: Path | None = None
-    try:
-        target_dir.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            newline="\n",
-            dir=target_dir,
-            prefix=f".{target.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            json.dump(request_body, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-            temp_path = Path(handle.name)
-        os.replace(temp_path, target)
-        return target
-    except Exception as exc:
-        if temp_path is not None:
-            try:
-                temp_path.unlink(missing_ok=True)
-            except Exception:
-                pass
-        console.print(
-            f"[openrouter:{request_id}] 写入请求 dump 失败：{exc}",
-            style="bright_yellow",
-        )
-        return None
 
 
 def get_prompt_provider_slug() -> str:
@@ -560,12 +507,6 @@ async def transcribe_with_retries(
         client = get_http_client()
         t_submit = time.time()
         try:
-            dump_path = dump_request_json(request_body, request_id)
-            if dump_path is not None:
-                console.print(
-                    f"[openrouter:{request_id}] request_dump={dump_path}",
-                    style="bright_black",
-                )
             console.print(
                 f"[openrouter:{request_id}] dispatch attempt={attempt + 1} url={url} task_id={task_id}",
                 style="bright_black",
