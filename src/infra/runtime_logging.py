@@ -25,11 +25,23 @@ MAX_LOG_BYTES = 2 * 1024 * 1024
 BACKUP_LOG_COUNT = 5
 _exception_hooks_installed = False
 
-_SENSITIVE_CONSOLE_PREFIXES = (
-    "识别结果：",
-    "转录原文：",
-    "[transcript-delta]",
-)
+
+class ResilientRotatingFileHandler(RotatingFileHandler):
+    """Keep logging when another Windows process blocks log rotation.
+
+    ``RotatingFileHandler`` closes its own stream before renaming the active
+    file, but another CapsWriter process may still have that file open.  Windows
+    then rejects the rename with ``WinError 32``.  Reopening the active file
+    lets this process keep appending; a later emit retries the rollover after
+    the competing handle has gone away.
+    """
+
+    def doRollover(self) -> None:  # noqa: N802 - logging API spelling
+        try:
+            super().doRollover()
+        except OSError:
+            if self.stream is None and not self.delay:
+                self.stream = self._open()
 
 
 def application_data_directory(environ: Mapping[str, str] | None = None) -> Path:
@@ -66,13 +78,7 @@ def log_file_path(environ: Mapping[str, str] | None = None) -> Path:
 
 
 def _sanitize_console_message(message: str) -> str:
-    """Avoid persisting dictated or recognized text in diagnostic logs."""
-    stripped_message = message.lstrip()
-    if any(
-        stripped_message.startswith(prefix) for prefix in _SENSITIVE_CONSOLE_PREFIXES
-    ):
-        prefix, _, _ = stripped_message.partition("：")
-        return f"{prefix}：[内容未写入诊断日志]"
+    """Keep local console diagnostics readable while redacting credentials."""
     return re.sub(
         r"(api[_ -]?key\s*[=:]\s*)\S+",
         r"\1[REDACTED]",
@@ -116,11 +122,13 @@ def configure_runtime_logging(component: str) -> logging.Logger:
     logger.setLevel(logging.INFO)
     logger.propagate = False
 
-    if not any(isinstance(handler, RotatingFileHandler) for handler in logger.handlers):
+    if not any(
+        isinstance(handler, ResilientRotatingFileHandler) for handler in logger.handlers
+    ):
         try:
             directory = log_directory()
             directory.mkdir(parents=True, exist_ok=True)
-            handler = RotatingFileHandler(
+            handler = ResilientRotatingFileHandler(
                 directory / LOG_FILE_NAME,
                 maxBytes=MAX_LOG_BYTES,
                 backupCount=BACKUP_LOG_COUNT,

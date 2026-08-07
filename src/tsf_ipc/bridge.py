@@ -19,7 +19,14 @@ from .host_processor import (
     RevisionDecision,
 )
 from .context_snapshot import TsfContextSnapshot, decode_context_snapshot
-from .protocol import CompositionStyle, Frame, Operation, Status
+from .protocol import (
+    CompositionStyle,
+    Frame,
+    Operation,
+    Status,
+    TrackingSnapshotKind,
+)
+from .text_reconciler import IncrementalTextTracker, reconcile_tracked_text
 from .windows_pipe import BrokerReply, WindowsNamedPipeBroker
 
 
@@ -50,6 +57,7 @@ class _CompositionState:
     style: CompositionStyle
     host: HostApplication
     processor: HostProcessor
+    text: str
     defer_final: bool = False
 
 
@@ -65,11 +73,44 @@ class TsfSpeechTipBridge:
         self._lock = asyncio.Lock()
         self._rollback_confirmed_tasks: set[str] = set()
         self._rollback_failed_tasks: set[str] = set()
+        self._committed_sessions: dict[str, str] = {}
+        self._tracked_text: dict[str, str] = {}
+        self._active_tracked_session_id: str | None = None
+        self._tracking_started_at = 0.0
+        self._tracking_baselines: dict[str, TsfContextSnapshot] = {}
+        self._tracking_incremental: dict[str, IncrementalTextTracker] = {}
+        self._tracking_current: dict[str, TsfContextSnapshot] = {}
+        self._tracking_flush_handle: asyncio.TimerHandle | None = None
         set_event_handler = getattr(self._broker, "set_event_handler", None)
         if set_event_handler is not None:
             set_event_handler(self._handle_event)
 
     def _handle_event(self, frame: Frame) -> None:
+        if frame.operation == int(Operation.TRACKING_DIAGNOSTIC):
+            _LOGGER.info(
+                "TSF tracking diagnostic session=%s revision=%d status=%s detail=%s",
+                frame.session_id.hex[:8],
+                frame.revision,
+                self._status_name(frame.status),
+                frame.text or "-",
+            )
+            return
+        if frame.operation == int(Operation.TRACKING_SNAPSHOT):
+            self._handle_tracking_snapshot(frame)
+            return
+        if frame.operation == int(Operation.TRACKED_TEXT_CHANGED):
+            session_id = str(frame.session_id)
+            _LOGGER.info(
+                "TSF live-range observation session=%s revision=%d chars=%d "
+                "text_hash=%s active=%s text=%r",
+                frame.session_id.hex[:8],
+                frame.revision,
+                len(frame.text),
+                hashlib.sha256(frame.text.encode("utf-8")).hexdigest()[:8],
+                session_id == self._active_tracked_session_id,
+                frame.text,
+            )
+            return
         if frame.operation != int(Operation.COMPOSITION_TERMINATED):
             return
         state = self._state
@@ -95,6 +136,113 @@ class TsfSpeechTipBridge:
             rollback_trusted,
             state.host.process_name or "unknown",
             state.processor.name,
+        )
+
+    def _handle_tracking_snapshot(self, frame: Frame) -> None:
+        session_id = str(frame.session_id)
+        try:
+            snapshot = decode_context_snapshot(frame.text)
+            kind = TrackingSnapshotKind(frame.status)
+        except (ValueError, UnicodeError):
+            _LOGGER.exception(
+                "TSF tracking snapshot rejected session=%s revision=%d",
+                frame.session_id.hex[:8],
+                frame.revision,
+            )
+            return
+        _LOGGER.info(
+            "TSF tracking snapshot session=%s revision=%d kind=%s "
+            "target_start=%d target_end=%d text=%r",
+            frame.session_id.hex[:8],
+            frame.revision,
+            kind.name.lower(),
+            snapshot.selection_start,
+            snapshot.selection_end,
+            snapshot.text,
+        )
+        if kind is TrackingSnapshotKind.BASELINE:
+            if session_id != self._active_tracked_session_id:
+                _LOGGER.warning(
+                    "TSF tracking baseline ignored inactive session=%s "
+                    "active_session=%s",
+                    frame.session_id.hex[:8],
+                    (
+                        self._active_tracked_session_id[:8]
+                        if self._active_tracked_session_id
+                        else "-"
+                    ),
+                )
+                return
+            self._tracking_baselines.clear()
+            self._tracking_baselines[session_id] = snapshot
+            self._tracking_incremental.clear()
+            self._tracking_incremental[session_id] = IncrementalTextTracker(snapshot)
+            return
+        if session_id != self._active_tracked_session_id:
+            _LOGGER.warning(
+                "TSF tracking snapshot ignored inactive session=%s active_session=%s",
+                frame.session_id.hex[:8],
+                (
+                    self._active_tracked_session_id[:8]
+                    if self._active_tracked_session_id
+                    else "-"
+                ),
+            )
+            return
+        self._tracking_current[session_id] = snapshot
+        if self._tracking_flush_handle is not None:
+            self._tracking_flush_handle.cancel()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._tracking_flush_handle = loop.call_later(
+            0.35, self._flush_tracking_snapshot, session_id
+        )
+
+    def _flush_tracking_snapshot(self, session_id: str) -> None:
+        self._tracking_flush_handle = None
+        if session_id != self._active_tracked_session_id:
+            return
+        baseline = self._tracking_baselines.get(session_id)
+        current = self._tracking_current.get(session_id)
+        if baseline is None or current is None:
+            return
+        tracker = self._tracking_incremental.get(session_id)
+        result = tracker.advance(current) if tracker is not None else None
+        mode = "incremental"
+        if result is None:
+            result = reconcile_tracked_text(baseline, current)
+            mode = "baseline_recovery"
+            if result is not None:
+                if tracker is None:
+                    tracker = IncrementalTextTracker(baseline)
+                    self._tracking_incremental[session_id] = tracker
+                tracker.recover(current, result)
+        if result is None:
+            _LOGGER.warning(
+                "TSF tracking reconciliation rejected session=%s", session_id[:8]
+            )
+            return
+        matched = False
+        try:
+            from src.polish.llm_polish import update_finalized_text
+
+            matched = update_finalized_text(session_id, result.text)
+        except Exception:  # noqa: BLE001 - edit feedback is best-effort
+            _LOGGER.exception(
+                "Failed to update reconciled TSF history session=%s", session_id[:8]
+            )
+        if matched:
+            self._tracked_text[session_id] = result.text
+        _LOGGER.info(
+            "TSF tracking reconciliation session=%s mode=%s confidence=%.3f "
+            "history_matched=%s text=%r",
+            session_id[:8],
+            mode,
+            result.confidence,
+            matched,
+            result.text,
         )
 
     def take_confirmed_termination_rollback(self, task_id: str | None) -> bool:
@@ -139,6 +287,21 @@ class TsfSpeechTipBridge:
             and self._state.task_id == task_id
             and self._state.captured
         )
+
+    def take_committed_session_id(self, task_id: str | None) -> str | None:
+        if task_id is None:
+            return None
+        session_id = self._committed_sessions.pop(task_id, None)
+        _LOGGER.info(
+            "TSF tracking history binding task=%s session=%s found=%s",
+            task_id,
+            session_id[:8] if session_id else "-",
+            session_id is not None,
+        )
+        return session_id
+
+    def get_tracked_text(self, session_id: str) -> str | None:
+        return self._tracked_text.get(session_id)
 
     @staticmethod
     def _ack_timeout() -> float:
@@ -265,13 +428,14 @@ class TsfSpeechTipBridge:
         log = _LOGGER.info if result == Status.APPLIED.name.lower() else _LOGGER.warning
         log(
             "TSF request op=%s session=%s revision=%d style=%d chars=%d "
-            "text_hash=%s clients=%s result=%s elapsed_ms=%.1f%s",
+            "text_hash=%s text=%r clients=%s result=%s elapsed_ms=%.1f%s",
             self._operation_name(int(frame.operation)),
             frame.session_id.hex[:8],
             frame.revision,
             int(frame.status),
             len(frame.text),
             text_hash,
+            frame.text,
             clients if clients is not None else "unknown",
             result,
             (time.monotonic() - started) * 1000.0,
@@ -309,7 +473,21 @@ class TsfSpeechTipBridge:
                 )
                 if applied:
                     self._state.style = style
+                    self._state.text = text
                 return applied is not None
+
+            # Once a new speech task starts, no later edit event may revise the
+            # preceding history item. This also protects against hosts whose
+            # committed TSF range has forward gravity.
+            self._active_tracked_session_id = None
+            self._tracking_started_at = 0.0
+            self._tracked_text.clear()
+            self._tracking_baselines.clear()
+            self._tracking_incremental.clear()
+            self._tracking_current.clear()
+            if self._tracking_flush_handle is not None:
+                self._tracking_flush_handle.cancel()
+                self._tracking_flush_handle = None
 
             if self._state is not None and self._state.captured:
                 self._state.revision += 1
@@ -335,6 +513,7 @@ class TsfSpeechTipBridge:
                 style,
                 host,
                 self._processor_registry.resolve(host),
+                text,
             )
             self._state = state
             reply = await self._request_applied(
@@ -424,12 +603,25 @@ class TsfSpeechTipBridge:
                 )
                 if not revised:
                     return False
+                state.text = final_text
             state.revision += 1
+            session_id = str(state.session_id)
+            self._active_tracked_session_id = session_id
+            self._tracking_started_at = time.monotonic()
             committed = await self._request_applied(
                 Frame(Operation.COMMIT, state.session_id, state.revision)
             )
             if committed:
+                self._committed_sessions[task_id] = session_id
+                self._tracked_text.clear()
+                self._tracked_text[session_id] = state.text
                 self._state = None
+            else:
+                self._active_tracked_session_id = None
+                self._tracking_started_at = 0.0
+                self._tracked_text.clear()
+                self._tracking_baselines.clear()
+                self._tracking_current.clear()
             return committed is not None
 
     async def cancel(self, task_id: str | None = None) -> bool:

@@ -22,6 +22,27 @@ model:
 5. `QUERY_CONTEXT(...)` obtains the foreground selection and a bounded amount of
    surrounding text without starting or changing a composition.
 
+After a successful commit, the TIP keeps a clone of the most recently committed
+range and advises `ITfTextEditSink` on that context. When the host reports a text
+edit, the TIP rereads the live range and emits `TRACKED_TEXT_CHANGED` with the
+session ID and complete current text for diagnostics. Because TSF range gravity
+is host-controlled, this live-range payload is not used to update history.
+Instead, the TIP emits a `TRACKING_SNAPSHOT` baseline at commit and bounded
+prefix/selection/suffix snapshots after edits. The Python bridge debounces
+current snapshots for 350 ms and aligns the complete baseline/current windows
+with RapidFuzz before mapping the original target interval into the new text.
+Starting tracking for a newer commit releases the previous range and sink.
+
+If another TSF composition (for example a Pinyin IME composition) appears in the
+tracked context, snapshot observation pauses until that foreign composition
+completes. Its transient spelling and candidate updates are therefore omitted;
+the stable post-composition document window is reconciled afterward.
+For short replacements at the beginning of a committed range, some hosts keep
+the inserted replacement just outside the range's start anchor. If the current
+range is a shorter suffix of the previous text, the TIP expands it left by the
+missing length (up to 16 characters) and reports that recovered candidate. This
+covers corrections such as `你好` to `您好` without widening ordinary edits.
+
 The TIP is an in-process COM DLL. A pipe reader therefore never calls TSF from its
 worker thread. It posts an owned frame to a message-only window created on the
 TIP activation thread; that thread requests `TF_ES_ASYNC | TF_ES_READWRITE` for
@@ -58,6 +79,21 @@ Frames have a fixed 40-byte little-endian header followed by UTF-16LE full text:
 | session | 16 | UUID in Windows/GUID byte order |
 | text bytes | 4 | UTF-16LE byte count |
 | status | 4 | ACK result or process ID for HELLO |
+
+`TRACKED_TEXT_CHANGED` is a diagnostic-only unsolicited event. A
+`TRACKING_SNAPSHOT` payload uses the same versioned context-snapshot encoding as
+`QUERY_CONTEXT`; status `0` identifies the commit baseline and status `1` a
+current snapshot. Only a high-confidence full-window reconciliation updates the
+matching durable history item.
+`TRACKING_DIAGNOSTIC` reports sink registration and `OnEndEdit` outcomes using
+only status, character counts, and HRESULT values; dictated and edited text is
+never included in these diagnostic payloads. The Python bridge records them in
+the normal bounded runtime log.
+For local troubleshooting, request and tracked-text event logs include their
+plain-text payloads. Runtime logs remain local and bounded, but should therefore
+be treated as containing dictated content when shared or archived.
+The shared console logger likewise retains transcript and recognition-result
+text; credential-shaped values such as API keys remain redacted.
 
 Pipe transport is event-driven in both directions. The broker creates overlapped
 pipe instances and each client service thread blocks on the pending read, outgoing
@@ -290,8 +326,11 @@ certificate deletion affects every binary signed with that identity.
   an IME runs under the containing app's restrictions. The local named pipe is
   deliberately same-user only; integrity-level and app-container behavior needs
   real testing.
-- Foreground ownership currently compares the foreground window PID with the DLL
-  host PID. Multi-process applications can require a stronger focus signal.
+- Foreground ownership accepts either the DLL host PID or a foreground sibling
+  with the same executable name, covering Electron hosts whose HWND and TSF DLL
+  live in different processes. The focused TSF context remains the final edit-
+  session authority; unrelated same-name multi-instance edge cases still need
+  broader field testing.
 - ACK proves that `DoEditSession` applied a frame. It does not yet expose a durable
   diagnostic/event stream to the GUI when a composition is later terminated by
   the host application.

@@ -347,7 +347,13 @@ async def recv_result():
                 from src.keyboard.play_music import play_completion_sound
 
                 # 只记录已经确认上屏的最终文本；同时更新内存与持久化历史。
-                record_finalized_text(text)
+                tracked_session_id = getattr(
+                    tsf_bridge, "take_committed_session_id", lambda _task_id: None
+                )(current_tid)
+                if tracked_session_id is None:
+                    record_finalized_text(text)
+                else:
+                    record_finalized_text(text, tracked_session_id)
                 play_completion_sound()
             _clear_active_task(current_tid)
             if hide_status_overlay_when_done:

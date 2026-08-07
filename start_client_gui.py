@@ -91,8 +91,7 @@ from src.polish.llm_polish import (
     update_polish_prompt_text,
 )
 from src.polish.session_constraint import (
-    create_session_constraint_file,
-    remove_session_constraint_file,
+    read_session_constraint,
     write_session_constraint,
 )
 from src.system.process_cleanup import (
@@ -260,7 +259,6 @@ class GUI(QMainWindow):
         self._latest_wav_player: subprocess.Popen[bytes] | None = None
         self.core_client_process: subprocess.Popen[str] | None = None
         self._startup_complete_callback: Any | None = None
-        self._session_constraint_path = create_session_constraint_file()
         self.text_box_wordCountLabel: QLabel | None = None
         self.old_pos = QPoint()
         lexicon_python = resolve_pythonw_client() or sys.executable
@@ -490,7 +488,7 @@ class GUI(QMainWindow):
         self.session_constraint_label = QLabel("当前任务约束")
         self.session_constraint_label.setStyleSheet("color: #555555; padding: 0 4px;")
         self.session_constraint_label.setToolTip(
-            "仅影响本次 GUI 会话中的后续 LLM 润色；重启 GUI 后自动清空"
+            "影响后续 LLM 润色并自动持久化；点击清空可移除当前约束"
         )
         header.addWidget(self.session_constraint_label)
         header.addStretch()
@@ -513,6 +511,14 @@ class GUI(QMainWindow):
         self.session_constraint_edit.setMinimumHeight(52)
         self.session_constraint_edit.setMaximumHeight(76)
         self.session_constraint_edit.setTabChangesFocus(True)
+        try:
+            persisted_constraint = read_session_constraint()
+        except Exception:
+            persisted_constraint = ""
+        self.session_constraint_edit.setPlainText(persisted_constraint)
+        self.session_constraint_status.setText(
+            "已生效" if persisted_constraint.strip() else "未设置"
+        )
         self.session_constraint_edit.textChanged.connect(
             self.on_session_constraint_changed
         )
@@ -533,7 +539,7 @@ class GUI(QMainWindow):
     def apply_session_constraint(self) -> None:
         text = self.session_constraint_edit.toPlainText()
         try:
-            write_session_constraint(self._session_constraint_path, text)
+            write_session_constraint(text)
         except OSError as exc:
             self.session_constraint_status.setText("应用失败")
             self.append_colored_line(f"应用当前任务约束失败：{exc}", "#ff5555")
@@ -1679,8 +1685,6 @@ class GUI(QMainWindow):
         self._tray_process_client.stop()
         # Terminate core_client.py and any launcher-spawned child processes from this checkout.
         self._stop_core_client_processes()
-        remove_session_constraint_file(getattr(self, "_session_constraint_path", None))
-
         # Quit the application
         QApplication.quit()
 

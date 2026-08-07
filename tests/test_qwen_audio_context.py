@@ -228,7 +228,10 @@ def test_asr_history_records_even_when_polish_history_is_disabled(
         llm_polish,
         "save_finalized_history",
         lambda items: (
-            history_path.write_text("\n".join(items), encoding="utf-8") is not None
+            history_path.write_text(
+                "\n".join(item.current_text for item in items), encoding="utf-8"
+            )
+            is not None
         ),
     )
     monkeypatch.setattr(llm_polish, "_history_loaded", False)

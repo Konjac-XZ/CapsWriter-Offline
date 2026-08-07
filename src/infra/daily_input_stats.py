@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import tempfile
+import sqlite3
+import time
 from datetime import date
 from pathlib import Path
 from typing import Protocol
 
 from src.infra.runtime_logging import application_data_directory
+from src.infra import state_db
 
 
 STATE_DIRECTORY_NAME = "State"
@@ -51,30 +52,50 @@ def _state_for_today(path: Path, today: date) -> dict[str, int | str]:
     }
 
 
-def _write_state(path: Path, state: dict[str, int | str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_path = tempfile.mkstemp(
-        prefix=f".{path.stem}.", suffix=".tmp", dir=path.parent, text=True
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(state, handle, ensure_ascii=False, separators=(",", ":"))
-            handle.flush()
-            os.fsync(handle.fileno())
-        Path(temporary_path).replace(path)
-    except Exception:
+def _migrate_legacy_daily_input() -> None:
+    if state_db.migration_completed("daily_input_json"):
+        return
+    path = state_file_path()
+    state = _read_state(path)
+    day = state.get("date")
+    if isinstance(day, str):
         try:
-            Path(temporary_path).unlink(missing_ok=True)
+            character_count = max(0, int(state.get("character_count", 0)))
+            last_logged_count = max(0, int(state.get("last_logged_count", 0)))
+        except (TypeError, ValueError):
+            character_count = 0
+            last_logged_count = 0
+        with state_db.connection() as database:
+            database.execute(
+                "INSERT OR IGNORE INTO daily_input_stats"
+                "(day, character_count, last_logged_count, updated_at) "
+                "VALUES(?, ?, ?, ?)",
+                (day, character_count, last_logged_count, time.time()),
+            )
+            database.commit()
+    state_db.mark_migration_completed("daily_input_json")
+    if path.exists() and isinstance(day, str):
+        backup = path.with_suffix(f"{path.suffix}.migrated.bak")
+        try:
+            if not backup.exists():
+                path.replace(backup)
         except OSError:
             pass
-        raise
 
 
 def get_today_input_count(*, today: date | None = None) -> int:
     """Return today's count, treating missing/corrupt state as zero."""
-    path = state_file_path()
-    state = _state_for_today(path, today or date.today())
-    return int(state["character_count"])
+    current_day = (today or date.today()).isoformat()
+    try:
+        _migrate_legacy_daily_input()
+        with state_db.connection() as database:
+            row = database.execute(
+                "SELECT character_count FROM daily_input_stats WHERE day = ?",
+                (current_day,),
+            ).fetchone()
+        return int(row["character_count"]) if row is not None else 0
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        return 0
 
 
 def record_input_characters(
@@ -95,17 +116,38 @@ def record_input_characters(
         return get_today_input_count(today=today)
 
     current_date = today or date.today()
-    path = state_file_path()
     try:
-        state = _state_for_today(path, current_date)
-        count = int(state["character_count"]) + added_count
-        previous_logged_count = int(state["last_logged_count"])
+        _migrate_legacy_daily_input()
         interval = max(1, int(log_interval))
-        last_logged_count = (count // interval) * interval
-        state["character_count"] = count
-        state["last_logged_count"] = max(previous_logged_count, last_logged_count)
-        _write_state(path, state)
-    except (OSError, ValueError, TypeError):
+        with state_db.connection() as database:
+            database.execute("BEGIN IMMEDIATE")
+            row = database.execute(
+                "SELECT character_count, last_logged_count FROM daily_input_stats "
+                "WHERE day = ?",
+                (current_date.isoformat(),),
+            ).fetchone()
+            previous_count = int(row["character_count"]) if row is not None else 0
+            previous_logged_count = (
+                int(row["last_logged_count"]) if row is not None else 0
+            )
+            count = previous_count + added_count
+            last_logged_count = (count // interval) * interval
+            database.execute(
+                "INSERT INTO daily_input_stats"
+                "(day, character_count, last_logged_count, updated_at) "
+                "VALUES(?, ?, ?, ?) ON CONFLICT(day) DO UPDATE SET "
+                "character_count=excluded.character_count, "
+                "last_logged_count=excluded.last_logged_count, "
+                "updated_at=excluded.updated_at",
+                (
+                    current_date.isoformat(),
+                    count,
+                    max(previous_logged_count, last_logged_count),
+                    time.time(),
+                ),
+            )
+            database.commit()
+    except (OSError, sqlite3.Error, ValueError, TypeError):
         return 0
 
     if last_logged_count > previous_logged_count:

@@ -118,6 +118,12 @@ Launcher behavior: before starting, it terminates any existing running `start_cl
    LLM_POLISH_BASE_URL=https://api.openai.com
    LLM_POLISH_API_KEY=your_key_here
    ```
+   Runtime state is stored in `%LOCALAPPDATA%\CapsWriter-Offline\State\capswriter.db`
+   using SQLite WAL mode. The current task constraint, finalized-input history,
+   and daily input totals survive restarts. Existing `finalized_history.json` and
+   `daily_input.json` files are imported once and retained as
+   `.migrated.bak`; configuration, credentials, and audio caches remain outside
+   the database.
    ```yaml
    provider: openai_compatible
    model: gpt-4.1-mini

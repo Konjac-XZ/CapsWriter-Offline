@@ -22,6 +22,9 @@ class Operation(IntEnum):
     COMPOSITION_TERMINATED = 6
     QUERY_CONTEXT = 7
     EDIT_SESSION_WATCHDOG = 8
+    TRACKED_TEXT_CHANGED = 9
+    TRACKING_DIAGNOSTIC = 10
+    TRACKING_SNAPSHOT = 11
     ACK_FLAG = 0x8000
 
 
@@ -47,6 +50,11 @@ class CompositionStyle(IntEnum):
 
     TRANSCRIPTION = 0
     POLISHING = 1
+
+
+class TrackingSnapshotKind(IntEnum):
+    BASELINE = 0
+    CURRENT = 1
 
 
 @dataclass(frozen=True, slots=True)

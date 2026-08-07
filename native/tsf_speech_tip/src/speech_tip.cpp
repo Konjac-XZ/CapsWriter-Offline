@@ -67,6 +67,9 @@ constexpr UINT kForegroundChangedMessage = WM_APP + 0x343;
 constexpr UINT_PTR kEditSessionWatchdogTimer = 1;
 constexpr UINT kEditSessionWatchdogTimeoutMs = 750;
 constexpr ULONGLONG kEditSessionRetryCooldownMs = 1000;
+constexpr ULONGLONG kTrackingInitialCollapseWindowMs = 1500;
+constexpr std::size_t kTrackingMaximumPrefixRecoveryCharacters = 16;
+constexpr LONG kTrackingSnapshotSurroundingCharacters = 1024;
 constexpr DWORD kDisconnectedRetryInitialMs = 100;
 constexpr DWORD kDisconnectedRetryMaximumMs = 5000;
 constexpr std::size_t kMaximumOutgoingFrames = 256;
@@ -322,6 +325,7 @@ private:
 class TextService final
     : public ITfTextInputProcessorEx,
       public ITfCompositionSink,
+      public ITfTextEditSink,
       public ITfDisplayAttributeProvider {
 public:
     TextService() noexcept { ++g_object_count; }
@@ -336,6 +340,8 @@ public:
             *object = static_cast<ITfTextInputProcessorEx*>(this);
         } else if (iid == IID_ITfCompositionSink) {
             *object = static_cast<ITfCompositionSink*>(this);
+        } else if (iid == IID_ITfTextEditSink) {
+            *object = static_cast<ITfTextEditSink*>(this);
         } else if (iid == IID_ITfDisplayAttributeProvider) {
             *object = static_cast<ITfDisplayAttributeProvider*>(this);
         } else {
@@ -483,6 +489,7 @@ public:
         }
         edit_queue_.Reset();
         ClearCompositionState();
+        ClearTrackedTextState();
         SafeRelease(category_manager_);
         display_attribute_atoms_.fill(TF_INVALID_GUIDATOM);
         SafeRelease(thread_manager_);
@@ -529,6 +536,111 @@ public:
                 terminated_session, terminated_revision, rollback_status);
             ClearCompositionState();
         }
+        return S_OK;
+    }
+
+    STDMETHODIMP OnEndEdit(
+        ITfContext* context,
+        TfEditCookie read_cookie,
+        ITfEditRecord* /*edit_record*/) override {
+        if (tracked_context_ != context || tracked_range_ == nullptr) {
+            SendTrackingDiagnostic(
+                tracked_session_,
+                tracked_revision_,
+                Status::NoContext,
+                L"end_edit context_mismatch_or_no_range");
+            return S_OK;
+        }
+        if (tracked_range_invalid_) {
+            return S_OK;
+        }
+        if (HasActiveComposition(context)) {
+            if (!tracked_foreign_composition_seen_) {
+                SendTrackingDiagnostic(
+                    tracked_session_,
+                    tracked_revision_,
+                    Status::Queued,
+                    L"tracking_paused foreign_composition_active");
+            }
+            tracked_foreign_composition_seen_ = true;
+            return S_OK;
+        }
+        if (tracked_foreign_composition_seen_) {
+            tracked_foreign_composition_seen_ = false;
+            SendTrackingDiagnostic(
+                tracked_session_,
+                tracked_revision_,
+                Status::Applied,
+                L"tracking_resumed foreign_composition_completed");
+        }
+        std::wstring text;
+        if (FAILED(ReadRangeText(tracked_range_, read_cookie, &text))) {
+            SendTrackingDiagnostic(
+                tracked_session_,
+                tracked_revision_,
+                Status::EditSessionFailed,
+                L"end_edit range_read_failed");
+            return S_OK;
+        }
+        bool recovered_prefix = false;
+        if (tracked_text_.size() > text.size() &&
+            tracked_text_.ends_with(text)) {
+            const std::size_t missing = tracked_text_.size() - text.size();
+            if (missing <= kTrackingMaximumPrefixRecoveryCharacters) {
+                ITfRange* expanded = nullptr;
+                HRESULT expand_result = tracked_range_->Clone(&expanded);
+                LONG shifted = 0;
+                if (SUCCEEDED(expand_result) && expanded != nullptr) {
+                    expand_result = expanded->ShiftStart(
+                        read_cookie,
+                        -static_cast<LONG>(missing),
+                        &shifted,
+                        nullptr);
+                }
+                std::wstring candidate;
+                if (SUCCEEDED(expand_result) &&
+                    shifted == -static_cast<LONG>(missing)) {
+                    expand_result = ReadRangeText(expanded, read_cookie, &candidate);
+                }
+                SafeRelease(expanded);
+                if (SUCCEEDED(expand_result) &&
+                    candidate.size() == text.size() + missing) {
+                    text = std::move(candidate);
+                    recovered_prefix = true;
+                }
+            }
+        }
+        if (text == tracked_text_) {
+            SendTrackingSnapshot(context, tracked_range_, read_cookie, false);
+            SendTrackingDiagnostic(
+                tracked_session_,
+                tracked_revision_,
+                Status::Applied,
+                L"end_edit unchanged chars=" + std::to_wstring(text.size()));
+            return S_OK;
+        }
+        if (text.empty() && !tracked_text_.empty() &&
+            GetTickCount64() - tracked_started_at_ <=
+                kTrackingInitialCollapseWindowMs) {
+            SendTrackingDiagnostic(
+                tracked_session_,
+                tracked_revision_,
+                Status::InactiveSession,
+                L"tracking_observed initial_range_collapse old_chars=" +
+                    std::to_wstring(tracked_text_.size()));
+        }
+        const std::size_t previous_size = tracked_text_.size();
+        tracked_text_ = text;
+        ++tracked_revision_;
+        SendTrackingSnapshot(context, tracked_range_, read_cookie, false);
+        SendTrackingDiagnostic(
+            tracked_session_,
+            tracked_revision_,
+            Status::Applied,
+            L"end_edit changed old_chars=" + std::to_wstring(previous_size) +
+                L" new_chars=" + std::to_wstring(text.size()) +
+                (recovered_prefix ? L" recovered_prefix=true" : L""));
+        SendTrackedTextChanged();
         return S_OK;
     }
 
@@ -759,7 +871,47 @@ private:
         }
         DWORD foreground_process = 0;
         GetWindowThreadProcessId(foreground, &foreground_process);
-        return foreground_process == GetCurrentProcessId();
+        if (foreground_process == GetCurrentProcessId()) {
+            return true;
+        }
+        // Electron and other multi-process hosts can load the TIP in one
+        // process while their foreground HWND belongs to a sibling renderer.
+        // Accept a same-image sibling; the focused TSF context remains the
+        // final authority when the edit session is requested.
+        return SameExecutableName(foreground_process, GetCurrentProcessId());
+    }
+
+    static bool SameExecutableName(DWORD left_pid, DWORD right_pid) noexcept {
+        std::wstring left;
+        std::wstring right;
+        return ReadExecutableName(left_pid, &left) &&
+            ReadExecutableName(right_pid, &right) &&
+            _wcsicmp(left.c_str(), right.c_str()) == 0;
+    }
+
+    static bool ReadExecutableName(DWORD process_id, std::wstring* name) noexcept {
+        if (process_id == 0 || name == nullptr) {
+            return false;
+        }
+        HANDLE process = OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id);
+        if (process == nullptr) {
+            return false;
+        }
+        std::wstring path(32768, L'\0');
+        DWORD size = static_cast<DWORD>(path.size());
+        const BOOL read = QueryFullProcessImageNameW(
+            process, 0, path.data(), &size);
+        CloseHandle(process);
+        if (!read || size == 0) {
+            return false;
+        }
+        path.resize(size);
+        const std::size_t separator = path.find_last_of(L"\\/");
+        *name = separator == std::wstring::npos
+            ? std::move(path)
+            : path.substr(separator + 1);
+        return !name->empty();
     }
 
     ITfContext* GetFocusedContext() const noexcept {
@@ -1040,6 +1192,11 @@ private:
                 : Status::InactiveSession;
         }
 
+        // A committed range can have forward gravity in some hosts. Stop the
+        // previous tracker before our own BEGIN text can be mistaken for a
+        // user edit to the preceding history item.
+        ClearTrackedTextState();
+
         TF_SELECTION selection{};
         ULONG fetched = 0;
         HRESULT result = context->GetSelection(
@@ -1134,14 +1291,29 @@ private:
         composition->AddRef();
         ITfRange* range = nullptr;
         composition->GetRange(&range);
+        ITfRange* tracked_range = nullptr;
+        std::wstring committed_text;
+        if (range != nullptr) {
+            if (SUCCEEDED(ReadRangeText(range, edit_cookie, &committed_text))) {
+                range->Clone(&tracked_range);
+            }
+        }
         ending_composition_ = true;
         const HRESULT result = composition->EndComposition(edit_cookie);
         ending_composition_ = false;
         composition->Release();
         if (SUCCEEDED(result)) {
             ClearDisplayAttribute(context, range, edit_cookie);
+            StartTrackingCommittedText(
+                context,
+                tracked_range,
+                frame.header.session_id,
+                frame.header.revision,
+                committed_text,
+                edit_cookie);
             ClearCompositionState();
         }
+        SafeRelease(tracked_range);
         SafeRelease(range);
         return SUCCEEDED(result) ? Status::Applied : Status::EditSessionFailed;
     }
@@ -1466,6 +1638,218 @@ private:
         }
     }
 
+    void StartTrackingCommittedText(
+        ITfContext* context,
+        ITfRange* range,
+        const std::array<std::uint8_t, 16>& session_id,
+        std::uint64_t revision,
+        const std::wstring& text,
+        TfEditCookie edit_cookie) {
+        ClearTrackedTextState();
+        if (context == nullptr || range == nullptr) {
+            SendTrackingDiagnostic(
+                session_id,
+                revision,
+                Status::NoContext,
+                L"tracking_start missing_context_or_range");
+            return;
+        }
+        ITfSource* source = nullptr;
+        if (FAILED(context->QueryInterface(IID_PPV_ARGS(&source))) || source == nullptr) {
+            SendTrackingDiagnostic(
+                session_id,
+                revision,
+                Status::NoContext,
+                L"tracking_start context_has_no_source");
+            return;
+        }
+        DWORD cookie = TF_INVALID_COOKIE;
+        const HRESULT result = source->AdviseSink(
+            IID_ITfTextEditSink,
+            static_cast<ITfTextEditSink*>(this),
+            &cookie);
+        source->Release();
+        if (FAILED(result)) {
+            SendTrackingDiagnostic(
+                session_id,
+                revision,
+                Status::EditSessionFailed,
+                L"tracking_start advise_sink_failed hr=" +
+                    std::to_wstring(static_cast<std::int64_t>(result)));
+            return;
+        }
+        tracked_context_ = context;
+        tracked_context_->AddRef();
+        tracked_range_ = range;
+        tracked_range_->AddRef();
+        tracked_session_ = session_id;
+        tracked_revision_ = revision;
+        tracked_sink_cookie_ = cookie;
+        tracked_text_ = text;
+        tracked_started_at_ = GetTickCount64();
+        tracked_range_invalid_ = false;
+        tracked_foreign_composition_seen_ = false;
+        SendTrackingSnapshot(context, tracked_range_, edit_cookie, true);
+        SendTrackingDiagnostic(
+            tracked_session_,
+            tracked_revision_,
+            Status::Applied,
+            L"tracking_started chars=" + std::to_wstring(tracked_text_.size()));
+    }
+
+    void ClearTrackedTextState() noexcept {
+        if (tracked_context_ != nullptr && tracked_sink_cookie_ != TF_INVALID_COOKIE) {
+            ITfSource* source = nullptr;
+            if (SUCCEEDED(tracked_context_->QueryInterface(IID_PPV_ARGS(&source))) &&
+                source != nullptr) {
+                source->UnadviseSink(tracked_sink_cookie_);
+                source->Release();
+            }
+        }
+        tracked_sink_cookie_ = TF_INVALID_COOKIE;
+        SafeRelease(tracked_range_);
+        SafeRelease(tracked_context_);
+        tracked_session_.fill(0);
+        tracked_revision_ = 0;
+        tracked_text_.clear();
+        tracked_started_at_ = 0;
+        tracked_range_invalid_ = false;
+        tracked_foreign_composition_seen_ = false;
+    }
+
+    void SendTrackedTextChanged() {
+        if (!connected_.load()) {
+            return;
+        }
+        Frame event{};
+        event.header.magic = caps_writer::tsf::kMagic;
+        event.header.version = caps_writer::tsf::kVersion;
+        event.header.operation = static_cast<std::uint16_t>(
+            Operation::TrackedTextChanged);
+        event.header.revision = tracked_revision_;
+        event.header.session_id = tracked_session_;
+        event.text = tracked_text_;
+        event.header.text_bytes = static_cast<std::uint32_t>(
+            event.text.size() * sizeof(wchar_t));
+        event.header.status = static_cast<std::uint32_t>(Status::Applied);
+        {
+            std::scoped_lock lock(outgoing_mutex_);
+            if (outgoing_.size() >= kMaximumOutgoingFrames) {
+                outgoing_.pop_front();
+            }
+            outgoing_.push_back(event);
+        }
+        if (pipe_wake_event_ != nullptr) {
+            SetEvent(pipe_wake_event_);
+        }
+    }
+
+    static bool HasActiveComposition(ITfContext* context) {
+        if (context == nullptr) {
+            return false;
+        }
+        ITfContextComposition* context_composition = nullptr;
+        if (FAILED(context->QueryInterface(IID_PPV_ARGS(&context_composition))) ||
+            context_composition == nullptr) {
+            return false;
+        }
+        IEnumITfCompositionView* enumeration = nullptr;
+        const HRESULT enum_result = context_composition->EnumCompositions(&enumeration);
+        context_composition->Release();
+        if (FAILED(enum_result) || enumeration == nullptr) {
+            return false;
+        }
+        ITfCompositionView* view = nullptr;
+        ULONG fetched = 0;
+        const HRESULT next_result = enumeration->Next(1, &view, &fetched);
+        enumeration->Release();
+        SafeRelease(view);
+        return SUCCEEDED(next_result) && fetched == 1;
+    }
+
+    void SendTrackingDiagnostic(
+        const std::array<std::uint8_t, 16>& session_id,
+        std::uint64_t revision,
+        Status status,
+        const std::wstring& detail) {
+        if (!connected_.load()) {
+            return;
+        }
+        Frame event{};
+        event.header.magic = caps_writer::tsf::kMagic;
+        event.header.version = caps_writer::tsf::kVersion;
+        event.header.operation = static_cast<std::uint16_t>(
+            Operation::TrackingDiagnostic);
+        event.header.revision = revision;
+        event.header.session_id = session_id;
+        event.text = detail;
+        event.header.text_bytes = static_cast<std::uint32_t>(
+            event.text.size() * sizeof(wchar_t));
+        event.header.status = static_cast<std::uint32_t>(status);
+        {
+            std::scoped_lock lock(outgoing_mutex_);
+            if (outgoing_.size() >= kMaximumOutgoingFrames) {
+                outgoing_.pop_front();
+            }
+            outgoing_.push_back(event);
+        }
+        if (pipe_wake_event_ != nullptr) {
+            SetEvent(pipe_wake_event_);
+        }
+    }
+
+    void SendTrackingSnapshot(
+        ITfContext* context,
+        ITfRange* range,
+        TfEditCookie edit_cookie,
+        bool baseline) {
+        if (!connected_.load() || context == nullptr || range == nullptr) {
+            return;
+        }
+        std::wstring selection;
+        std::wstring prefix;
+        std::wstring suffix;
+        if (FAILED(ReadRangeText(range, edit_cookie, &selection)) ||
+            FAILED(ReadSurroundingText(
+                range,
+                edit_cookie,
+                kTrackingSnapshotSurroundingCharacters,
+                &prefix,
+                &suffix))) {
+            SendTrackingDiagnostic(
+                tracked_session_,
+                tracked_revision_,
+                Status::EditSessionFailed,
+                L"tracking_snapshot read_failed");
+            return;
+        }
+        Frame event{};
+        event.header.magic = caps_writer::tsf::kMagic;
+        event.header.version = caps_writer::tsf::kVersion;
+        event.header.operation = static_cast<std::uint16_t>(
+            Operation::TrackingSnapshot);
+        event.header.revision = tracked_revision_;
+        event.header.session_id = tracked_session_;
+        event.text = caps_writer::tsf::EncodeContextSnapshot(
+            prefix,
+            selection,
+            suffix,
+            static_cast<unsigned long>(TF_AE_END));
+        event.header.text_bytes = static_cast<std::uint32_t>(
+            event.text.size() * sizeof(wchar_t));
+        event.header.status = baseline ? 0U : 1U;
+        {
+            std::scoped_lock lock(outgoing_mutex_);
+            if (outgoing_.size() >= kMaximumOutgoingFrames) {
+                outgoing_.pop_front();
+            }
+            outgoing_.push_back(event);
+        }
+        if (pipe_wake_event_ != nullptr) {
+            SetEvent(pipe_wake_event_);
+        }
+    }
+
     bool ShouldDisconnectPipe() const noexcept {
         return !IsForegroundProcess() && !composition_active_.load();
     }
@@ -1754,6 +2138,15 @@ private:
     ULONGLONG quarantine_retry_after_ = 0;
     std::wstring original_selection_text_;
     TF_SELECTIONSTYLE original_selection_style_{};
+    ITfContext* tracked_context_ = nullptr;
+    ITfRange* tracked_range_ = nullptr;
+    DWORD tracked_sink_cookie_ = TF_INVALID_COOKIE;
+    std::array<std::uint8_t, 16> tracked_session_{};
+    std::uint64_t tracked_revision_ = 0;
+    std::wstring tracked_text_;
+    ULONGLONG tracked_started_at_ = 0;
+    bool tracked_range_invalid_ = false;
+    bool tracked_foreign_composition_seen_ = false;
 
 };
 

@@ -21,6 +21,9 @@ enum class Operation : std::uint16_t {
     CompositionTerminated = 6,
     QueryContext = 7,
     EditSessionWatchdog = 8,
+    TrackedTextChanged = 9,
+    TrackingDiagnostic = 10,
+    TrackingSnapshot = 11,
     AckFlag = 0x8000,
 };
 

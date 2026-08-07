@@ -1,9 +1,16 @@
 import asyncio
+import uuid
 
 import pytest
 
 from src.tsf_ipc.bridge import TsfSpeechTipBridge
-from src.tsf_ipc.protocol import CompositionStyle, Frame, Operation, Status
+from src.tsf_ipc.protocol import (
+    CompositionStyle,
+    Frame,
+    Operation,
+    Status,
+    TrackingSnapshotKind,
+)
 from src.tsf_ipc.windows_pipe import BrokerReply
 from src.tsf_ipc.context_snapshot import encode_context_snapshot
 
@@ -116,6 +123,186 @@ def test_bridge_sends_full_text_revisions_then_commits(enable_bridge):
         CompositionStyle.POLISHING,
         0,
     ]
+
+
+def test_live_range_event_is_diagnostic_only(enable_bridge, monkeypatch):
+    broker = FakeBroker()
+    bridge = TsfSpeechTipBridge(broker)
+    updates = []
+    monkeypatch.setattr(
+        "src.polish.llm_polish.update_finalized_text",
+        lambda session_id, text: updates.append((session_id, text)) or True,
+    )
+
+    asyncio.run(bridge.begin_or_revise("task-1", "原文"))
+    asyncio.run(bridge.commit("task-1", "最终原文"))
+    session_id = bridge.take_committed_session_id("task-1")
+    assert session_id is not None
+
+    broker.emit_event(
+        Frame(Operation.TRACKED_TEXT_CHANGED, uuid.UUID(session_id), 4, "用户改文")
+    )
+
+    assert bridge.get_tracked_text(session_id) == "最终原文"
+    assert updates == []
+
+
+def test_stable_snapshot_reconciles_and_updates_history(enable_bridge, monkeypatch):
+    broker = FakeBroker()
+    bridge = TsfSpeechTipBridge(broker)
+    updates = []
+    monkeypatch.setattr(
+        "src.polish.llm_polish.update_finalized_text",
+        lambda session_id, text: updates.append((session_id, text)) or True,
+    )
+
+    async def exercise():
+        await bridge.begin_or_revise("task-1", "你好，测试。")
+        await bridge.commit("task-1", "你好，测试。")
+        session_id = bridge.take_committed_session_id("task-1")
+        assert session_id is not None
+        broker.emit_event(
+            Frame(
+                Operation.TRACKING_SNAPSHOT,
+                uuid.UUID(session_id),
+                3,
+                encode_context_snapshot("前文\n", "你好，测试。", "\n后文"),
+                TrackingSnapshotKind.BASELINE,
+            )
+        )
+        broker.emit_event(
+            Frame(
+                Operation.TRACKING_SNAPSHOT,
+                uuid.UUID(session_id),
+                4,
+                encode_context_snapshot("前文\n您", "好，测试。", "\n后文"),
+                TrackingSnapshotKind.CURRENT,
+            )
+        )
+        await asyncio.sleep(0.4)
+        return session_id
+
+    session_id = asyncio.run(exercise())
+
+    assert updates == [(session_id, "您好，测试。")]
+    assert bridge.get_tracked_text(session_id) == "您好，测试。"
+
+
+def test_consecutive_stable_snapshots_advance_incremental_range(
+    enable_bridge, monkeypatch
+):
+    broker = FakeBroker()
+    bridge = TsfSpeechTipBridge(broker)
+    updates = []
+    monkeypatch.setattr(
+        "src.polish.llm_polish.update_finalized_text",
+        lambda session_id, text: updates.append((session_id, text)) or True,
+    )
+
+    async def exercise():
+        await bridge.begin_or_revise("task-1", "第一版。")
+        await bridge.commit("task-1", "第一版。")
+        session_id = bridge.take_committed_session_id("task-1")
+        assert session_id is not None
+        snapshots = [
+            ("前文\n", "第一版。", "\n后文", TrackingSnapshotKind.BASELINE),
+            ("前文\n", "第二版完全不同。", "\n后文", TrackingSnapshotKind.CURRENT),
+        ]
+        for prefix, selection, suffix, kind in snapshots:
+            broker.emit_event(
+                Frame(
+                    Operation.TRACKING_SNAPSHOT,
+                    uuid.UUID(session_id),
+                    3,
+                    encode_context_snapshot(prefix, selection, suffix),
+                    kind,
+                )
+            )
+        await asyncio.sleep(0.4)
+        broker.emit_event(
+            Frame(
+                Operation.TRACKING_SNAPSHOT,
+                uuid.UUID(session_id),
+                4,
+                encode_context_snapshot("前文也变了\n", "最终内容。", "\n后文"),
+                TrackingSnapshotKind.CURRENT,
+            )
+        )
+        await asyncio.sleep(0.4)
+        return session_id
+
+    session_id = asyncio.run(exercise())
+
+    assert updates == [
+        (session_id, "第二版完全不同。"),
+        (session_id, "最终内容。"),
+    ]
+
+
+def test_tracking_diagnostic_is_logged(enable_bridge, caplog):
+    broker = FakeBroker()
+    TsfSpeechTipBridge(broker)
+    session_id = uuid.uuid4()
+
+    with caplog.at_level("INFO", logger="capswriter.tsf.bridge"):
+        broker.emit_event(
+            Frame(
+                Operation.TRACKING_DIAGNOSTIC,
+                session_id,
+                3,
+                "end_edit unchanged chars=4",
+                Status.APPLIED,
+            )
+        )
+
+    assert "end_edit unchanged chars=4" in caplog.text
+    assert session_id.hex[:8] in caplog.text
+
+
+def test_new_task_rejects_late_event_from_previous_session(enable_bridge, monkeypatch):
+    broker = FakeBroker()
+    bridge = TsfSpeechTipBridge(broker)
+    updates = []
+    monkeypatch.setattr(
+        "src.polish.llm_polish.update_finalized_text",
+        lambda session_id, text: updates.append((session_id, text)) or True,
+    )
+
+    asyncio.run(bridge.begin_or_revise("task-1", "第一条"))
+    asyncio.run(bridge.commit("task-1", "第一条"))
+    old_session = bridge.take_committed_session_id("task-1")
+    assert old_session is not None
+    asyncio.run(bridge.begin_or_revise("task-2", "第二条"))
+
+    broker.emit_event(
+        Frame(Operation.TRACKED_TEXT_CHANGED, uuid.UUID(old_session), 10, "第二条")
+    )
+
+    assert updates == []
+    assert bridge.get_tracked_text(old_session) is None
+
+
+def test_initial_empty_range_event_does_not_mark_history_deleted(
+    enable_bridge, monkeypatch
+):
+    broker = FakeBroker()
+    bridge = TsfSpeechTipBridge(broker)
+    updates = []
+    monkeypatch.setattr(
+        "src.polish.llm_polish.update_finalized_text",
+        lambda session_id, text: updates.append((session_id, text)) or True,
+    )
+
+    asyncio.run(bridge.begin_or_revise("task-1", "第一条"))
+    asyncio.run(bridge.commit("task-1", "第一条"))
+    session_id = bridge.take_committed_session_id("task-1")
+    assert session_id is not None
+    broker.emit_event(
+        Frame(Operation.TRACKED_TEXT_CHANGED, uuid.UUID(session_id), 3, "")
+    )
+
+    assert updates == []
+    assert bridge.get_tracked_text(session_id) == "第一条"
 
 
 def test_bridge_queries_context_from_actual_applied_host(enable_bridge):

@@ -35,6 +35,7 @@ dependencies = [
     "qtmonaco[pyside6]>=0.8.4",
     "pyright>=1.1.409",
     "pydantic>=2.12,<3",
+    "rapidfuzz>=3.14,<4",
 ]
 
 [dependency-groups]
