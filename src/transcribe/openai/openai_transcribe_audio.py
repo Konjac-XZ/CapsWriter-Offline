@@ -165,6 +165,13 @@ def _build_wav_buf_from_pcm(pcm: bytes, channels: int, sr: int) -> io.BytesIO:
     return wav_buf
 
 
+def _sanitized_f32_bytes(audio: np.ndarray) -> bytes:
+    """Return bounded float32 bytes without modifying the captured recording."""
+    bounded = np.clip(audio, -1.0, 1.0)
+    np.nan_to_num(bounded, copy=False, nan=0.0, posinf=1.0, neginf=-1.0)
+    return bounded.astype(np.float32, copy=False).tobytes()
+
+
 async def make_audio_payload(
     audio_concat: np.ndarray, actual_sr: int
 ) -> tuple[io.BytesIO, str, float, int, int]:
@@ -188,14 +195,9 @@ async def make_audio_payload(
 
     if _use_mp3_upload() and ffmpeg is not None:
         try:
-            # Prepare float32 little-endian stream for ffmpeg input
-            # Sanitize first to avoid NaN/Inf propagating
-            np.nan_to_num(audio_concat, copy=False, nan=0.0, posinf=1.0, neginf=-1.0)
-            f32 = (
-                np.clip(audio_concat, -1.0, 1.0)
-                .astype(np.float32, copy=False)
-                .tobytes()
-            )
+            # Keep the captured recording immutable: retry WAV encoding runs in
+            # a worker at the same time as this upload encoding.
+            f32 = _sanitized_f32_bytes(audio_concat)
             args = [
                 ffmpeg,
                 "-hide_banner",
@@ -243,12 +245,7 @@ async def make_audio_payload(
     # Try WAV via ffmpeg if preferred and available
     if ffmpeg is not None and prefer_ffmpeg and _prefer_ffmpeg_for_wav():
         try:
-            np.nan_to_num(audio_concat, copy=False, nan=0.0, posinf=1.0, neginf=-1.0)
-            f32 = (
-                np.clip(audio_concat, -1.0, 1.0)
-                .astype(np.float32, copy=False)
-                .tobytes()
-            )
+            f32 = _sanitized_f32_bytes(audio_concat)
             args = [
                 ffmpeg,
                 "-hide_banner",
@@ -291,8 +288,8 @@ async def make_audio_payload(
             pass
 
     # Final fallback: write WAV in Python using s16le; do safe clipping and keep given SR/channels
-    np.nan_to_num(audio_concat, copy=False, nan=0.0, posinf=1.0, neginf=-1.0)
     f32_clamped = np.clip(audio_concat, -1.0, 1.0)
+    np.nan_to_num(f32_clamped, copy=False, nan=0.0, posinf=1.0, neginf=-1.0)
     pcm = (f32_clamped * (2**15 - 1)).astype(np.int16).tobytes()
     wav_buf = _build_wav_buf_from_pcm(pcm, in_channels, actual_sr)
     elapsed = (time.time() - t_start) * 1000.0
