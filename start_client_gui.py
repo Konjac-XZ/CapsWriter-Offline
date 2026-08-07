@@ -6,13 +6,13 @@ import subprocess
 import sys
 import threading
 import time
-import traceback
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Sequence, cast
 
 import yaml
 
-from PySide6.QtCore import QPoint, QSize, Qt, QTimer
+from PySide6.QtCore import QFileSystemWatcher, QPoint, QSize, Qt, QTimer
 from PySide6.QtGui import (
     QIcon,
     QStandardItemModel,
@@ -187,7 +187,6 @@ class AdaptivePopupComboBox(QComboBox):
 
 GUI_TIMING_SLOW_MS = 100.0
 GUI_TIMER_GAP_MS = 500.0
-GUI_WATCHDOG_GAP_MS = 700.0
 GUI_LOG_MAX_BLOCKS = 500
 
 
@@ -244,15 +243,9 @@ class GUI(QMainWindow):
         # Ensure provider_manager attribute exists before UI uses it
         self.provider_manager: Any | None = None
         self._syncing_context_toggle_states = False
-        self._last_worker_timer_tick = 0.0
-        self._last_gui_heartbeat = time.monotonic()
-        self._gui_thread_id = threading.get_ident()
-        self._worker_timer_lag_reports = 0
         self._gui_timing_reports = 0
         self._suppress_scroll_timing = False
         self._suppress_append_timing = False
-        self._watchdog_stop = threading.Event()
-        self._watchdog_reports = 0
         self._worker_restart_lock = threading.Lock()
         self._worker_restart_running = False
         self._worker_restart_pending = False
@@ -265,21 +258,33 @@ class GUI(QMainWindow):
         self._lexicon_editor_client = LexiconEditorProcessClient(ROOT, lexicon_python)
         self._lexicon_loading_dialog: QProgressDialog | None = None
         self._tray_process_client = TrayProcessClient(ROOT, lexicon_python)
-        self._tray_event_timer = QTimer(self)
-        self._tray_event_timer.timeout.connect(self._poll_tray_process_event)
-        self._tray_event_timer.start(100)
+        self._tray_event_watcher = QFileSystemWatcher(
+            [str(self._tray_process_client.session_dir)], self
+        )
+        self._tray_event_watcher.directoryChanged.connect(self._poll_tray_process_event)
+        self._tray_liveness_timer = QTimer(self)
+        self._tray_liveness_timer.timeout.connect(self._ensure_tray_process_running)
+        self._tray_liveness_timer.start(5000)
         self._lexicon_event_timer = QTimer(self)
         self._lexicon_event_timer.timeout.connect(self._poll_lexicon_editor_event)
         self._lexicon_event_timer.start(250)
 
         self.init_ui()
         self.output_router = WorkerOutputRouter()
+        self.output_router.output_available.connect(
+            self.update_worker_output,
+            Qt.ConnectionType.QueuedConnection,
+        )
         self.output_router.overlay_event.connect(
             self._handle_status_overlay_event,
             Qt.ConnectionType.QueuedConnection,
         )
         self.output_router.context_event.connect(
             self._handle_context_toggle_event,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        self.output_router.daily_input_count_event.connect(
+            self._set_daily_input_count,
             Qt.ConnectionType.QueuedConnection,
         )
         self.status_overlay = StatusOverlayController()
@@ -290,8 +295,6 @@ class GUI(QMainWindow):
         self.edgeMargin = 5  # 侧边停靠残余像素值
         self.isBerthLeft = False
         self.isBerthRight = False
-        threading.Thread(target=self._gui_watchdog_loop, daemon=True).start()
-
         # Display early messages now that UI is ready
         if self.early_messages:
             self._append_colored_entries(
@@ -471,8 +474,11 @@ class GUI(QMainWindow):
         self.daily_input_count_label.setStyleSheet("color: #666666; padding: 2px 4px;")
         self._refresh_daily_input_count()
         self.daily_input_count_timer = QTimer(self)
-        self.daily_input_count_timer.timeout.connect(self._refresh_daily_input_count)
-        self.daily_input_count_timer.start(1000)
+        self.daily_input_count_timer.setSingleShot(True)
+        self.daily_input_count_timer.timeout.connect(
+            self._refresh_daily_input_count_for_new_day
+        )
+        self._schedule_daily_input_rollover()
 
     def create_session_constraint_editor(self) -> None:
         """Create the compact editor for constraints scoped to this GUI session."""
@@ -555,7 +561,22 @@ class GUI(QMainWindow):
             count = get_today_input_count()
         except Exception:
             count = 0
-        self.daily_input_count_label.setText(f"今日已输入 {count} 字")
+        self._daily_input_date = date.today()
+        self._set_daily_input_count(count)
+
+    def _set_daily_input_count(self, count: int) -> None:
+        self.daily_input_count_label.setText(f"今日已输入 {max(0, int(count))} 字")
+
+    def _refresh_daily_input_count_for_new_day(self) -> None:
+        if getattr(self, "_daily_input_date", None) != date.today():
+            self._refresh_daily_input_count()
+        self._schedule_daily_input_rollover()
+
+    def _schedule_daily_input_rollover(self) -> None:
+        now = datetime.now()
+        next_day = datetime.combine(now.date() + timedelta(days=1), datetime.min.time())
+        delay_ms = max(1000, int((next_day - now).total_seconds() * 1000) + 1000)
+        self.daily_input_count_timer.start(delay_ms)
 
     def _configure_collapsible_combo(
         self, combo: QComboBox, *, editable: bool = False
@@ -866,7 +887,7 @@ class GUI(QMainWindow):
         self.latest_wav_playback_timer.timeout.connect(
             self._refresh_latest_wav_playback_state
         )
-        self.latest_wav_playback_timer.start(250)
+        self.latest_wav_playback_timer.setInterval(250)
         self._update_latest_wav_playback_button(False)
 
         context_toggle_row = QHBoxLayout()
@@ -1393,39 +1414,11 @@ class GUI(QMainWindow):
         self._gui_timing_reports += 1
         record_console_message(f"[timing][gui] {message}", style="#888888")
 
-    def _emit_watchdog_timing(self, message: str) -> None:
-        try:
-            print(f"[timing][watchdog] {message}", flush=True)
-        except Exception:
-            pass
-        if self._gui_timing_reports >= 60:
-            return
-        self._gui_timing_reports += 1
-        record_console_message(f"[timing][watchdog] {message}", style="#888888")
-
     def _log_queue_from_thread(self, text: str) -> None:
         try:
             self.output_router.route_line(text)
         except Exception:
             pass
-
-    def _gui_watchdog_loop(self) -> None:
-        while not self._watchdog_stop.wait(0.1):
-            gap_ms = (time.monotonic() - self._last_gui_heartbeat) * 1000.0
-            if gap_ms < GUI_WATCHDOG_GAP_MS:
-                continue
-            if self._watchdog_reports >= 10:
-                continue
-            self._watchdog_reports += 1
-            frame = sys._current_frames().get(self._gui_thread_id)
-            if frame is None:
-                self._emit_watchdog_timing(
-                    f"gui heartbeat gap {gap_ms:.1f}ms; no gui frame"
-                )
-            else:
-                stack = "".join(traceback.format_stack(frame, limit=12)).strip()
-                self._emit_watchdog_timing(f"gui heartbeat gap {gap_ms:.1f}ms\n{stack}")
-            time.sleep(1.0)
 
     def retry_latest_request(self) -> None:
         try:
@@ -1465,9 +1458,11 @@ class GUI(QMainWindow):
             and self._latest_wav_player.poll() is not None
         ):
             self._latest_wav_player = None
+            self.latest_wav_playback_timer.stop()
         self._update_latest_wav_playback_button(self._is_latest_wav_playing())
 
     def _stop_latest_wav_playback(self) -> None:
+        self.latest_wav_playback_timer.stop()
         player = self._latest_wav_player
         self._latest_wav_player = None
         if player is not None and player.poll() is None:
@@ -1521,6 +1516,7 @@ class GUI(QMainWindow):
                 creationflags=subprocess.CREATE_NO_WINDOW,
                 startupinfo=startupinfo,
             )
+            self.latest_wav_playback_timer.start()
             self._update_latest_wav_playback_button(True)
         except Exception as exc:
             self._latest_wav_player = None
@@ -1560,7 +1556,7 @@ class GUI(QMainWindow):
         if not self._tray_process_client.start():
             self.log_message("启动托盘进程失败。", "#ff0000")
 
-    def _poll_tray_process_event(self) -> None:
+    def _poll_tray_process_event(self, _changed_directory: str = "") -> None:
         if not self._tray_process_client.is_running():
             self._tray_process_client.start()
             return
@@ -1578,6 +1574,10 @@ class GUI(QMainWindow):
             self.restart_client()
         elif event_name == "quit":
             self.quit_app()
+
+    def _ensure_tray_process_running(self) -> None:
+        if not self._tray_process_client.is_running():
+            self._tray_process_client.start()
 
     def _show_from_tray(self) -> None:
         self.showNormal()
@@ -1613,16 +1613,6 @@ class GUI(QMainWindow):
     def clear_text_box(self):
         # Clear the content of the client text box
         self.text_box_client.clear()
-
-    def on_monitor_toggled(self, state):
-        # 检查复选框的选中状态
-        timer = getattr(self, "update_timer", None)
-        if timer is None:
-            return
-        if state == 2:  # 2 表示选中状态
-            timer.start(100)
-        else:
-            timer.stop()
 
     def update_word_count_toggled(self):
         select_text_count = len(self.text_box_client.textCursor().selectedText())
@@ -1673,10 +1663,6 @@ class GUI(QMainWindow):
 
     def quit_app(self):
         try:
-            self._watchdog_stop.set()
-        except Exception:
-            pass
-        try:
             self.status_overlay.hide_all()
         except Exception:
             pass
@@ -1710,24 +1696,9 @@ class GUI(QMainWindow):
         except Exception:
             pass
 
-        # Update text box
-        try:
-            self.update_timer = QTimer()
-            self.update_timer.timeout.connect(self.update_worker_output)
-            self.update_timer.start(50)
-        except Exception:
-            pass
-
     def update_worker_output(self):
         total_start = time.perf_counter()
-        now = time.monotonic()
-        self._last_gui_heartbeat = now
-        if self._last_worker_timer_tick:
-            tick_gap_ms = (now - self._last_worker_timer_tick) * 1000.0
-            if tick_gap_ms >= GUI_TIMER_GAP_MS and self._worker_timer_lag_reports < 20:
-                self._worker_timer_lag_reports += 1
-                self._log_gui_timing(f"worker timer gap {tick_gap_ms:.1f}ms")
-        self._last_worker_timer_tick = now
+        self.output_router.consume_output_notification()
 
         level_start = time.perf_counter()
         latest_level = self.output_router.take_latest_overlay_level()
@@ -1761,6 +1732,7 @@ class GUI(QMainWindow):
                 f"level={level_ms:.1f}ms logs={drain_ms:.1f}ms "
                 f"lines={line_count} chars={char_count}"
             )
+        self.output_router.notify_if_output_remains()
 
     def _handle_status_overlay_event(self, payload: dict) -> None:
         total_start = time.perf_counter()

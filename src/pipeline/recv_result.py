@@ -36,6 +36,16 @@ def _emit_status_overlay(action: str, state: str | None = None) -> None:
         pass
 
 
+def _record_input_characters(text: str) -> int:
+    """Persist the count and push the new value to the GUI when attached."""
+    count = record_input_characters(
+        text,
+        log_interval=Config.daily_input_log_interval,
+    )
+    gui_event("daily_input_count", count=count)
+    return count
+
+
 def _clear_abandoned_task(task_id: str | None) -> None:
     if task_id is not None:
         Cosmic.abandoned_task_ids.discard(task_id)
@@ -235,9 +245,7 @@ async def recv_result():
                 inc = s[last_len:]
                 if inc:
                     _kb.write(inc)
-                    record_input_characters(
-                        inc, log_interval=Config.daily_input_log_interval
-                    )
+                    _record_input_characters(inc)
                     Cosmic._last_transcript_delta_len = last_len + len(inc)
                     # 标记本 task 曾有增量转录结果输出
                     Cosmic._transcript_had_deltas = True
@@ -247,7 +255,7 @@ async def recv_result():
                 if hasattr(Cosmic, "_last_transcript_delta_len"):
                     Cosmic._last_transcript_delta_len = 0
                 await type_result(s)
-                record_input_characters(s, log_interval=Config.daily_input_log_interval)
+                _record_input_characters(s)
 
             # 每个 task 的增量转录结果独立计数，切换 task 时重置（避免跨任务污染）
             last_tid = getattr(Cosmic, "_last_transcript_delta_task", None)
@@ -287,9 +295,7 @@ async def recv_result():
                     if await tsf_bridge.commit(current_tid, text):
                         # TSF 的流式 revision 只是在更新 composition；等最终
                         # 后处理文本提交成功后再一次性计入，避免重复统计。
-                        record_input_characters(
-                            text, log_interval=Config.daily_input_log_interval
-                        )
+                        _record_input_characters(text)
                         final_output_succeeded = True
                     elif await tsf_bridge.cancel(current_tid):
                         # A confirmed CANCEL proves that the uncommitted

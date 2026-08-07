@@ -21,12 +21,16 @@ class WorkerLogLine:
 class WorkerOutputRouter(QObject):
     overlay_event = Signal(dict)
     context_event = Signal(dict)
+    daily_input_count_event = Signal(int)
+    output_available = Signal()
 
     def __init__(self):
         super().__init__()
         self._log_queue: Queue[WorkerLogLine] = Queue()
         self._level_lock = threading.Lock()
         self._latest_overlay_level: float | None = None
+        self._notification_lock = threading.Lock()
+        self._notification_pending = False
 
     def read_stream(self, stream: TextIO | None) -> None:
         if stream is None:
@@ -40,6 +44,7 @@ class WorkerOutputRouter(QObject):
         payload = self._parse_gui_payload(line)
         if payload is None:
             self._log_queue.put(WorkerLogLine(line))
+            self._notify_output_available()
             return
 
         event = payload.get("event")
@@ -49,6 +54,13 @@ class WorkerOutputRouter(QObject):
         if event == "context_toggle":
             self.context_event.emit(payload)
             return
+        if event == "daily_input_count":
+            try:
+                count = max(0, int(payload.get("count", 0)))
+            except (TypeError, ValueError):
+                return
+            self.daily_input_count_event.emit(count)
+            return
 
         self._log_queue.put(
             WorkerLogLine(
@@ -56,6 +68,26 @@ class WorkerOutputRouter(QObject):
                 color=(str(payload["color"]) if payload.get("color") else None),
             )
         )
+        self._notify_output_available()
+
+    def consume_output_notification(self) -> None:
+        """Allow one new wakeup while the GUI drains queued worker output."""
+        with self._notification_lock:
+            self._notification_pending = False
+
+    def _notify_output_available(self) -> None:
+        with self._notification_lock:
+            if self._notification_pending:
+                return
+            self._notification_pending = True
+        self.output_available.emit()
+
+    def notify_if_output_remains(self) -> None:
+        """Schedule another bounded GUI drain when a backlog remains."""
+        with self._level_lock:
+            has_level = self._latest_overlay_level is not None
+        if has_level or not self._log_queue.empty():
+            self._notify_output_available()
 
     def take_latest_overlay_level(self) -> float | None:
         with self._level_lock:
@@ -88,6 +120,7 @@ class WorkerOutputRouter(QObject):
                 level = 0.0
             with self._level_lock:
                 self._latest_overlay_level = max(0.0, min(1.0, level))
+            self._notify_output_available()
             return
 
         with self._level_lock:
