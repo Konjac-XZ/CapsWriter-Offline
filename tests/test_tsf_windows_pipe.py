@@ -116,7 +116,7 @@ def test_outgoing_queue_coalesces_unsent_full_text_revisions():
 
     for revision in range(1, 301):
         frame = Frame(Operation.REVISE, session_id, revision, f"full text {revision}")
-        broker._enqueue_frame(client, frame, b"encoded")
+        broker._enqueue_frame(client, frame, b"encoded", coalesce_revisions=True)
     commit = Frame(Operation.COMMIT, session_id, 301)
     broker._enqueue_frame(client, commit, b"commit")
 
@@ -125,6 +125,23 @@ def test_outgoing_queue_coalesces_unsent_full_text_revisions():
     assert first is not None and first[0].revision == 300
     assert second is not None and second[0].operation == Operation.COMMIT
     assert client.outgoing.empty()
+
+
+def test_request_queue_preserves_revisions_that_require_individual_acks():
+    broker = WindowsNamedPipeBroker("unused")
+    client = _PipeClient(1)
+    session_id = uuid.uuid4()
+
+    for revision in range(1, 4):
+        frame = Frame(Operation.REVISE, session_id, revision, f"text {revision}")
+        broker._enqueue_frame(client, frame, b"encoded")
+
+    queued_revisions = []
+    for _ in range(3):
+        queued = client.outgoing.get_nowait()
+        assert queued is not None
+        queued_revisions.append(queued[0].revision)
+    assert queued_revisions == [1, 2, 3]
 
 
 def test_request_without_clients_returns_immediately():

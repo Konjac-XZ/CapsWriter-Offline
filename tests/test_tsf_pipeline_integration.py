@@ -474,6 +474,81 @@ def test_chatgpt_failed_multiline_cancel_never_revises_commits_or_pastes(
     assert Operation.COMMIT not in [frame.operation for frame in broker.frames]
 
 
+def test_fast_polish_chunks_coalesce_behind_slow_ack_and_flush_before_commit(
+    monkeypatch,
+):
+    class SlowPolishAckBridge(FakeTsfBridge):
+        def __init__(self):
+            super().__init__()
+            self.first_polish_started = asyncio.Event()
+            self.release_first_polish = asyncio.Event()
+            self.order = []
+            self.polish_revisions = 0
+
+        async def begin_or_revise(
+            self, task_id, text, style=CompositionStyle.TRANSCRIPTION
+        ):
+            self.owned_task = task_id
+            self.revisions.append((task_id, text, style))
+            self.order.append(("revision", text))
+            if style == CompositionStyle.POLISHING:
+                self.polish_revisions += 1
+                if self.polish_revisions == 1:
+                    self.first_polish_started.set()
+                    await self.release_first_polish.wait()
+            return True
+
+        async def commit(self, task_id, text):
+            self.order.append(("commit", text))
+            return await super().commit(task_id, text)
+
+    bridge = SlowPolishAckBridge()
+    all_chunks_submitted = asyncio.Event()
+
+    async def fake_polish(_text, *, on_text=None, **_kwargs):
+        assert on_text is not None
+        await on_text("首")
+        await bridge.first_polish_started.wait()
+        for text in ("首个", "首个快", "首个快速结果"):
+            await on_text(text)
+        all_chunks_submitted.set()
+        return "首个快速结果"
+
+    _configure_final_message_test(
+        monkeypatch, bridge, _final_message("task-slow-ack"), fake_polish
+    )
+    monkeypatch.setattr(
+        pipeline, "record_input_characters", lambda _text, **_kwargs: None
+    )
+    monkeypatch.setattr("src.keyboard.play_music.play_completion_sound", lambda: None)
+
+    async def exercise():
+        receive_task = asyncio.create_task(pipeline.recv_result())
+        await all_chunks_submitted.wait()
+        assert [item[1] for item in bridge.order] == ["ASR full text", "首"]
+        bridge.release_first_polish.set()
+        await receive_task
+        leaked = [
+            task
+            for task in asyncio.all_tasks()
+            if task is not asyncio.current_task()
+            and task.get_name().startswith("tsf_revision_coalescer:")
+        ]
+        assert leaked == []
+
+    asyncio.run(exercise())
+
+    assert [
+        text
+        for _, text, style in bridge.revisions
+        if style == CompositionStyle.POLISHING
+    ] == [
+        "首",
+        "首个快速结果",
+    ]
+    assert bridge.order[-1] == ("commit", "首个快速结果")
+
+
 def _configure_final_message_test(monkeypatch, bridge, message, fake_polish):
     Cosmic.queue_out = cast(Any, OneMessageQueue(message))
     Cosmic.abandon_requested = False
