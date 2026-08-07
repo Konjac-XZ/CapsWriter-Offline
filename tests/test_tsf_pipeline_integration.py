@@ -234,7 +234,7 @@ def test_final_tsf_output_requires_confirmed_commit_or_cancelled_fallback(
     assert bridge.commits == [("task-1", "LLM final full text")]
     assert bridge.cancels == expected_cancel
     assert typed == expected_typed
-    assert finalized == ["LLM final full text"]
+    assert finalized == (["LLM final full text"] if expected_sound_count else [])
     assert recorded == expected_recorded
     assert len(played) == expected_sound_count
 
@@ -486,6 +486,7 @@ def _configure_final_message_test(monkeypatch, bridge, message, fake_polish):
     monkeypatch.setattr(pipeline, "polish_text", fake_polish)
     monkeypatch.setattr(pipeline, "regex_replace", lambda text: text)
     monkeypatch.setattr(pipeline.pangu, "spacing_text", lambda text: text)
+    monkeypatch.setattr(pipeline, "record_finalized_text", lambda _text: None)
     monkeypatch.setattr(pipeline.Config, "save_audio", False)
     monkeypatch.setattr(pipeline.Config, "save_markdown", False)
 

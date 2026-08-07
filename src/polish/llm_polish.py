@@ -14,6 +14,10 @@ from typing import Any, cast
 import yaml
 
 from src.polish.smart_quotes import normalize_zh_cn_smart_quotes
+from src.infra.finalized_history import (
+    load_finalized_history,
+    save_finalized_history,
+)
 from src.polish.textbox_context import (
     TextBoxContext,
     get_active_textbox_context,
@@ -139,6 +143,7 @@ def _get_env(name: str, default: str | None = None) -> str | None:
 _missing_config_warned = False
 _feature_state_logged = False
 _finalized_history: list[str] = []
+_history_loaded = False
 _history_lock = threading.Lock()
 
 
@@ -210,6 +215,15 @@ async def close_polish_http_client(reason: str = "manual") -> None:
 # ---------------------------------------------------------------------------
 
 
+def _ensure_history_loaded_locked() -> None:
+    """Populate the in-memory cache once while ``_history_lock`` is held."""
+    global _finalized_history, _history_loaded
+    if _history_loaded:
+        return
+    _finalized_history = load_finalized_history()
+    _history_loaded = True
+
+
 def record_finalized_text(text: str) -> None:
     """Append *text* to the rolling history buffer (called from recv_result).
 
@@ -229,9 +243,11 @@ def record_finalized_text(text: str) -> None:
     )
     max_size = max(polish_max_size, asr_max_size, 1)
     with _history_lock:
+        _ensure_history_loaded_locked()
         _finalized_history.append(text.strip())
         if len(_finalized_history) > max_size:
             _finalized_history = _finalized_history[-max_size:]
+        save_finalized_history(_finalized_history)
 
 
 def get_finalized_history() -> list[str]:
@@ -244,6 +260,7 @@ def get_finalized_history() -> list[str]:
         return []
     max_size: int = max(1, int(h_cfg.get("max_size", 5)))
     with _history_lock:
+        _ensure_history_loaded_locked()
         return list(_finalized_history[-max_size:])
 
 
@@ -252,16 +269,20 @@ def get_asr_finalized_history() -> list[str]:
     if not enabled or max_size <= 0:
         return []
     with _history_lock:
+        _ensure_history_loaded_locked()
         return list(_finalized_history[-max_size:])
 
 
 def clear_finalized_history() -> int:
     """Clear the rolling history buffer and return the number of cleared items."""
-    global _finalized_history
+    global _finalized_history, _history_loaded
 
     with _history_lock:
+        _ensure_history_loaded_locked()
         cleared = len(_finalized_history)
         _finalized_history = []
+        _history_loaded = True
+        save_finalized_history(_finalized_history)
     return cleared
 
 

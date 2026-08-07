@@ -198,8 +198,6 @@ async def recv_result():
                     _emit_status_overlay("hide")
                     continue
                 # 若末尾不是有效标点，则补中文句号
-                # 将已完成的文本存入历史，供下一次 LLM 润色使用
-                record_finalized_text(text)
                 console.print(f"识别结果：{text}", soft_wrap=True)
                 console.print(
                     f"总时延：{delay + _polish_elapsed:.2f}s = {delay:.2f}s + {_polish_elapsed:.2f}s"
@@ -348,6 +346,8 @@ async def recv_result():
             if is_final and text and final_output_succeeded:
                 from src.keyboard.play_music import play_completion_sound
 
+                # 只记录已经确认上屏的最终文本；同时更新内存与持久化历史。
+                record_finalized_text(text)
                 play_completion_sound()
             _clear_active_task(current_tid)
             if hide_status_overlay_when_done:

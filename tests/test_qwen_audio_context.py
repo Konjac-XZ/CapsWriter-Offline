@@ -219,7 +219,19 @@ def test_prepared_invisible_context_is_discarded(monkeypatch):
     assert context.textbox_context_has_position is False
 
 
-def test_asr_history_records_even_when_polish_history_is_disabled(monkeypatch):
+def test_asr_history_records_even_when_polish_history_is_disabled(
+    monkeypatch, tmp_path
+):
+    history_path = tmp_path / "finalized_history.json"
+    monkeypatch.setattr(llm_polish, "load_finalized_history", lambda: [])
+    monkeypatch.setattr(
+        llm_polish,
+        "save_finalized_history",
+        lambda items: (
+            history_path.write_text("\n".join(items), encoding="utf-8") is not None
+        ),
+    )
+    monkeypatch.setattr(llm_polish, "_history_loaded", False)
     llm_polish.clear_finalized_history()
     monkeypatch.setattr(
         llm_polish,
