@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any, cast
 
-from PySide6.QtCore import QObject, QTimer
+from PySide6.QtCore import QFileSystemWatcher, QObject, QTimer
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
@@ -16,7 +16,6 @@ from src.gui.runtime import client_icon_path
 from src.gui.tray_menu import AutoDismissTrayMenu
 
 
-COMMAND_POLL_INTERVAL_MS = 100
 PARENT_POLL_INTERVAL_MS = 2000
 
 
@@ -83,9 +82,8 @@ class TrayService(QObject):
         self._tray_icon.setContextMenu(self._menu)
         self._tray_icon.show()
 
-        self._command_timer = QTimer(self)
-        self._command_timer.timeout.connect(self._poll_command)
-        self._command_timer.start(COMMAND_POLL_INTERVAL_MS)
+        self._command_watcher = QFileSystemWatcher([str(session_dir)], self)
+        self._command_watcher.directoryChanged.connect(self._poll_command)
 
         self._parent_timer = QTimer(self)
         self._parent_timer.timeout.connect(self._check_parent)
@@ -111,7 +109,7 @@ class TrayService(QObject):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self._emit_event("show")
 
-    def _poll_command(self) -> None:
+    def _poll_command(self, _changed_directory: str = "") -> None:
         try:
             payload = json.loads(self._command_path.read_text(encoding="utf-8"))
             serial = int(payload.get("serial", 0))

@@ -34,6 +34,10 @@ class TrayProcessClient:
     def process(self) -> subprocess.Popen[str] | None:
         return self._process
 
+    @property
+    def session_dir(self) -> Path:
+        return self._session_dir
+
     def is_running(self) -> bool:
         return self._process is not None and self._process.poll() is None
 

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
 import pytest
+from PySide6.QtCore import QCoreApplication, QFileSystemWatcher
 
 from start_client_gui import GUI
 from src.gui import tray_process_client
@@ -14,6 +16,33 @@ from src.gui import tray_process_client
 class _ProcessStub:
     def poll(self) -> None:
         return None
+
+
+def _wait_for_directory_event(
+    app: QCoreApplication, events: list[str], previous_count: int
+) -> None:
+    deadline = time.monotonic() + 2.0
+    while len(events) == previous_count and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert len(events) > previous_count
+
+
+def test_directory_watcher_survives_repeated_atomic_replaces(tmp_path: Path) -> None:
+    app = QCoreApplication.instance() or QCoreApplication([])
+    watcher = QFileSystemWatcher([str(tmp_path)])
+    events: list[str] = []
+    watcher.directoryChanged.connect(events.append)
+    target = tmp_path / "event.json"
+
+    for serial in (1, 2):
+        previous_count = len(events)
+        temporary = tmp_path / ".event.json.tmp"
+        temporary.write_text(json.dumps({"serial": serial}), encoding="utf-8")
+        temporary.replace(target)
+        _wait_for_directory_event(app, events, previous_count)
+
+    assert watcher.directories() == [str(tmp_path)]
 
 
 def test_start_launches_independent_tray_module(monkeypatch, tmp_path: Path) -> None:
@@ -30,6 +59,8 @@ def test_start_launches_independent_tray_module(monkeypatch, tmp_path: Path) -> 
 
     monkeypatch.setattr(tray_process_client.subprocess, "Popen", fake_popen)
     client = tray_process_client.TrayProcessClient(tmp_path, "pythonw.exe")
+
+    assert client.session_dir == tmp_path
 
     assert client.start() is True
     assert popen_calls[0][0][:4] == [
