@@ -33,6 +33,14 @@ current snapshots for 350 ms and aligns the complete baseline/current windows
 with RapidFuzz before mapping the original target interval into the new text.
 Starting tracking for a newer commit releases the previous range and sink.
 
+The edit sink asks `ITfEditRecord` whether each callback contains a text update
+before reading the host text store, so selection- and property-only edit storms
+do not produce snapshots. A processed callback reuses its first live-range read
+when encoding the snapshot, and queued current snapshots for the same session
+are coalesced to the latest revision. A privacy-safe `tracking_perf` diagnostic
+summarizes these counts and processing times every 256 callbacks and when the
+tracker is replaced; it contains no dictated or surrounding text.
+
 If another TSF composition (for example a Pinyin IME composition) appears in the
 tracked context, snapshot observation pauses until that foreign composition
 completes. Its transient spelling and candidate updates are therefore omitted;

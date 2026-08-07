@@ -12,6 +12,7 @@ inline std::wstring EncodeContextSnapshot(
     const std::wstring& suffix,
     unsigned long active_end) {
     std::wstring payload = kContextSnapshotPrefix;
+    payload.reserve(prefix.size() + selection.size() + suffix.size() + 48);
     payload += std::to_wstring(prefix.size());
     payload += L'\n';
     payload += std::to_wstring(selection.size());

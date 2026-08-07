@@ -45,6 +45,28 @@ if(BUILD_TESTING)
     target_include_directories(ContextSnapshotTest PRIVATE src)
     add_test(NAME ContextSnapshotTest COMMAND ContextSnapshotTest)
 
+    add_executable(EditRecordPolicyTest
+        tests/edit_record_policy_test.cpp
+    )
+    target_compile_features(EditRecordPolicyTest PRIVATE cxx_std_20)
+    target_compile_definitions(EditRecordPolicyTest PRIVATE
+        UNICODE
+        _UNICODE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+    )
+    target_compile_options(EditRecordPolicyTest PRIVATE /W4 /permissive- /EHsc)
+    target_include_directories(EditRecordPolicyTest PRIVATE src)
+    add_test(NAME EditRecordPolicyTest COMMAND EditRecordPolicyTest)
+
+    add_executable(OutgoingFrameQueueTest
+        tests/outgoing_frame_queue_test.cpp
+    )
+    target_compile_features(OutgoingFrameQueueTest PRIVATE cxx_std_20)
+    target_compile_options(OutgoingFrameQueueTest PRIVATE /W4 /permissive- /EHsc)
+    target_include_directories(OutgoingFrameQueueTest PRIVATE src)
+    add_test(NAME OutgoingFrameQueueTest COMMAND OutgoingFrameQueueTest)
+
     add_executable(DisplayAttributesTest
         tests/display_attributes_test.cpp
     )
