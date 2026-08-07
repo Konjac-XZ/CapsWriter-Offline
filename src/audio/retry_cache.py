@@ -1,8 +1,6 @@
 import json
 import time
 import hashlib
-import shutil
-import subprocess as sp
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +11,6 @@ RETRY_AUDIO_DIR = TMP_DIR / "retry_audio"
 RETRY_CLAIM_DIR = TMP_DIR / "retry_claims"
 RETRY_REQUEST_PATH = TMP_DIR / "retry_latest_request.json"
 RETRY_METADATA_PATH = RETRY_AUDIO_DIR / "latest.json"
-RETRY_MP3_BITRATE = "64k"
 
 _MIME_TO_SUFFIX = {
     "audio/mpeg": ".mp3",
@@ -55,52 +52,6 @@ def _remove_file(path: Path) -> None:
         pass
 
 
-def _transcode_latest_wav_to_mp3(wav_path: Path) -> Path | None:
-    ffmpeg = shutil.which("ffmpeg")
-    mp3_path = latest_audio_path_for_mime("audio/mpeg")
-
-    # A stale MP3 is worse than falling back to the fresh WAV.
-    _remove_file(mp3_path)
-    if not ffmpeg:
-        return None
-
-    tmp = mp3_path.with_name(f".{mp3_path.name}.{time.time_ns()}.tmp")
-    flags = getattr(sp, "CREATE_NO_WINDOW", 0)
-    try:
-        result = sp.run(
-            [
-                ffmpeg,
-                "-y",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-i",
-                str(wav_path),
-                "-vn",
-                "-c:a",
-                "libmp3lame",
-                "-b:a",
-                RETRY_MP3_BITRATE,
-                "-f",
-                "mp3",
-                str(tmp),
-            ],
-            stdin=sp.DEVNULL,
-            stdout=sp.DEVNULL,
-            stderr=sp.DEVNULL,
-            creationflags=flags,
-            check=False,
-        )
-        if result.returncode == 0 and tmp.exists() and tmp.stat().st_size > 0:
-            tmp.replace(mp3_path)
-            return mp3_path
-    except Exception:
-        pass
-    finally:
-        _remove_file(tmp)
-    return None
-
-
 def get_latest_audio_path() -> Path | None:
     for suffix in (".mp3", ".wav"):
         path = RETRY_AUDIO_DIR / f"latest{suffix}"
@@ -114,8 +65,18 @@ def has_retry_audio() -> bool:
 
 
 def write_retry_cache(
-    audio_bytes: bytes, mime: str, metadata: dict[str, Any] | None = None
+    audio_bytes: bytes,
+    mime: str,
+    metadata: dict[str, Any] | None = None,
+    *,
+    keep_source_wav: bool = False,
 ) -> Path:
+    """Atomically replace the retry payload without doing any transcoding.
+
+    ``keep_source_wav`` is used when ``audio_bytes`` is the already encoded
+    upload payload and a fresh ``latest.wav`` was saved for playback.  The
+    caller is responsible for writing that WAV first.
+    """
     RETRY_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
     target = latest_audio_path_for_mime(mime)
@@ -124,12 +85,15 @@ def write_retry_cache(
     source_wav_path: Path | None = None
     if target.suffix.lower() == ".wav":
         source_wav_path = target
-        mp3_target = _transcode_latest_wav_to_mp3(target)
-        if mp3_target is not None:
-            target = mp3_target
+        # A fresh WAV must not leave an older MP3 as the preferred retry file.
+        _remove_file(latest_audio_path_for_mime("audio/mpeg"))
+    elif keep_source_wav:
+        candidate = latest_audio_path_for_mime("audio/wav")
+        if candidate.exists() and candidate.is_file() and candidate.stat().st_size > 0:
+            source_wav_path = candidate
     else:
-        # Direct MP3 writes have no matching high-quality WAV source, so avoid
-        # keeping a stale WAV next to the current retry audio.
+        # Direct MP3 writes normally have no matching WAV source, so avoid
+        # keeping stale playback audio next to the current retry payload.
         _remove_file(latest_audio_path_for_mime("audio/wav"))
 
     metadata_payload: dict[str, Any] = {
@@ -142,9 +106,6 @@ def write_retry_cache(
             {
                 "source_wav_path": str(source_wav_path),
                 "source_wav_mime": "audio/wav",
-                "mp3_bitrate": RETRY_MP3_BITRATE
-                if target.suffix.lower() == ".mp3"
-                else None,
             }
         )
     if metadata:

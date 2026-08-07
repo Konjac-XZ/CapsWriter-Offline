@@ -136,6 +136,65 @@ def _cache_recording_for_retry(
         console.print(f"保存重试录音缓存失败：{exc}", style="bright_red")
 
 
+async def _cache_recording_in_worker(
+    *,
+    audio_concat: np.ndarray,
+    task_id: str,
+    duration: float,
+    time_start: float,
+    record_stop: float,
+) -> None:
+    """Encode and persist the playback WAV away from the asyncio event loop."""
+    await asyncio.to_thread(
+        _cache_recording_for_retry,
+        audio_concat=audio_concat,
+        task_id=task_id,
+        duration=duration,
+        time_start=time_start,
+        record_stop=record_stop,
+    )
+
+
+async def _cache_upload_payload_after_wav(
+    *,
+    wav_cache_task: asyncio.Task[None],
+    payload_bytes: bytes,
+    payload_mime: str,
+    task_id: str,
+    duration: float,
+    time_start: float,
+    record_stop: float,
+) -> None:
+    """Reuse the upload encoding as retry payload and keep its playback WAV."""
+    await wav_cache_task
+    if not payload_bytes:
+        return
+    try:
+        await asyncio.to_thread(
+            write_retry_cache,
+            payload_bytes,
+            payload_mime,
+            {
+                "source_task_id": task_id,
+                "record_duration_s": float(duration),
+                "time_start": time_start,
+                "time_stop": record_stop,
+                "cache_stage": "upload_encoded",
+            },
+            keep_source_wav=True,
+        )
+    except Exception as exc:
+        console.print(f"保存重试录音缓存失败：{exc}", style="bright_red")
+
+
+def _consume_background_task_result(task: asyncio.Task[None]) -> None:
+    """Retrieve a detached cache task result after caller cancellation."""
+    try:
+        task.exception()
+    except asyncio.CancelledError:
+        pass
+
+
 async def _submit_payload(
     *,
     payload_buf,
@@ -400,7 +459,11 @@ async def _gather_audio_once(
                 cache.clear()
             else:
                 data = task["data"]
-            all_data.append(data.copy())
+            # Queue data already owns its memory (the PortAudio callback copied
+            # it before crossing threads), while concatenated threshold data is
+            # also newly allocated.  Retaining another full copy here only
+            # increases memory traffic and the recording's peak footprint.
+            all_data.append(data)
             duration += len(data) / 48000
             if streaming_session is not None:
                 try:
@@ -493,6 +556,8 @@ async def send_audio():
     task_id = str(uuid.uuid1())
     message_queued = False
     polish_prefetch_task: asyncio.Task | None = None
+    wav_cache_task: asyncio.Task[None] | None = None
+    upload_cache_task: asyncio.Task[None] | None = None
     try:
         Cosmic.transcribe_busy = True
         Cosmic.active_task_id = task_id
@@ -530,12 +595,15 @@ async def send_audio():
 
         # Log identifiers
         console.print(f"录音时长：{duration:.2f}s")
-        _cache_recording_for_retry(
-            audio_concat=audio_concat,
-            task_id=task_id,
-            duration=duration,
-            time_start=time_start,
-            record_stop=record_stop,
+        wav_cache_task = asyncio.create_task(
+            _cache_recording_in_worker(
+                audio_concat=audio_concat,
+                task_id=task_id,
+                duration=duration,
+                time_start=time_start,
+                record_stop=record_stop,
+            ),
+            name=f"retry_wav:{task_id}",
         )
         polish_prefetch_task = asyncio.create_task(
             prefetch_request_context(),
@@ -612,6 +680,7 @@ async def send_audio():
                     with _timed_realtime_step("queue_final_result"):
                         await Cosmic.queue_out.put(message)
                     message_queued = True
+                    await wav_cache_task
                     return
                 console.print(
                     "实时转写返回为空，回退到录完上传。"
@@ -640,8 +709,22 @@ async def send_audio():
                 payload_ch,
             ) = await make_audio_payload(audio_proc, actual_sr)
 
+        payload_bytes = _payload_bytes(payload_buf)
+        upload_cache_task = asyncio.create_task(
+            _cache_upload_payload_after_wav(
+                wav_cache_task=wav_cache_task,
+                payload_bytes=payload_bytes,
+                payload_mime=payload_mime,
+                task_id=task_id,
+                duration=duration,
+                time_start=time_start,
+                record_stop=record_stop,
+            ),
+            name=f"retry_upload:{task_id}",
+        )
+
         message_queued = await _submit_payload(
-            payload_buf=payload_buf,
+            payload_buf=io.BytesIO(payload_bytes),
             payload_mime=payload_mime,
             task_id=task_id,
             time_start=time_start,
@@ -662,6 +745,17 @@ async def send_audio():
         _emit_status_overlay("hide")
         console.print(e)
     finally:
+        pending_cache_task = upload_cache_task or wav_cache_task
+        if pending_cache_task is not None:
+            try:
+                await asyncio.shield(pending_cache_task)
+            except asyncio.CancelledError:
+                # ``to_thread`` work cannot be stopped once started.  Let its
+                # atomic write finish and always retrieve its result so a
+                # cancelled send cannot leak an unobserved task exception.
+                pending_cache_task.add_done_callback(_consume_background_task_result)
+            except Exception as exc:
+                console.print(f"保存重试录音缓存失败：{exc}", style="bright_red")
         if polish_prefetch_task is not None and not polish_prefetch_task.done():
             polish_prefetch_task.cancel()
         if getattr(Cosmic, "active_task_id", None) == task_id and not message_queued:
