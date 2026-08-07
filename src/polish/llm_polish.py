@@ -14,6 +14,7 @@ from typing import Any, cast
 import yaml
 
 from src.polish.smart_quotes import normalize_zh_cn_smart_quotes
+from src.polish.session_constraint import read_session_constraint
 from src.infra.finalized_history import (
     load_finalized_history,
     save_finalized_history,
@@ -45,6 +46,7 @@ class PolishRequestContext:
     temperature: Any
     max_output_tokens: Any
     prompt: str
+    session_constraint: str
     captured_textbox_context: TextBoxContext | None
     textbox_context: str | None
     textbox_context_has_position: bool
@@ -724,6 +726,7 @@ def _prepare_polish_request_context(
     temperature = cfg.get("temperature")
     max_output_tokens = cfg.get("max_output_tokens")
     prompt: str = cfg.get("prompt", "")
+    session_constraint = read_session_constraint()
     timings["config_env_ms"] = (time.perf_counter() - t0) * 1000.0
 
     textbox_context_enabled: bool = bool(tc_cfg.get("enabled", False))
@@ -796,6 +799,7 @@ def _prepare_polish_request_context(
         temperature=temperature,
         max_output_tokens=max_output_tokens,
         prompt=prompt,
+        session_constraint=session_constraint,
         captured_textbox_context=captured_textbox_context,
         textbox_context=textbox_context,
         textbox_context_has_position=textbox_context_has_position,
@@ -863,13 +867,24 @@ def _build_messages(
     history: list[str] | None = None,
     textbox_context_has_position: bool = False,
     lexicon_message: str | None = None,
+    session_constraint: str = "",
 ) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = []
-    if prompt:
+    system_sections: list[str] = []
+    if prompt.strip():
+        system_sections.append(prompt.strip())
+    if session_constraint.strip():
+        system_sections.append(
+            "# 当前会话临时约束\n\n"
+            "以下约束只适用于当前工作会话；若与上面的一般写作偏好冲突，"
+            "以本节为准：\n\n"
+            f"{session_constraint.strip()}"
+        )
+    if system_sections:
         messages.append(
             {
                 "role": "system",
-                "content": prompt,
+                "content": "\n\n".join(system_sections),
             }
         )
     if vision_context:
@@ -999,6 +1014,7 @@ async def polish_text(
             context.history,
             context.textbox_context_has_position,
             context.lexicon_message,
+            context.session_constraint,
         ),
         temperature=(
             float(context.temperature) if context.temperature is not None else None

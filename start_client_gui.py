@@ -72,6 +72,7 @@ from src.audio.retry_cache import (
     write_retry_request,
 )
 from src.gui.app_startup import (
+    StartupLoadingOverlay,
     apply_theme_later,
     configure_app_locale_and_font,
     print_screen_scale,
@@ -88,6 +89,11 @@ from src.polish.llm_polish import (
     get_polish_prompt_text,
     reload_polish_config,
     update_polish_prompt_text,
+)
+from src.polish.session_constraint import (
+    create_session_constraint_file,
+    remove_session_constraint_file,
+    write_session_constraint,
 )
 from src.system.process_cleanup import (
     terminate_executable_processes,
@@ -253,6 +259,8 @@ class GUI(QMainWindow):
         self._worker_restart_pending = False
         self._latest_wav_player: subprocess.Popen[bytes] | None = None
         self.core_client_process: subprocess.Popen[str] | None = None
+        self._startup_complete_callback: Any | None = None
+        self._session_constraint_path = create_session_constraint_file()
         self.text_box_wordCountLabel: QLabel | None = None
         self.old_pos = QPoint()
         lexicon_python = resolve_pythonw_client() or sys.executable
@@ -361,6 +369,8 @@ class GUI(QMainWindow):
         self.main_layout.addWidget(self.text_box_client, 1)
         self.create_daily_input_count_label()
         self.main_layout.addWidget(self.daily_input_count_label)
+        self.create_session_constraint_editor()
+        self.main_layout.addWidget(self.session_constraint_container)
         self.main_layout.addLayout(self.provider_layout)
 
         # Central widget
@@ -399,22 +409,31 @@ class GUI(QMainWindow):
 
     def _deferred_startup(self):
         """Run expensive startup steps after the window is responsive."""
-        # Load providers (I/O + YAML parse)
         try:
-            self.initialize_transcription_providers()
-        except Exception:
-            pass
-        # Refresh UI combos now that providers are available
-        try:
-            self.populate_model_combo()
-            self.sync_asr_realtime_control()
-        except Exception:
-            pass
-        # Start background workers (core first, helpers staggered)
-        try:
-            self.start_script()
-        except Exception:
-            pass
+            # Load providers (I/O + YAML parse)
+            try:
+                self.initialize_transcription_providers()
+            except Exception:
+                pass
+            # Refresh UI combos now that providers are available
+            try:
+                self.populate_model_combo()
+                self.sync_asr_realtime_control()
+            except Exception:
+                pass
+            # Start background workers (core first using common worker launcher)
+            try:
+                self.start_script()
+            except Exception:
+                pass
+        finally:
+            callback = self._startup_complete_callback
+            self._startup_complete_callback = None
+            if callable(callback):
+                try:
+                    callback()
+                except Exception:
+                    pass
 
     # Removed custom title bar and its buttons; using native frame instead
 
@@ -456,6 +475,74 @@ class GUI(QMainWindow):
         self.daily_input_count_timer = QTimer(self)
         self.daily_input_count_timer.timeout.connect(self._refresh_daily_input_count)
         self.daily_input_count_timer.start(1000)
+
+    def create_session_constraint_editor(self) -> None:
+        """Create the compact editor for constraints scoped to this GUI session."""
+        self.session_constraint_container = QWidget()
+        layout = QVBoxLayout(self.session_constraint_container)
+        layout.setContentsMargins(3, 4, 3, 2)
+        layout.setSpacing(3)
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(6)
+
+        self.session_constraint_label = QLabel("当前任务约束")
+        self.session_constraint_label.setStyleSheet("color: #555555; padding: 0 4px;")
+        self.session_constraint_label.setToolTip(
+            "仅影响本次 GUI 会话中的后续 LLM 润色；重启 GUI 后自动清空"
+        )
+        header.addWidget(self.session_constraint_label)
+        header.addStretch()
+
+        self.session_constraint_status = QLabel("未设置")
+        self.session_constraint_status.setStyleSheet("color: #777777;")
+        header.addWidget(self.session_constraint_status)
+
+        self.clear_session_constraint_button = QPushButton("清空")
+        self.clear_session_constraint_button.clicked.connect(
+            self.clear_session_constraint
+        )
+        header.addWidget(self.clear_session_constraint_button)
+        layout.addLayout(header)
+
+        self.session_constraint_edit = QPlainTextEdit()
+        self.session_constraint_edit.setPlaceholderText(
+            "例如：本阶段保持回答简短；保留英文术语；不要把口语改得过于正式。"
+        )
+        self.session_constraint_edit.setMinimumHeight(52)
+        self.session_constraint_edit.setMaximumHeight(76)
+        self.session_constraint_edit.setTabChangesFocus(True)
+        self.session_constraint_edit.textChanged.connect(
+            self.on_session_constraint_changed
+        )
+        layout.addWidget(self.session_constraint_edit)
+
+        self.session_constraint_apply_timer = QTimer(self)
+        self.session_constraint_apply_timer.setSingleShot(True)
+        self.session_constraint_apply_timer.setInterval(400)
+        self.session_constraint_apply_timer.timeout.connect(
+            self.apply_session_constraint
+        )
+
+    def on_session_constraint_changed(self) -> None:
+        has_text = bool(self.session_constraint_edit.toPlainText().strip())
+        self.session_constraint_status.setText("待应用" if has_text else "未设置")
+        self.session_constraint_apply_timer.start()
+
+    def apply_session_constraint(self) -> None:
+        text = self.session_constraint_edit.toPlainText()
+        try:
+            write_session_constraint(self._session_constraint_path, text)
+        except OSError as exc:
+            self.session_constraint_status.setText("应用失败")
+            self.append_colored_line(f"应用当前任务约束失败：{exc}", "#ff5555")
+            return
+        self.session_constraint_status.setText("已生效" if text.strip() else "未设置")
+
+    def clear_session_constraint(self) -> None:
+        self.session_constraint_edit.clear()
+        self.apply_session_constraint()
 
     def _refresh_daily_input_count(self) -> None:
         try:
@@ -1592,6 +1679,7 @@ class GUI(QMainWindow):
         self._tray_process_client.stop()
         # Terminate core_client.py and any launcher-spawned child processes from this checkout.
         self._stop_core_client_processes()
+        remove_session_constraint_file(getattr(self, "_session_constraint_path", None))
 
         # Quit the application
         QApplication.quit()
@@ -1880,6 +1968,8 @@ class GUI(QMainWindow):
     def apply_scale_factor(self):
         # 应用缩放因子
         widgets: list[QWidget] = [self.text_box_client]
+        if hasattr(self, "session_constraint_edit"):
+            widgets.append(self.session_constraint_edit)
         if hasattr(self, "daily_input_count_label"):
             widgets.append(self.daily_input_count_label)
         if hasattr(self, "modify_prompt_button"):
@@ -1932,6 +2022,7 @@ def start_client_gui(profile_options: StartupProfileOptions | None = None):
         print("无法完成 CapsWriter GUI 替换，本次启动已退出。")
         return
     startup_profiler = StartupProfiler(profile_options)
+    loading_overlay: StartupLoadingOverlay | None = None
     try:
         startup_profiler.start()
         app = QApplication(sys.argv)
@@ -1949,6 +2040,9 @@ def start_client_gui(profile_options: StartupProfileOptions | None = None):
         gui = GUI()
         if not Config.shrink_automatically_to_tray:
             gui.show()
+            loading_overlay = StartupLoadingOverlay(gui)
+            gui._startup_complete_callback = loading_overlay.finish
+            loading_overlay.show_loading()
         try:
             if startup_profiler.enabled:
                 delay = max(
@@ -1961,6 +2055,11 @@ def start_client_gui(profile_options: StartupProfileOptions | None = None):
             startup_profiler.stop("timer schedule failed")
         sys.exit(app.exec())
     finally:
+        if loading_overlay is not None:
+            try:
+                loading_overlay.close()
+            except RuntimeError:
+                pass
         release_startup_slot(ROOT, "client_gui")
 
 

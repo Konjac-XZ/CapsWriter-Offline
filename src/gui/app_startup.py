@@ -3,11 +3,41 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from PySide6.QtCore import QLocale, QTimer
+from PySide6.QtCore import QLocale, Qt, QTimer
 from PySide6.QtGui import QFont, QGuiApplication
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget
 
 from src.gui.runtime import theme_css_path
+
+
+class StartupLoadingOverlay(QWidget):
+    """Block the main window content while deferred startup work runs."""
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setObjectName("startupLoadingOverlay")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        self.setStyleSheet(
+            "#startupLoadingOverlay { background-color: rgba(245, 245, 245, 235); }"
+            "QLabel { color: #555555; font-size: 20px; font-weight: 500; }"
+        )
+
+        layout = QVBoxLayout(self)
+        label = QLabel("加载中…", self)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(label)
+
+    def show_loading(self) -> None:
+        parent = self.parentWidget()
+        if parent is not None:
+            self.setGeometry(parent.rect())
+        self.show()
+        self.raise_()
+        self.repaint()
+
+    def finish(self) -> None:
+        self.hide()
+        self.deleteLater()
 
 
 def apply_theme_later(app: QApplication) -> None:

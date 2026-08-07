@@ -37,3 +37,7 @@
 - Use `rg`/`rg --files` for searches; fall back only if unavailable.
 - Use the `apply_patch` to edit files
 - Avoid PowerShell-specific commands.
+- When working inside WSL2, always use the Windows host toolchain for this
+  repository (for example, `.venv/Scripts/python.exe`, `ruff.exe`, and
+  `ty.exe`). Never run the Linux `uv` against the repository's Windows virtual
+  environment.
