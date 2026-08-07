@@ -420,27 +420,29 @@ class TsfSpeechTipBridge:
         *,
         error: str | None = None,
     ) -> None:
-        text_hash = (
-            hashlib.sha256(frame.text.encode("utf-8")).hexdigest()[:8]
-            if frame.text
-            else "-"
-        )
         log = _LOGGER.info if result == Status.APPLIED.name.lower() else _LOGGER.warning
         log(
             "TSF request op=%s session=%s revision=%d style=%d chars=%d "
-            "text_hash=%s text=%r clients=%s result=%s elapsed_ms=%.1f%s",
+            "clients=%s result=%s elapsed_ms=%.1f%s",
             self._operation_name(int(frame.operation)),
             frame.session_id.hex[:8],
             frame.revision,
             int(frame.status),
             len(frame.text),
-            text_hash,
-            frame.text,
             clients if clients is not None else "unknown",
             result,
             (time.monotonic() - started) * 1000.0,
             f" error={error}" if error else "",
         )
+        if frame.text and _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "TSF request payload op=%s session=%s revision=%d text_hash=%s text=%r",
+                self._operation_name(int(frame.operation)),
+                frame.session_id.hex[:8],
+                frame.revision,
+                hashlib.sha256(frame.text.encode("utf-8")).hexdigest()[:8],
+                frame.text,
+            )
 
     async def begin_or_revise(
         self,

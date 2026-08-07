@@ -20,6 +20,7 @@ from src.polish.llm_polish import (
 )
 from src.tsf_ipc import get_tsf_speech_tip_bridge
 from src.tsf_ipc.protocol import CompositionStyle
+from src.tsf_ipc.revision_coalescer import LatestTextRevisionCoalescer
 
 warnings.filterwarnings("ignore")
 
@@ -134,13 +135,36 @@ async def recv_result():
                         CompositionStyle.TRANSCRIPTION,
                     )
 
-                async def on_polished_text(revised_text: str) -> None:
-                    if current_tid is not None and tsf_bridge.owns_task(current_tid):
+                revision_stream: LatestTextRevisionCoalescer | None = None
+                if polish_enabled_for_text and current_tid is not None:
+
+                    async def apply_polished_text(revised_text: str) -> None:
+                        # Ownership can change while a preceding revision waits
+                        # for its ACK (for example, a host-specific defer).
+                        if not tsf_bridge.owns_task(current_tid):
+                            return
                         await tsf_bridge.begin_or_revise(
                             current_tid,
                             revised_text,
                             CompositionStyle.POLISHING,
                         )
+
+                    revision_stream = LatestTextRevisionCoalescer(
+                        apply_polished_text,
+                        label=current_tid,
+                    )
+
+                first_polished_revision = True
+
+                async def on_polished_text(revised_text: str) -> None:
+                    nonlocal first_polished_revision
+                    if revision_stream is not None:
+                        revision_stream.submit(revised_text)
+                        if first_polished_revision:
+                            first_polished_revision = False
+                            # Let the worker capture the first polished text
+                            # before a buffered provider stream emits more.
+                            await asyncio.sleep(0)
 
                 polish_task = asyncio.create_task(
                     polish_text(
@@ -152,13 +176,20 @@ async def recv_result():
                 Cosmic.active_polish_task = polish_task
                 try:
                     text = await polish_task
+                    if revision_stream is not None:
+                        # No COMMIT may overtake the final streamed revision.
+                        await revision_stream.flush()
                 except asyncio.CancelledError:
+                    if revision_stream is not None:
+                        await revision_stream.cancel()
                     if _is_abandoned(current_tid):
                         await _cancel_abandoned_tsf_task(tsf_bridge, current_tid)
                         _emit_status_overlay("hide")
                         continue
                     raise
                 finally:
+                    if revision_stream is not None:
+                        await revision_stream.close(flush=False)
                     if getattr(Cosmic, "active_polish_task", None) is polish_task:
                         Cosmic.active_polish_task = None
                 _polish_elapsed = time.monotonic() - _t_polish

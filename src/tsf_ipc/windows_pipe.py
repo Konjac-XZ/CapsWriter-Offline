@@ -228,16 +228,23 @@ class WindowsNamedPipeBroker:
         sent = 0
         for client in clients:
             try:
-                self._enqueue_frame(client, frame, encoded)
+                self._enqueue_frame(client, frame, encoded, coalesce_revisions=True)
                 sent += 1
             except queue.Full:
                 self._remove_client(client.handle)
         return sent
 
-    def _enqueue_frame(self, client: _PipeClient, frame: Frame, encoded: bytes) -> None:
+    def _enqueue_frame(
+        self,
+        client: _PipeClient,
+        frame: Frame,
+        encoded: bytes,
+        *,
+        coalesce_revisions: bool = False,
+    ) -> None:
         with client.queue_lock:
             retained: list[tuple[Frame, bytes] | None] = []
-            if frame.operation == int(Operation.REVISE):
+            if coalesce_revisions and frame.operation == int(Operation.REVISE):
                 while True:
                     try:
                         queued = client.outgoing.get_nowait()

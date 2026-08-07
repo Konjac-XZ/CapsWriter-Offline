@@ -125,6 +125,19 @@ def test_bridge_sends_full_text_revisions_then_commits(enable_bridge):
     ]
 
 
+def test_applied_request_info_log_omits_full_text_and_hash(enable_bridge, caplog):
+    broker = FakeBroker()
+    bridge = TsfSpeechTipBridge(broker)
+    secret_text = "不应出现在默认日志中的正文"
+
+    caplog.set_level("INFO", logger="capswriter.tsf.bridge")
+    assert asyncio.run(bridge.begin_or_revise("task-log", secret_text)) is True
+
+    assert secret_text not in caplog.text
+    assert "text_hash=" not in caplog.text
+    assert f"chars={len(secret_text)}" in caplog.text
+
+
 def test_live_range_event_is_diagnostic_only(enable_bridge, monkeypatch):
     broker = FakeBroker()
     bridge = TsfSpeechTipBridge(broker)
