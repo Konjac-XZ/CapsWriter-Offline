@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import threading
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ from .store import (
     apply_reflection_outcomes,
     lease_due_corrections,
     mark_correction_failure,
+    get_reflection_store_snapshot,
     record_reflection_run,
     release_correction_leases,
 )
@@ -34,6 +36,15 @@ _CLASSIFICATIONS = {
     "content_revision",
     "discard",
     "ambiguous",
+}
+_RUNTIME_LOCK = threading.Lock()
+_RUNTIME_STATE: dict[str, object] = {
+    "phase": "starting",
+    "active_event_count": 0,
+    "last_started_at": None,
+    "last_completed_at": None,
+    "last_outcome": None,
+    "last_error_type": None,
 }
 
 
@@ -49,6 +60,31 @@ class ReflectionSettings:
     temperature: float = 0.2
     retry_base_seconds: float = 60.0
     retry_max_seconds: float = 3600.0
+
+
+def _update_runtime_state(**changes: object) -> None:
+    with _RUNTIME_LOCK:
+        _RUNTIME_STATE.update(changes)
+
+
+def get_reflection_status_snapshot() -> dict[str, object]:
+    """Return a stable, content-free view of the background reflection loop."""
+    settings = get_reflection_settings()
+    with _RUNTIME_LOCK:
+        runtime = dict(_RUNTIME_STATE)
+    runtime.update(
+        {
+            "enabled": settings.enabled,
+            "poll_seconds": settings.poll_seconds,
+            "settle_seconds": settings.settle_seconds,
+            "batch_size": settings.batch_size,
+        }
+    )
+    try:
+        runtime["storage"] = get_reflection_store_snapshot()
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not affect the worker
+        runtime["storage_error"] = type(exc).__name__
+    return runtime
 
 
 def get_reflection_settings() -> ReflectionSettings:
@@ -149,7 +185,12 @@ async def run_reflection_worker() -> None:
     while True:
         settings = get_reflection_settings()
         try:
-            if settings.enabled and _is_foreground_idle():
+            if not settings.enabled:
+                _update_runtime_state(phase="disabled", active_event_count=0)
+            elif not _is_foreground_idle():
+                _update_runtime_state(phase="waiting_for_idle", active_event_count=0)
+            else:
+                _update_runtime_state(phase="checking", active_event_count=0)
                 events = await asyncio.to_thread(
                     lease_due_corrections,
                     settle_seconds=settings.settle_seconds,
@@ -157,6 +198,12 @@ async def run_reflection_worker() -> None:
                     lease_seconds=settings.lease_seconds,
                 )
                 if events:
+                    _update_runtime_state(
+                        phase="processing",
+                        active_event_count=len(events),
+                        last_started_at=time.time(),
+                        last_error_type=None,
+                    )
                     request_task = asyncio.create_task(
                         _process_reflection_batch(events, settings),
                         name="personalization_reflection_request",
@@ -171,9 +218,18 @@ async def run_reflection_worker() -> None:
                     finally:
                         if Cosmic.active_reflection_task is request_task:
                             Cosmic.active_reflection_task = None
+                else:
+                    _update_runtime_state(phase="idle", active_event_count=0)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - background learning is best effort
+            _update_runtime_state(
+                phase="error_waiting_retry",
+                active_event_count=0,
+                last_completed_at=time.time(),
+                last_outcome="failure",
+                last_error_type=type(exc).__name__,
+            )
             _LOGGER.exception(
                 "Personalization reflection worker iteration failed: %s",
                 type(exc).__name__,
@@ -190,6 +246,7 @@ async def _process_reflection_batch(
     model = "unknown"
     try:
         if not _is_foreground_idle():
+            _update_runtime_state(phase="waiting_for_idle", active_event_count=0)
             await asyncio.to_thread(release_correction_leases, events)
             return
         context = _prepare_background_context()
@@ -199,6 +256,7 @@ async def _process_reflection_batch(
             or not context.base_url
             or not context.model
         ):
+            _update_runtime_state(phase="waiting_for_provider", active_event_count=0)
             await asyncio.to_thread(release_correction_leases, events)
             return
         provider_name = context.provider_name
@@ -248,7 +306,15 @@ async def _process_reflection_batch(
             applied,
             stale,
         )
+        _update_runtime_state(
+            phase="idle",
+            active_event_count=0,
+            last_completed_at=time.time(),
+            last_outcome="success",
+            last_error_type=None,
+        )
     except asyncio.CancelledError:
+        _update_runtime_state(phase="waiting_for_idle", active_event_count=0)
         await asyncio.to_thread(release_correction_leases, events)
         raise
     except Exception as exc:  # noqa: BLE001 - persisted events remain retryable
@@ -274,6 +340,13 @@ async def _process_reflection_batch(
             "Personalization reflection failed events=%d error=%s",
             len(events),
             error_type,
+        )
+        _update_runtime_state(
+            phase="error_waiting_retry",
+            active_event_count=0,
+            last_completed_at=time.time(),
+            last_outcome="failure",
+            last_error_type=error_type,
         )
 
 

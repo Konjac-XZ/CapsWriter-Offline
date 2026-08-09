@@ -192,12 +192,10 @@ def launch_task():
             play_music(Config.start_music_path, Config.start_music_volume)
 
     if Config.only_enable_microphones_when_pressed_record_shortcut:
-        # 重启音频流
+        # Recreate only the input stream on the normal path. PortAudio is
+        # refreshed inside stream_reopen only when opening or starting fails.
         with _timed_step("launch:stream_reopen"):
-            stream_reopen()
-        if Cosmic.stream is not None:
-            with _timed_step("launch:stream_start"):
-                Cosmic.stream.start()
+            stream_reopen(start=True)
 
     # 记录开始时间
     t1 = time.time()

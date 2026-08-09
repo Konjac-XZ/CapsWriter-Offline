@@ -8,6 +8,7 @@ from src.personalization.store import (
     PreferenceProposal,
     ReflectionOutcome,
     apply_reflection_outcomes,
+    get_reflection_store_snapshot,
     lease_due_corrections,
     mark_correction_failure,
     record_correction,
@@ -28,6 +29,26 @@ def _proposal(*, kind: str = "terminology") -> PreferenceProposal:
         keywords=("TypeScript", "Type Script", "前端"),
         confidence=0.95,
     )
+
+
+def test_reflection_store_snapshot_reports_queue_without_text_content():
+    assert record_correction(
+        session_id="session-status",
+        asr_text="sensitive original",
+        committed_text="sensitive committed",
+        corrected_text="sensitive corrected",
+        observed_at=10,
+    )
+
+    snapshot = get_reflection_store_snapshot(now=20)
+
+    assert snapshot["corrections"] == {
+        "total": 1,
+        "pending": 1,
+        "due": 1,
+        "leased": 0,
+    }
+    assert "sensitive" not in repr(snapshot)
 
 
 def test_correction_is_durable_and_multiple_edits_coalesce():

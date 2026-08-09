@@ -1,2 +1,5 @@
 # 指定所有 .bat 文件在提交时将 LF 转换为 CRLF
 *.bat text eol=crlf
+
+# Normalize WinUI source text while leaving binary assets auto-detected
+winui/** text=auto

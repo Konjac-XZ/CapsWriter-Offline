@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "CapsWriter.WinUI (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "CapsWriter.WinUI (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

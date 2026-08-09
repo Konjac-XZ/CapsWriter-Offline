@@ -63,12 +63,36 @@ def record_callback(
     )
 
 
-def stream_close(signum, frame):
-    if Cosmic.stream is not None:
-        Cosmic.stream.close()
+def stream_close(signum=None, frame=None):
+    stream = Cosmic.stream
+    Cosmic.stream = None
+    if stream is not None:
+        stream.close()
 
 
-def stream_reopen():
+def _replace_stream(*, start: bool) -> None:
+    """Replace the input stream without rebuilding PortAudio's device catalog."""
+    stream_close()
+    Cosmic.stream = stream_open()
+    if start:
+        Cosmic.stream.start()
+
+
+def _reload_portaudio() -> None:
+    """Refresh PortAudio after the normal stream-only reopen path has failed."""
+    with _timed_step("reopen:fallback_portaudio_terminate"):
+        sd._terminate()
+    with _timed_step("reopen:fallback_portaudio_dlclose"):
+        sd._ffi.dlclose(sd._lib)
+    libname = sd._libname
+    if libname is not None:
+        with _timed_step("reopen:fallback_portaudio_dlopen"):
+            sd._lib = sd._ffi.dlopen(libname)
+    with _timed_step("reopen:fallback_portaudio_initialize"):
+        sd._initialize()
+
+
+def stream_reopen(*, start: bool = False) -> None:
     global _debug_stream_ops
     _debug_stream_ops += 1
     total_start = time.perf_counter()
@@ -76,28 +100,26 @@ def stream_reopen():
         return
     console.print("\n正在聆听……", style="green")
 
-    # 关闭旧流
-    if Cosmic.stream is not None:
-        with _timed_step("reopen:old_stream_close"):
-            Cosmic.stream.close()
-
-    # 重载 PortAudio，更新设备列表
-    with _timed_step("reopen:portaudio_terminate"):
-        sd._terminate()
-    with _timed_step("reopen:portaudio_dlclose"):
-        sd._ffi.dlclose(sd._lib)
-    libname = sd._libname
-    if libname is not None:
-        with _timed_step("reopen:portaudio_dlopen"):
-            sd._lib = sd._ffi.dlopen(libname)
-    with _timed_step("reopen:portaudio_initialize"):
-        sd._initialize()
-
-    # 打开新流
-    with _timed_step("reopen:sleep_before_open"):
-        time.sleep(0.1)
-    with _timed_step("reopen:stream_open"):
-        Cosmic.stream = stream_open()
+    try:
+        with _timed_step("reopen:fast_stream_replace"):
+            _replace_stream(start=start)
+    except Exception as exc:
+        # Most recordings only need a fresh InputStream. Rebuilding PortAudio
+        # scans every Windows audio host API and can stall on a slow endpoint,
+        # so reserve that expensive operation for actual open/start failures.
+        _debug_log(
+            f"reopen:fast_path_failed {type(exc).__name__}: {exc}",
+            force=True,
+        )
+        console.print("音频流重开失败，正在刷新音频设备……", style="bright_yellow")
+        with _timed_step("reopen:fallback_stream_close"):
+            stream_close()
+        _reload_portaudio()
+        # Give Windows a short settling period only on the recovery path.
+        with _timed_step("reopen:fallback_sleep_before_open"):
+            time.sleep(0.1)
+        with _timed_step("reopen:fallback_stream_replace"):
+            _replace_stream(start=start)
     total_ms = (time.perf_counter() - total_start) * 1000.0
     _debug_log(
         f"reopen#{_debug_stream_ops} end total={total_ms:.1f}ms",

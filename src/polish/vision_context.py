@@ -6,6 +6,7 @@ import ctypes
 import json
 import os
 import platform
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -128,6 +129,33 @@ def _get_env(name: str, default: str | None = None) -> str | None:
 
 def is_vision_context_enabled() -> bool:
     return bool(_cfg().get("enabled", False))
+
+
+def set_vision_context_enabled(enabled: bool) -> bool:
+    path = _get_root_dir() / "config" / "polish" / "vision.yaml"
+    try:
+        original = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    replacement = "true" if enabled else "false"
+    pattern = re.compile(
+        r"^(?P<prefix>enabled\s*:\s*)(?P<value>true|false)(?P<suffix>\s*(#.*)?)$",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    updated, count = pattern.subn(
+        lambda match: f"{match.group('prefix')}{replacement}{match.group('suffix')}",
+        original,
+        count=1,
+    )
+    if count != 1:
+        return False
+    try:
+        path.write_text(updated, encoding="utf-8")
+    except OSError:
+        return False
+    global _vision_config_mtime
+    _vision_config_mtime = None
+    return True
 
 
 def start_vision_context_service() -> asyncio.Task | None:

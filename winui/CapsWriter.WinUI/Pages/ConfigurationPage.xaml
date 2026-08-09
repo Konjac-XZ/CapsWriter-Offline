@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="CapsWriter_WinUI.Pages.ConfigurationPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Loaded="Page_Loaded"
+    Unloaded="Page_Unloaded">
+    <ScrollViewer>
+        <StackPanel Padding="28,20,28,28" Spacing="14">
+            <Grid>
+                <StackPanel>
+                    <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="Prompt 与配置" />
+                    <TextBlock Margin="0,3,0,0" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="由 Python 服务统一校验和保存；这里不会直接改写配置文件。" />
+                </StackPanel>
+                <Button HorizontalAlignment="Right" VerticalAlignment="Center" Click="Reload_Click" Content="重新加载" />
+            </Grid>
+
+            <InfoBar x:Name="StatusBar" IsClosable="False" IsOpen="False" />
+
+            <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
+                <StackPanel Spacing="10">
+                    <Grid>
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="ASR Prompt" />
+                            <TextBlock x:Name="ProviderNameText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="当前转录服务商" />
+                        </StackPanel>
+                        <Button HorizontalAlignment="Right" VerticalAlignment="Center" Click="SaveAsrPrompt_Click" Content="保存 ASR Prompt" />
+                    </Grid>
+                    <TextBox x:Name="AsrPromptBox" AcceptsReturn="True" MinHeight="150" MaxHeight="320" FontFamily="Cascadia Mono, Consolas" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+
+            <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
+                <StackPanel Spacing="10">
+                    <Grid>
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="LLM 润色 Prompt" />
+                            <TextBlock x:Name="LlmStateText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="正在读取状态" />
+                        </StackPanel>
+                        <Button HorizontalAlignment="Right" VerticalAlignment="Center" Click="SaveLlmPrompt_Click" Content="保存 LLM Prompt" />
+                    </Grid>
+                    <TextBox x:Name="LlmPromptBox" AcceptsReturn="True" MinHeight="220" MaxHeight="520" FontFamily="Cascadia Mono, Consolas" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+
+            <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
+                <StackPanel Spacing="12">
+                    <Grid>
+                        <TextBlock VerticalAlignment="Center" Style="{StaticResource SubtitleTextBlockStyle}" Text="上下文来源" />
+                        <Button HorizontalAlignment="Right" Click="ClearHistory_Click" Content="清空最近上屏历史" Style="{StaticResource SubtleButtonStyle}" />
+                    </Grid>
+                    <ToggleSwitch x:Name="HistoryToggle" Header="最近上屏内容" Toggled="ContextToggle_Toggled" OnContent="启用" OffContent="关闭" />
+                    <ToggleSwitch x:Name="TextboxToggle" Header="当前文本框" Toggled="ContextToggle_Toggled" OnContent="启用" OffContent="关闭" />
+                    <ToggleSwitch x:Name="VisionToggle" Header="活动窗口视觉摘要" Toggled="ContextToggle_Toggled" OnContent="启用" OffContent="关闭" />
+                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="三类上下文开关都会立即生效；视觉后台任务也会随开关启动或停止。" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+
+            <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
+                <StackPanel Spacing="10">
+                    <Grid>
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="用户词库" />
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="每行一个词条；保存后从下一次录音开始生效。" />
+                        </StackPanel>
+                        <Button HorizontalAlignment="Right" VerticalAlignment="Center" Click="SaveLexicon_Click" Content="保存词库" />
+                    </Grid>
+                    <TextBox x:Name="LexiconBox" AcceptsReturn="True" MinHeight="220" MaxHeight="520" FontFamily="Cascadia Mono, Consolas" PlaceholderText="每行输入一个词条" TextWrapping="NoWrap" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

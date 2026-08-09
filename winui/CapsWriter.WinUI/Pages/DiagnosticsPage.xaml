@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="CapsWriter_WinUI.Pages.DiagnosticsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Loaded="Page_Loaded"
+    Unloaded="Page_Unloaded">
+    <ScrollViewer>
+        <StackPanel Padding="28,20,28,28" Spacing="14">
+            <Grid>
+                <StackPanel>
+                    <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="诊断" />
+                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="原生壳、IPC 与 Python 后端的当前运行边界。" />
+                </StackPanel>
+                <Button HorizontalAlignment="Right" VerticalAlignment="Center" Click="Refresh_Click" Content="刷新" />
+            </Grid>
+            <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
+                    <StackPanel Spacing="5"><TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="连接" /><TextBlock x:Name="ConnectionText" Style="{StaticResource SubtitleTextBlockStyle}" Text="等待状态" /></StackPanel>
+                </Border>
+                <Border Grid.Column="1" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
+                    <StackPanel Spacing="5"><TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="协议" /><TextBlock x:Name="ProtocolText" Style="{StaticResource SubtitleTextBlockStyle}" Text="v1" /></StackPanel>
+                </Border>
+                <Border Grid.Column="2" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
+                    <StackPanel Spacing="5"><TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="内存日志" /><TextBlock x:Name="LogCountText" Style="{StaticResource SubtitleTextBlockStyle}" Text="0 / 500" /></StackPanel>
+                </Border>
+            </Grid>
+            <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
+                <StackPanel Spacing="8">
+                    <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="进程与路径" />
+                    <TextBlock x:Name="ProcessText" Text="Python 后端尚未连接" TextWrapping="Wrap" />
+                    <TextBlock x:Name="RootText" FontFamily="Cascadia Mono, Consolas" Foreground="{ThemeResource TextFillColorSecondaryBrush}" IsTextSelectionEnabled="True" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+            <InfoBar IsClosable="False" IsOpen="True" Message="状态快照不会包含 API Key、反思原文或 TSF 正在处理的正文；日志列表最多保留 500 条。" Severity="Informational" />
+        </StackPanel>
+    </ScrollViewer>
+</Page>

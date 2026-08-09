@@ -637,3 +637,62 @@ def record_reflection_run(
             ),
         )
         database.commit()
+
+
+def get_reflection_store_snapshot(*, now: float | None = None) -> dict[str, object]:
+    """Return non-sensitive reflection queue and recent-run diagnostics for the GUI."""
+    current_time = time.time() if now is None else float(now)
+    with state_db.connection() as database:
+        counts = database.execute(
+            "SELECT "
+            "COUNT(*) AS total, "
+            "SUM(CASE WHEN processed_revision < event_revision THEN 1 ELSE 0 END) "
+            "AS pending, "
+            "SUM(CASE WHEN processed_revision < event_revision "
+            "AND next_attempt_at <= ? AND lease_until <= ? THEN 1 ELSE 0 END) "
+            "AS due, "
+            "SUM(CASE WHEN processed_revision < event_revision "
+            "AND lease_until > ? THEN 1 ELSE 0 END) AS leased "
+            "FROM correction_events",
+            (current_time, current_time, current_time),
+        ).fetchone()
+        preference_counts = database.execute(
+            "SELECT status, COUNT(*) AS count FROM learned_preferences GROUP BY status"
+        ).fetchall()
+        latest_run = database.execute(
+            "SELECT started_at, completed_at, provider, model, event_count, "
+            "outcome, error_type FROM reflection_runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+
+    preferences = {str(row["status"]): int(row["count"]) for row in preference_counts}
+    latest = (
+        {
+            "started_at": float(latest_run["started_at"]),
+            "completed_at": (
+                float(latest_run["completed_at"])
+                if latest_run["completed_at"] is not None
+                else None
+            ),
+            "provider": str(latest_run["provider"]),
+            "model": str(latest_run["model"]),
+            "event_count": int(latest_run["event_count"]),
+            "outcome": str(latest_run["outcome"]),
+            "error_type": (
+                str(latest_run["error_type"])
+                if latest_run["error_type"] is not None
+                else None
+            ),
+        }
+        if latest_run is not None
+        else None
+    )
+    return {
+        "corrections": {
+            "total": int(counts["total"] or 0),
+            "pending": int(counts["pending"] or 0),
+            "due": int(counts["due"] or 0),
+            "leased": int(counts["leased"] or 0),
+        },
+        "preferences": preferences,
+        "latest_run": latest,
+    }

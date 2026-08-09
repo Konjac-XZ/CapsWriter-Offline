@@ -122,6 +122,23 @@ class WindowsNamedPipeBroker:
             return len(self._clients)
 
     @property
+    def client_snapshots(self) -> tuple[dict[str, object], ...]:
+        with self._clients_lock:
+            snapshots: list[dict[str, object]] = []
+            for client in self._clients.values():
+                snapshots.append(
+                    {
+                        "process_id": client.process_id,
+                        "process_name": client.process_name or "unknown",
+                    }
+                )
+            return tuple(snapshots)
+
+    @property
+    def is_running(self) -> bool:
+        return bool(self._accept_thread and self._accept_thread.is_alive())
+
+    @property
     def startup_error(self) -> Exception | None:
         return self._startup_error
 

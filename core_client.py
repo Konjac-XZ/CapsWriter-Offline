@@ -54,6 +54,11 @@ from src.system.startup_replacement import (
 )
 from src.infra.file_change_signal import AsyncFileChangeSignal
 from src.tsf_ipc import get_tsf_speech_tip_bridge
+from src.gui_api import (
+    gui_protocol_enabled,
+    publish_gui_snapshots,
+    run_gui_command_loop,
+)
 
 Cosmic.transcribe_subtitles = bool(sys.argv[1:])
 
@@ -177,6 +182,8 @@ async def main_mic():
     control_watcher_task = None
     level_publisher_task = None
     reflection_worker_task = None
+    gui_command_task = None
+    gui_snapshot_task = None
     tsf_bridge = get_tsf_speech_tip_bridge()
 
     # 打开音频流
@@ -200,6 +207,13 @@ async def main_mic():
         name="personalization_reflection_worker",
     )
     Cosmic.reflection_worker_task = reflection_worker_task
+    if gui_protocol_enabled():
+        gui_command_task = asyncio.create_task(
+            run_gui_command_loop(), name="native_gui_command_loop"
+        )
+        gui_snapshot_task = asyncio.create_task(
+            publish_gui_snapshots(), name="native_gui_status_publisher"
+        )
     if tsf_bridge.enabled:
         if tsf_bridge.start(Cosmic.loop):
             console.print("TSF Speech TIP 实验 IPC 已启动", style="bright_black")
@@ -225,6 +239,14 @@ async def main_mic():
                 await reflection_worker_task
             if Cosmic.reflection_worker_task is reflection_worker_task:
                 Cosmic.reflection_worker_task = None
+        if gui_snapshot_task is not None:
+            gui_snapshot_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await gui_snapshot_task
+        if gui_command_task is not None:
+            gui_command_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await gui_command_task
         if control_watcher_task is not None:
             control_watcher_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):

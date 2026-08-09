@@ -280,6 +280,35 @@ class TsfSpeechTipBridge:
     def stop(self) -> None:
         self._broker.stop()
 
+    def get_status_snapshot(self) -> dict[str, object]:
+        """Return content-free operational state for the private diagnostics GUI."""
+        state = self._state
+        clients = getattr(self._broker, "client_snapshots", ())
+        startup_error = self.startup_error
+        return {
+            "enabled": self.enabled,
+            "server_running": bool(getattr(self._broker, "is_running", False)),
+            "client_count": int(getattr(self._broker, "client_count", 0) or 0),
+            "clients": list(clients),
+            "startup_error": str(startup_error) if startup_error else None,
+            "composition": (
+                {
+                    "active": True,
+                    "task_id": state.task_id,
+                    "session_id": str(state.session_id),
+                    "revision": state.revision,
+                    "captured": state.captured,
+                    "style": state.style.name.lower(),
+                    "host_process_id": state.host.process_id,
+                    "host_process_name": state.host.process_name or "unknown",
+                    "processor": state.processor.name,
+                    "defer_final": state.defer_final,
+                }
+                if state is not None
+                else {"active": False}
+            ),
+        }
+
     def owns_task(self, task_id: str | None) -> bool:
         return bool(
             task_id

@@ -1,0 +1,240 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="CapsWriter_WinUI.Pages.HomePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:models="using:CapsWriter_WinUI.Models"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    Loaded="Page_Loaded"
+    Unloaded="Page_Unloaded"
+    mc:Ignorable="d">
+
+    <Grid Padding="16,12,16,16" RowSpacing="10">
+        <Grid.KeyboardAccelerators>
+            <KeyboardAccelerator Key="L" Modifiers="Control" Invoked="ClearLogAccelerator_Invoked" />
+        </Grid.KeyboardAccelerators>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Border
+            MinHeight="320"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="10">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <Grid Height="40" Padding="14,4,10,4" VerticalAlignment="Center" ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Grid Height="24" VerticalAlignment="Center" ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <FontIcon
+                            VerticalAlignment="Center"
+                            FontFamily="{StaticResource SymbolThemeFontFamily}"
+                            FontSize="16"
+                            Glyph="&#xE9D9;" />
+                        <TextBlock
+                            Grid.Column="1"
+                            VerticalAlignment="Center"
+                            FontWeight="SemiBold"
+                            LineHeight="20"
+                            Text="运行日志" />
+                    </Grid>
+                    <TextBlock
+                        x:Name="DailyInputText"
+                        Grid.Column="1"
+                        Margin="0,0,4,0"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Center"
+                        FontSize="12"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        LineHeight="18"
+                        LineStackingStrategy="BlockLineHeight"
+                        Text="今日已输入 0 字" />
+                    <Border
+                        Grid.Column="2"
+                        Height="24"
+                        Padding="10,0"
+                        VerticalAlignment="Center"
+                        Background="{ThemeResource ControlFillColorDefaultBrush}"
+                        CornerRadius="12">
+                        <TextBlock
+                            x:Name="ConnectionStateText"
+                            VerticalAlignment="Center"
+                            FontSize="12"
+                            LineHeight="18"
+                            LineStackingStrategy="BlockLineHeight"
+                            MaxWidth="220"
+                            TextTrimming="CharacterEllipsis"
+                            TextWrapping="NoWrap"
+                            Text="正在启动…" />
+                    </Border>
+                    <Button
+                        Grid.Column="3"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Center"
+                        Click="ClearLog_Click"
+                        Style="{StaticResource CompactIconButtonStyle}"
+                        ToolTipService.ToolTip="只清空当前界面中的日志">
+                        <FontIcon
+                            FontFamily="{StaticResource SymbolThemeFontFamily}"
+                            FontSize="14"
+                            Glyph="&#xE74D;" />
+                    </Button>
+                </Grid>
+                <ListView
+                    x:Name="LogList"
+                    Grid.Row="1"
+                    Padding="8,0,8,10"
+                    IsItemClickEnabled="False"
+                    ItemsSource="{x:Bind LogEntries, Mode=OneWay}"
+                    SelectionMode="None">
+                    <ListView.ItemContainerStyle>
+                        <Style TargetType="ListViewItem">
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            <Setter Property="IsTabStop" Value="False" />
+                            <Setter Property="MinHeight" Value="24" />
+                            <Setter Property="Padding" Value="8,2" />
+                        </Style>
+                    </ListView.ItemContainerStyle>
+                    <ListView.ItemTemplate>
+                        <DataTemplate x:DataType="models:LogEntry">
+                            <Grid ColumnSpacing="10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="72" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock
+                                    FontFamily="Cascadia Mono, Consolas"
+                                    FontSize="11"
+                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                    Text="{x:Bind DisplayTime}" />
+                                <TextBlock
+                                    Grid.Column="1"
+                                    FontFamily="Cascadia Mono, Consolas"
+                                    FontSize="12"
+                                    Foreground="{x:Bind Foreground, Mode=OneTime}"
+                                    IsTextSelectionEnabled="True"
+                                    Text="{x:Bind Text}"
+                                    TextWrapping="Wrap" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+            </Grid>
+        </Border>
+
+        <Border
+            Grid.Row="1"
+            Padding="14,10"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1"
+            CornerRadius="10">
+            <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Spacing="7">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock FontWeight="SemiBold" Text="当前任务临时指示" />
+                        <TextBlock x:Name="ConstraintStateText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="等待连接" />
+                    </StackPanel>
+                    <TextBox
+                        x:Name="SessionConstraintBox"
+                        AcceptsReturn="True"
+                        MinHeight="58"
+                        MaxHeight="96"
+                        PlaceholderText="例如：这一阶段保持简短；保留英文术语；不要把口语改得过于正式。"
+                        TextChanged="SessionConstraintBox_TextChanged"
+                        TextWrapping="Wrap" />
+                </StackPanel>
+                <Button
+                    Grid.Column="1"
+                    VerticalAlignment="Bottom"
+                    Click="ClearConstraint_Click"
+                    Content="清空"
+                    Style="{StaticResource SubtleButtonStyle}" />
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="2" ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <ComboBox
+                x:Name="ModelComboBox"
+                MinWidth="340"
+                DropDownClosed="ModelComboBox_DropDownClosed"
+                DropDownOpened="ModelComboBox_DropDownOpened"
+                Header="转录模型"
+                PlaceholderText="选择转录模型"
+                SelectionChanged="ModelComboBox_SelectionChanged" />
+            <ToggleSwitch
+                x:Name="RealtimeToggle"
+                Grid.Column="1"
+                VerticalAlignment="Bottom"
+                Header="流式音频"
+                OffContent="文件"
+                OnContent="实时"
+                Toggled="RealtimeToggle_Toggled" />
+            <Button
+                x:Name="RetryLatestButton"
+                Grid.Column="2"
+                VerticalAlignment="Bottom"
+                Click="RetryLatest_Click"
+                Style="{StaticResource CompactIconButtonStyle}"
+                ToolTipService.ToolTip="重试最近录音">
+                <FontIcon
+                    FontFamily="{StaticResource SymbolThemeFontFamily}"
+                    FontSize="16"
+                    Glyph="&#xE72C;" />
+            </Button>
+            <Button
+                x:Name="PlaybackButton"
+                Grid.Column="3"
+                VerticalAlignment="Bottom"
+                Click="Playback_Click"
+                Style="{StaticResource CompactIconButtonStyle}"
+                ToolTipService.ToolTip="播放最近录音">
+                <FontIcon
+                    x:Name="PlaybackIcon"
+                    FontFamily="{StaticResource SymbolThemeFontFamily}"
+                    FontSize="16"
+                    Glyph="&#xE768;" />
+            </Button>
+            <Button
+                x:Name="AbandonCurrentButton"
+                Grid.Column="4"
+                VerticalAlignment="Bottom"
+                Click="AbandonCurrent_Click"
+                Style="{StaticResource CompactIconButtonStyle}"
+                ToolTipService.ToolTip="放弃当前任务">
+                <FontIcon
+                    FontFamily="{StaticResource SymbolThemeFontFamily}"
+                    FontSize="16"
+                    Glyph="&#xE711;" />
+            </Button>
+        </Grid>
+    </Grid>
+</Page>

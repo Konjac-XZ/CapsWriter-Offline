@@ -17,18 +17,18 @@ def polish_config_path() -> Path:
     return _get_root_dir() / "config" / "polish" / "polish.yaml"
 
 
-def get_textbox_context_enabled(default: bool = False) -> bool:
+def _get_section_bool(section: str, key: str, default: bool) -> bool:
     try:
         data = yaml.safe_load(polish_config_path().read_text(encoding="utf-8")) or {}
-        textbox_context = data.get("textbox_context", {})
-        if not isinstance(textbox_context, dict):
+        section_data = data.get(section, {})
+        if not isinstance(section_data, dict):
             return default
-        return bool(textbox_context.get("enabled", default))
+        return bool(section_data.get(key, default))
     except Exception:
         return default
 
 
-def set_textbox_context_enabled(enabled: bool) -> bool:
+def _set_section_bool(section: str, key: str, enabled: bool) -> bool:
     path = polish_config_path()
     try:
         original = path.read_text(encoding="utf-8")
@@ -37,9 +37,9 @@ def set_textbox_context_enabled(enabled: bool) -> bool:
 
     replacement = "true" if enabled else "false"
     lines = original.splitlines(keepends=True)
-    section_pattern = re.compile(r"^textbox_context\s*:\s*$")
+    section_pattern = re.compile(rf"^{re.escape(section)}\s*:\s*$")
     value_pattern = re.compile(
-        r"^(?P<indent>\s+)(?P<prefix>enabled\s*:\s*)"
+        rf"^(?P<indent>\s+)(?P<prefix>{re.escape(key)}\s*:\s*)"
         r"(?P<value>true|false)(?P<suffix>\s*(#.*)?)$",
         re.IGNORECASE,
     )
@@ -74,6 +74,22 @@ def set_textbox_context_enabled(enabled: bool) -> bool:
             return False
 
     return False
+
+
+def get_textbox_context_enabled(default: bool = False) -> bool:
+    return _get_section_bool("textbox_context", "enabled", default)
+
+
+def set_textbox_context_enabled(enabled: bool) -> bool:
+    return _set_section_bool("textbox_context", "enabled", enabled)
+
+
+def get_history_context_enabled(default: bool = False) -> bool:
+    return _get_section_bool("history", "enabled", default)
+
+
+def set_history_context_enabled(enabled: bool) -> bool:
+    return _set_section_bool("history", "enabled", enabled)
 
 
 def toggle_textbox_context_enabled() -> bool | None:
