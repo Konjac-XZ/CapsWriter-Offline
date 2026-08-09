@@ -1,3 +1,5 @@
+import pytest
+
 from src.tsf_ipc.context_snapshot import TsfContextSnapshot
 from src.tsf_ipc.text_reconciler import IncrementalTextTracker, reconcile_tracked_text
 
@@ -10,6 +12,10 @@ def _snapshot(text: str, target: str) -> TsfContextSnapshot:
 
 def _current(text: str) -> TsfContextSnapshot:
     return TsfContextSnapshot(text, 0, 0, 0)
+
+
+def _whole_range(text: str) -> TsfContextSnapshot:
+    return TsfContextSnapshot(text, len(text), 0, len(text))
 
 
 def test_reconciles_replacement_at_target_start():
@@ -86,3 +92,73 @@ def test_diff_candidate_repairs_native_range_missing_replacement_prefix():
 
     assert result is not None
     assert result.text == "您好，测试。"
+
+
+@pytest.mark.parametrize(
+    ("baseline_text", "observed_texts", "expected"),
+    [
+        pytest.param(
+            "你好，这是一个简单的测试。",
+            [
+                "你好，这是一个简单的测试。\n\n",
+                "好，这是一个简单的测试。\n\n",
+                "您好，这是一个简单的测试。\n\n",
+                "您好，这是一个简单的测试。\n\n\n",
+            ],
+            "您好，这是一个简单的测试。",
+            id="real-log-leading-replacement",
+        ),
+        pytest.param(
+            "你好，我明天准备去上海。",
+            [
+                "你好，我明天准备去上海。\n\n",
+                "你好，我明准备去上海。\n\n",
+                "你好，我准备去上海。\n\n",
+                "你好，我后天才准备去上海。\n\n",
+                "你好，我后天才准备去上海。\n\n\n",
+            ],
+            "你好，我后天才准备去上海。",
+            id="real-log-middle-replacement",
+        ),
+        pytest.param(
+            "我不知道该怎么处理。",
+            [
+                "我不知道该怎么处理。\n\n\n",
+                "我不知道该怎么处理。\n\n",
+                "这件事。\n\n",
+                "这件事应该。\n\n",
+                "这件事应该重新。\n\n",
+                "这件事应该重新考虑。\n\n",
+                "这件事应该重新考虑。\n\n\n",
+            ],
+            "这件事应该重新考虑。",
+            id="real-log-whole-sentence-rewrite",
+        ),
+        pytest.param(
+            "这是一个非常简单而直接的测试。",
+            [
+                "这是一个非常简单而直接的测试。\n\n",
+                "这是一个非测试。\n\n",
+                "这是一个测试。\n\n",
+                "这是一个测试。\n\n\n",
+            ],
+            "这是一个测试。",
+            id="real-log-middle-deletion",
+        ),
+    ],
+)
+def test_replays_real_typora_edit_snapshots(
+    baseline_text: str,
+    observed_texts: list[str],
+    expected: str,
+) -> None:
+    """Replay the stable snapshots captured in the 2026-08-07 manual test."""
+    tracker = IncrementalTextTracker(_whole_range(baseline_text))
+    latest = baseline_text
+
+    for text in observed_texts:
+        result = tracker.advance(_whole_range(text))
+        if result is not None:
+            latest = result.text
+
+    assert latest.strip() == expected
