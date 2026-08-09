@@ -179,6 +179,13 @@ Launcher behavior: before starting, it terminates any existing running `start_cl
    user-corrected text to the same provider/model used for polishing. Remove or
    disable the section if durable correction records and background requests are
    not desired.
+   Preference reflection only learns from the direct committed-to-corrected edit;
+   an empty tracked range ends the committed session without recording a deletion.
+   Unanchored replacements must remain textually continuous with the last accepted
+   version; unrelated content ends the old session instead of updating history.
+   Tracking also expires after two minutes. Exact terminology, spelling, and casing replacements can activate
+   from one direct edit, while punctuation, formatting, style, and avoidance rules
+   require repeated evidence. Model-generated numeric confidence is not used.
    LLM polish also runs a conservative Chinese smart-quotes post-processor by default (`smart_quotes.enabled=true`) to turn abused straight quotes into Chinese quotes while protecting Markdown code, inline code, URLs, paths, HTML, math, frontmatter, and structured text.
    When `textbox_context.enabled=true`, the registered TSF Speech TIP is the preferred context source. It reads a bounded window around the insertion point in a read-only edit session and returns text, caret, selection, and the actual host process without changing the document. If no foreground TIP responds, capture falls back to Windows UI Automation in this order: focused element → `TextPattern` → `ValuePattern` → `LegacyIAccessible`. The more intrusive `Ctrl+A` / `Ctrl+C` clipboard probe is disabled by default; set `textbox_context.clipboard_fallback_enabled=true` only when that fallback is explicitly wanted. `textbox_context.max_tokens` limits the attached textbox context with a lightweight token estimate; the default is 600. `tsf_speech_tip_context_timeout_ms` controls the initial TIP/context wait independently from composition ACK timing.
    Press the client hotkey configured by `toggle_textbox_context_shortcut` in `config.toml` (default: `f16`) to quickly toggle `textbox_context.enabled`; set it to an empty string to disable the toggle hotkey.

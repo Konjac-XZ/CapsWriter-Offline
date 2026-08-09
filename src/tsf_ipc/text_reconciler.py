@@ -11,12 +11,14 @@ from .context_snapshot import TsfContextSnapshot
 ANCHOR_SIZE = 96
 MINIMUM_CONFIDENCE = 0.72
 INCREMENTAL_MINIMUM_CONFIDENCE = 0.55
+MINIMUM_TEXT_CONTINUITY = 0.5
+MINIMUM_LENGTH_CONTINUITY = 0.4
 
 
 @dataclass(frozen=True, slots=True)
 class ReconciledText:
     text: str
-    confidence: float
+    alignment_score: float
     start: int
     end: int
 
@@ -112,6 +114,28 @@ def reconcile_tracked_text(
     return ReconciledText(candidate, confidence, start, end)
 
 
+def has_meaningful_tracking_anchor(snapshot: TsfContextSnapshot) -> bool:
+    """Return whether the tracked span has non-whitespace surrounding text."""
+    left = snapshot.text[: snapshot.selection_start]
+    right = snapshot.text[snapshot.selection_end :]
+    return bool(left.strip() or right.strip())
+
+
+def is_plausible_tracking_edit(previous: str, candidate: str) -> bool:
+    """Reject whole-control replacement while retaining ordinary local edits."""
+    before = previous.strip()
+    after = candidate.strip()
+    if not before or not after:
+        return False
+    if before == after:
+        return True
+    longest = max(len(before), len(after))
+    shortest = min(len(before), len(after))
+    if shortest / longest < MINIMUM_LENGTH_CONTINUITY:
+        return False
+    return fuzz.ratio(before, after) / 100.0 >= MINIMUM_TEXT_CONTINUITY
+
+
 def _choose_interval(
     scored: list[tuple[float, int, int]],
     *,
@@ -153,9 +177,9 @@ def _interval_confidence(
     current_left = current_text[max(0, start - len(left)) : start]
     current_right = current_text[end : end + len(right)]
     weighted_scores: list[tuple[float, float]] = []
-    if left:
+    if left.strip():
         weighted_scores.append((fuzz.ratio(left, current_left) / 100.0, 0.4))
-    if right:
+    if right.strip():
         weighted_scores.append((fuzz.ratio(right, current_right) / 100.0, 0.4))
     if original or candidate:
         weighted_scores.append((fuzz.ratio(original, candidate) / 100.0, 0.2))

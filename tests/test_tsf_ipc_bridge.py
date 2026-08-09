@@ -295,7 +295,7 @@ def test_new_task_rejects_late_event_from_previous_session(enable_bridge, monkey
     assert bridge.get_tracked_text(old_session) is None
 
 
-def test_initial_empty_range_event_does_not_mark_history_deleted(
+def test_empty_snapshot_stops_tracking_without_marking_history_deleted(
     enable_bridge, monkeypatch
 ):
     broker = FakeBroker()
@@ -306,16 +306,213 @@ def test_initial_empty_range_event_does_not_mark_history_deleted(
         lambda session_id, text: updates.append((session_id, text)) or True,
     )
 
-    asyncio.run(bridge.begin_or_revise("task-1", "第一条"))
-    asyncio.run(bridge.commit("task-1", "第一条"))
-    session_id = bridge.take_committed_session_id("task-1")
-    assert session_id is not None
-    broker.emit_event(
-        Frame(Operation.TRACKED_TEXT_CHANGED, uuid.UUID(session_id), 3, "")
-    )
+    async def exercise():
+        await bridge.begin_or_revise("task-1", "第一条")
+        await bridge.commit("task-1", "第一条")
+        session_id = bridge.take_committed_session_id("task-1")
+        assert session_id is not None
+        broker.emit_event(
+            Frame(
+                Operation.TRACKING_SNAPSHOT,
+                uuid.UUID(session_id),
+                3,
+                encode_context_snapshot("", "第一条", "\n"),
+                TrackingSnapshotKind.BASELINE,
+            )
+        )
+        broker.emit_event(
+            Frame(
+                Operation.TRACKING_SNAPSHOT,
+                uuid.UUID(session_id),
+                4,
+                encode_context_snapshot("", "", "\n"),
+                TrackingSnapshotKind.CURRENT,
+            )
+        )
+        broker.emit_event(
+            Frame(
+                Operation.TRACKING_SNAPSHOT,
+                uuid.UUID(session_id),
+                5,
+                encode_context_snapshot("", "下一条", "\n"),
+                TrackingSnapshotKind.CURRENT,
+            )
+        )
+        await asyncio.sleep(0.4)
+        return session_id
+
+    session_id = asyncio.run(exercise())
 
     assert updates == []
-    assert bridge.get_tracked_text(session_id) == "第一条"
+    assert bridge.get_tracked_text(session_id) is None
+
+
+def test_empty_snapshot_during_commit_does_not_reactivate_tracking(enable_bridge):
+    class EmptyDuringCommitBroker(FakeBroker):
+        async def request(self, frame, timeout):
+            reply = await super().request(frame, timeout)
+            if frame.operation == int(Operation.COMMIT):
+                self.emit_event(
+                    Frame(
+                        Operation.TRACKING_SNAPSHOT,
+                        frame.session_id,
+                        frame.revision,
+                        encode_context_snapshot("", "第一条", "\n"),
+                        TrackingSnapshotKind.BASELINE,
+                    )
+                )
+                self.emit_event(
+                    Frame(
+                        Operation.TRACKING_SNAPSHOT,
+                        frame.session_id,
+                        frame.revision + 1,
+                        encode_context_snapshot("", "", "\n"),
+                        TrackingSnapshotKind.CURRENT,
+                    )
+                )
+            return reply
+
+    bridge = TsfSpeechTipBridge(EmptyDuringCommitBroker())
+
+    async def exercise():
+        await bridge.begin_or_revise("task-1", "第一条")
+        assert await bridge.commit("task-1", "第一条") is True
+        return bridge.take_committed_session_id("task-1")
+
+    session_id = asyncio.run(exercise())
+
+    assert session_id is not None
+    assert bridge.get_tracked_text(session_id) is None
+
+
+def test_unanchored_unrelated_replacement_stops_previous_session(
+    enable_bridge, monkeypatch
+):
+    broker = FakeBroker()
+    bridge = TsfSpeechTipBridge(broker)
+    updates = []
+    monkeypatch.setattr(
+        "src.polish.llm_polish.update_finalized_text",
+        lambda session_id, text: updates.append((session_id, text)) or True,
+    )
+
+    async def exercise():
+        original = "我刚刚启用了它，但是没看到日志。"
+        await bridge.begin_or_revise("task-1", original)
+        await bridge.commit("task-1", original)
+        session_id = bridge.take_committed_session_id("task-1")
+        assert session_id is not None
+        broker.emit_event(
+            Frame(
+                Operation.TRACKING_SNAPSHOT,
+                uuid.UUID(session_id),
+                3,
+                encode_context_snapshot("", original, "\n\n"),
+                TrackingSnapshotKind.BASELINE,
+            )
+        )
+        broker.emit_event(
+            Frame(
+                Operation.TRACKING_SNAPSHOT,
+                uuid.UUID(session_id),
+                4,
+                encode_context_snapshot("", "这是下一条完全无关的输入。", "\n\n"),
+                TrackingSnapshotKind.CURRENT,
+            )
+        )
+        await asyncio.sleep(0.4)
+        return session_id
+
+    session_id = asyncio.run(exercise())
+
+    assert updates == []
+    assert bridge.get_tracked_text(session_id) is None
+
+
+def test_unanchored_local_edit_still_updates_history(enable_bridge, monkeypatch):
+    broker = FakeBroker()
+    bridge = TsfSpeechTipBridge(broker)
+    updates = []
+    monkeypatch.setattr(
+        "src.polish.llm_polish.update_finalized_text",
+        lambda session_id, text: updates.append((session_id, text)) or True,
+    )
+
+    async def exercise():
+        original = "没看到上游请求当中有负载相关的信息。"
+        corrected = "没看到上游请求当中有附带相关的信息。"
+        await bridge.begin_or_revise("task-1", original)
+        await bridge.commit("task-1", original)
+        session_id = bridge.take_committed_session_id("task-1")
+        assert session_id is not None
+        broker.emit_event(
+            Frame(
+                Operation.TRACKING_SNAPSHOT,
+                uuid.UUID(session_id),
+                3,
+                encode_context_snapshot("", original, "\n\n"),
+                TrackingSnapshotKind.BASELINE,
+            )
+        )
+        broker.emit_event(
+            Frame(
+                Operation.TRACKING_SNAPSHOT,
+                uuid.UUID(session_id),
+                4,
+                encode_context_snapshot("", corrected, "\n\n"),
+                TrackingSnapshotKind.CURRENT,
+            )
+        )
+        await asyncio.sleep(0.4)
+        return session_id, corrected
+
+    session_id, corrected = asyncio.run(exercise())
+
+    assert updates == [(session_id, corrected)]
+    assert bridge.get_tracked_text(session_id) == corrected
+
+
+def test_tracking_lifetime_expiry_rejects_late_snapshot(enable_bridge, monkeypatch):
+    broker = FakeBroker()
+    bridge = TsfSpeechTipBridge(broker)
+    updates = []
+    now = [10.0]
+    monkeypatch.setattr("src.tsf_ipc.bridge.time.monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        "src.polish.llm_polish.update_finalized_text",
+        lambda session_id, text: updates.append((session_id, text)) or True,
+    )
+
+    async def exercise():
+        await bridge.begin_or_revise("task-1", "原始内容")
+        await bridge.commit("task-1", "原始内容")
+        session_id = bridge.take_committed_session_id("task-1")
+        assert session_id is not None
+        broker.emit_event(
+            Frame(
+                Operation.TRACKING_SNAPSHOT,
+                uuid.UUID(session_id),
+                3,
+                encode_context_snapshot("", "原始内容", "\n"),
+                TrackingSnapshotKind.BASELINE,
+            )
+        )
+        now[0] = 131.0
+        broker.emit_event(
+            Frame(
+                Operation.TRACKING_SNAPSHOT,
+                uuid.UUID(session_id),
+                4,
+                encode_context_snapshot("", "原始内容已修改", "\n"),
+                TrackingSnapshotKind.CURRENT,
+            )
+        )
+        return session_id
+
+    session_id = asyncio.run(exercise())
+
+    assert updates == []
+    assert bridge.get_tracked_text(session_id) is None
 
 
 def test_bridge_queries_context_from_actual_applied_host(enable_bridge):

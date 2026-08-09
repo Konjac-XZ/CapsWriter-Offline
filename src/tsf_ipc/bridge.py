@@ -26,11 +26,17 @@ from .protocol import (
     Status,
     TrackingSnapshotKind,
 )
-from .text_reconciler import IncrementalTextTracker, reconcile_tracked_text
+from .text_reconciler import (
+    IncrementalTextTracker,
+    has_meaningful_tracking_anchor,
+    is_plausible_tracking_edit,
+    reconcile_tracked_text,
+)
 from .windows_pipe import BrokerReply, WindowsNamedPipeBroker
 
 
 _LOGGER = logging.getLogger("capswriter.tsf.bridge")
+TRACKING_MAX_LIFETIME_SECONDS = 120.0
 
 
 class SpeechTipBroker(Protocol):
@@ -189,6 +195,27 @@ class TsfSpeechTipBridge:
                 ),
             )
             return
+        if (
+            self._tracking_started_at > 0
+            and time.monotonic() - self._tracking_started_at
+            >= TRACKING_MAX_LIFETIME_SECONDS
+        ):
+            self._stop_tracking(session_id, reason="lifetime_expired")
+            return
+        target_text = snapshot.text[snapshot.selection_start : snapshot.selection_end]
+        if not target_text.strip():
+            self._stop_tracking(session_id, reason="range_empty")
+            return
+        baseline = self._tracking_baselines.get(session_id)
+        previous = self._tracked_text.get(session_id)
+        if (
+            baseline is not None
+            and previous is not None
+            and not has_meaningful_tracking_anchor(baseline)
+            and not is_plausible_tracking_edit(previous, target_text)
+        ):
+            self._stop_tracking(session_id, reason="content_discontinuity")
+            return
         self._tracking_current[session_id] = snapshot
         if self._tracking_flush_handle is not None:
             self._tracking_flush_handle.cancel()
@@ -223,6 +250,16 @@ class TsfSpeechTipBridge:
             _LOGGER.warning(
                 "TSF tracking reconciliation rejected session=%s", session_id[:8]
             )
+            if not has_meaningful_tracking_anchor(baseline):
+                self._stop_tracking(session_id, reason="reconciliation_rejected")
+            return
+        previous = self._tracked_text.get(session_id)
+        if (
+            previous is not None
+            and not has_meaningful_tracking_anchor(baseline)
+            and not is_plausible_tracking_edit(previous, result.text)
+        ):
+            self._stop_tracking(session_id, reason="content_discontinuity")
             return
         matched = False
         try:
@@ -236,13 +273,29 @@ class TsfSpeechTipBridge:
         if matched:
             self._tracked_text[session_id] = result.text
         _LOGGER.info(
-            "TSF tracking reconciliation session=%s mode=%s confidence=%.3f "
+            "TSF tracking reconciliation session=%s mode=%s alignment_score=%.3f "
             "history_matched=%s text=%r",
             session_id[:8],
             mode,
-            result.confidence,
+            result.alignment_score,
             matched,
             result.text,
+        )
+
+    def _stop_tracking(self, session_id: str, *, reason: str) -> None:
+        if session_id != self._active_tracked_session_id:
+            return
+        if self._tracking_flush_handle is not None:
+            self._tracking_flush_handle.cancel()
+            self._tracking_flush_handle = None
+        self._active_tracked_session_id = None
+        self._tracking_started_at = 0.0
+        self._tracked_text.clear()
+        self._tracking_baselines.clear()
+        self._tracking_incremental.clear()
+        self._tracking_current.clear()
+        _LOGGER.info(
+            "TSF tracking stopped session=%s reason=%s", session_id[:8], reason
         )
 
     def take_confirmed_termination_rollback(self, task_id: str | None) -> bool:
@@ -510,15 +563,10 @@ class TsfSpeechTipBridge:
             # Once a new speech task starts, no later edit event may revise the
             # preceding history item. This also protects against hosts whose
             # committed TSF range has forward gravity.
-            self._active_tracked_session_id = None
-            self._tracking_started_at = 0.0
-            self._tracked_text.clear()
-            self._tracking_baselines.clear()
-            self._tracking_incremental.clear()
-            self._tracking_current.clear()
-            if self._tracking_flush_handle is not None:
-                self._tracking_flush_handle.cancel()
-                self._tracking_flush_handle = None
+            if self._active_tracked_session_id is not None:
+                self._stop_tracking(
+                    self._active_tracked_session_id, reason="new_speech_task"
+                )
 
             if self._state is not None and self._state.captured:
                 self._state.revision += 1
@@ -645,14 +693,11 @@ class TsfSpeechTipBridge:
             if committed:
                 self._committed_sessions[task_id] = session_id
                 self._tracked_text.clear()
-                self._tracked_text[session_id] = state.text
+                if self._active_tracked_session_id == session_id:
+                    self._tracked_text[session_id] = state.text
                 self._state = None
             else:
-                self._active_tracked_session_id = None
-                self._tracking_started_at = 0.0
-                self._tracked_text.clear()
-                self._tracking_baselines.clear()
-                self._tracking_current.clear()
+                self._stop_tracking(session_id, reason="commit_failed")
             return committed is not None
 
     async def cancel(self, task_id: str | None = None) -> bool:

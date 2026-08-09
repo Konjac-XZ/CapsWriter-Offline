@@ -30,7 +30,7 @@ def test_reconciles_replacement_at_target_start():
 
     assert result is not None
     assert result.text == "您好，这是我们的第一个测试。"
-    assert result.confidence > 0.9
+    assert result.alignment_score > 0.9
 
 
 def test_reconciles_explicit_whole_target_deletion():
@@ -48,6 +48,19 @@ def test_rejects_unrelated_document_snapshot():
     result = reconcile_tracked_text(baseline, _current("完全不同的文档内容"))
 
     assert result is None
+
+
+def test_whitespace_anchor_does_not_validate_unrelated_whole_textbox_content():
+    baseline_text = "我刚刚启用了它，但是用处貌似不大，没看到日志。\n\n"
+    baseline = TsfContextSnapshot(
+        baseline_text,
+        len(baseline_text) - 2,
+        0,
+        len(baseline_text) - 2,
+    )
+    current = TsfContextSnapshot("修！\n\n", 2, 0, 2)
+
+    assert reconcile_tracked_text(baseline, current) is None
 
 
 def test_incremental_tracker_follows_repeated_rewrites():

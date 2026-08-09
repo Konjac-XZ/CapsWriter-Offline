@@ -274,7 +274,7 @@ def record_finalized_text(
                 from src.tsf_ipc import get_tsf_speech_tip_bridge
 
                 tracked = get_tsf_speech_tip_bridge().get_tracked_text(session_id)
-                if tracked is not None:
+                if tracked is not None and tracked.strip():
                     current_text = tracked.strip()
             except Exception:
                 pass
@@ -285,9 +285,7 @@ def record_finalized_text(
                 asr_text=(asr_text or text).strip(),
                 session_id=session_id,
                 tracking_status=(
-                    "unchanged"
-                    if current_text == text.strip()
-                    else ("deleted" if not current_text else "edited")
+                    "unchanged" if current_text == text.strip() else "edited"
                 ),
                 committed_at=time.time(),
             )
@@ -320,7 +318,10 @@ def get_finalized_history() -> list[str]:
     max_size: int = max(1, int(h_cfg.get("max_size", 5)))
     with _history_lock:
         _ensure_history_loaded_locked()
-        return [_format_history_item(item) for item in _finalized_history[-max_size:]]
+        formatted = [
+            _format_history_item(item) for item in _finalized_history[-max_size:]
+        ]
+        return [text for text in formatted if text]
 
 
 def get_asr_finalized_history() -> list[str]:
@@ -338,7 +339,7 @@ def get_asr_finalized_history() -> list[str]:
 
 def _format_history_item(item: FinalizedHistoryItem) -> str:
     if item.tracking_status == "deleted":
-        return f"语音上屏：{item.original_text}\n用户随后删除了这条内容"
+        return ""
     if item.tracking_status == "edited" and item.current_text != item.original_text:
         return f"语音上屏：{item.original_text}\n用户改为：{item.current_text}"
     return item.current_text
@@ -354,11 +355,11 @@ def update_finalized_text(session_id: str, current_text: str) -> bool:
             if item.session_id != session_id:
                 continue
             normalized = current_text.strip()
+            if not normalized:
+                return False
             item.current_text = normalized
             item.tracking_status = (
-                "unchanged"
-                if normalized == item.original_text
-                else ("deleted" if not normalized else "edited")
+                "unchanged" if normalized == item.original_text else "edited"
             )
             item.modified_at = time.time()
             save_finalized_history(_finalized_history)

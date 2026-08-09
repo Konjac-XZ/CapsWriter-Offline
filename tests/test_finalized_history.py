@@ -110,6 +110,61 @@ def test_tsf_edit_updates_history_and_exposes_before_after(monkeypatch, tmp_path
     ]
 
 
+def test_empty_tsf_update_is_ignored(monkeypatch):
+    monkeypatch.setattr(
+        llm_polish,
+        "_cfg",
+        lambda: {
+            "history": {"enabled": True, "max_size": 5},
+            "personalization": {"enabled": True},
+        },
+    )
+    monkeypatch.setattr(llm_polish, "_qwen_asr_history_settings", lambda: (False, 0))
+    monkeypatch.setattr(llm_polish, "_finalized_history", [])
+    monkeypatch.setattr(llm_polish, "_history_loaded", True)
+    saved = []
+    monkeypatch.setattr(
+        llm_polish,
+        "save_finalized_history",
+        lambda items: saved.append(list(items)) or True,
+    )
+    corrections = []
+    monkeypatch.setattr(
+        "src.personalization.record_correction",
+        lambda **kwargs: corrections.append(kwargs),
+    )
+
+    llm_polish.record_finalized_text("提交后被输入框清空的内容", "session-1")
+    assert llm_polish.update_finalized_text("session-1", "  \n") is False
+
+    item = llm_polish._finalized_history[0]
+    assert item.current_text == "提交后被输入框清空的内容"
+    assert item.tracking_status == "unchanged"
+    assert llm_polish.get_finalized_history() == ["提交后被输入框清空的内容"]
+    assert len(saved) == 1
+    assert corrections == []
+
+
+def test_legacy_deleted_history_item_is_omitted(monkeypatch):
+    monkeypatch.setattr(
+        llm_polish, "_cfg", lambda: {"history": {"enabled": True, "max_size": 5}}
+    )
+    monkeypatch.setattr(
+        llm_polish,
+        "_finalized_history",
+        [
+            finalized_history.FinalizedHistoryItem(
+                original_text="旧记录",
+                current_text="",
+                tracking_status="deleted",
+            )
+        ],
+    )
+    monkeypatch.setattr(llm_polish, "_history_loaded", True)
+
+    assert llm_polish.get_finalized_history() == []
+
+
 def test_tsf_edit_survives_short_history_eviction_in_correction_journal(
     monkeypatch, tmp_path: Path
 ):

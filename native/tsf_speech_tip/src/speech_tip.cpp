@@ -70,7 +70,7 @@ constexpr UINT kForegroundChangedMessage = WM_APP + 0x343;
 constexpr UINT_PTR kEditSessionWatchdogTimer = 1;
 constexpr UINT kEditSessionWatchdogTimeoutMs = 750;
 constexpr ULONGLONG kEditSessionRetryCooldownMs = 1000;
-constexpr ULONGLONG kTrackingInitialCollapseWindowMs = 1500;
+constexpr ULONGLONG kTrackingMaximumLifetimeMs = 120000;
 constexpr std::size_t kTrackingMaximumPrefixRecoveryCharacters = 16;
 constexpr LONG kTrackingSnapshotSurroundingCharacters = 1024;
 constexpr DWORD kDisconnectedRetryInitialMs = 100;
@@ -557,6 +557,17 @@ public:
         if (tracked_range_invalid_) {
             return S_OK;
         }
+        if (tracked_started_at_ != 0 &&
+            GetTickCount64() - tracked_started_at_ >=
+                kTrackingMaximumLifetimeMs) {
+            SendTrackingDiagnostic(
+                tracked_session_,
+                tracked_revision_,
+                Status::InactiveSession,
+                L"tracking_stopped lifetime_expired");
+            ClearTrackedTextState();
+            return S_OK;
+        }
         ++tracking_end_edit_events_;
         if (HasActiveComposition(context)) {
             if (!tracked_foreign_composition_seen_) {
@@ -638,15 +649,22 @@ public:
             MaybeSendTrackingPerformanceSummary();
             return S_OK;
         }
-        if (text.empty() && !tracked_text_.empty() &&
-            GetTickCount64() - tracked_started_at_ <=
-                kTrackingInitialCollapseWindowMs) {
+        if (text.empty()) {
+            const std::size_t previous_size = tracked_text_.size();
+            tracked_text_.clear();
+            ++tracked_revision_;
+            SendTrackingSnapshot(
+                context, tracked_range_, read_cookie, false, &text);
             SendTrackingDiagnostic(
                 tracked_session_,
                 tracked_revision_,
                 Status::InactiveSession,
-                L"tracking_observed initial_range_collapse old_chars=" +
-                    std::to_wstring(tracked_text_.size()));
+                L"tracking_stopped range_empty old_chars=" +
+                    std::to_wstring(previous_size));
+            SendTrackedTextChanged();
+            RecordTrackingProcessingTime(processing_started);
+            ClearTrackedTextState();
+            return S_OK;
         }
         const std::size_t previous_size = tracked_text_.size();
         tracked_text_ = text;
