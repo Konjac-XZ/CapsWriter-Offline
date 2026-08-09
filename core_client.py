@@ -41,6 +41,7 @@ from src.audio.send_audio import retry_latest_audio
 from src.audio.level_publisher import publish_overlay_levels
 from src.audio.stream import stream_close, stream_open
 from src.polish.llm_polish import clear_finalized_history
+from src.personalization.reflection import run_reflection_worker
 from src.polish.vision_context import (
     start_vision_context_service,
     stop_vision_context_service,
@@ -175,6 +176,7 @@ async def main_mic():
     vision_task = None
     control_watcher_task = None
     level_publisher_task = None
+    reflection_worker_task = None
     tsf_bridge = get_tsf_speech_tip_bridge()
 
     # 打开音频流
@@ -193,6 +195,11 @@ async def main_mic():
     vision_task = start_vision_context_service()
     control_watcher_task = asyncio.create_task(watch_control_requests())
     level_publisher_task = asyncio.create_task(publish_overlay_levels())
+    reflection_worker_task = asyncio.create_task(
+        run_reflection_worker(),
+        name="personalization_reflection_worker",
+    )
+    Cosmic.reflection_worker_task = reflection_worker_task
     if tsf_bridge.enabled:
         if tsf_bridge.start(Cosmic.loop):
             console.print("TSF Speech TIP 实验 IPC 已启动", style="bright_black")
@@ -212,6 +219,12 @@ async def main_mic():
             level_publisher_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await level_publisher_task
+        if reflection_worker_task is not None:
+            reflection_worker_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await reflection_worker_task
+            if Cosmic.reflection_worker_task is reflection_worker_task:
+                Cosmic.reflection_worker_task = None
         if control_watcher_task is not None:
             control_watcher_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):

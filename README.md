@@ -151,6 +151,34 @@ Launcher behavior: before starting, it terminates any existing running `start_cl
    ```
    The `openrouter.routing` mapping is passed to OpenRouter's `provider` request parameter. It supports OpenRouter routing fields such as `order`, `only`, `ignore`, `allow_fallbacks`, `require_parameters`, `data_collection`, `zdr`, `quantizations`, `sort`, and `max_price`; use exact provider slugs from OpenRouter. `order` prioritizes providers, while `only` restricts requests to them. Setting `allow_fallbacks: false` prevents routing to providers outside the selected route.
    The provider layer streams by default and falls back to one non-streaming request when streaming is unavailable. Polishing runs before regex replacement and whitespace reformatting in the live microphone pipeline.
+   Correction-based personalization is opt-in. When the following section is
+   present, trusted TSF post-commit edits are retained in the local SQLite state
+   database, summarized with the configured polish LLM while the client is idle,
+   and retrieved by keyword for later polish requests:
+   ```yaml
+   personalization:
+     enabled: true
+     reflection:
+       enabled: true
+       poll_seconds: 30
+       settle_seconds: 120
+       batch_size: 6
+       lease_seconds: 180
+       max_input_chars: 8000
+       max_output_tokens: 2048
+       temperature: 0.2
+       retry_base_seconds: 60
+       retry_max_seconds: 3600
+     retrieval:
+       enabled: true
+       max_preferences: 5
+       max_prompt_chars: 1600
+   ```
+   Clearing recent-output history does not erase queued corrections or learned
+   preferences. Each settled reflection batch sends its ASR, committed, and
+   user-corrected text to the same provider/model used for polishing. Remove or
+   disable the section if durable correction records and background requests are
+   not desired.
    LLM polish also runs a conservative Chinese smart-quotes post-processor by default (`smart_quotes.enabled=true`) to turn abused straight quotes into Chinese quotes while protecting Markdown code, inline code, URLs, paths, HTML, math, frontmatter, and structured text.
    When `textbox_context.enabled=true`, the registered TSF Speech TIP is the preferred context source. It reads a bounded window around the insertion point in a read-only edit session and returns text, caret, selection, and the actual host process without changing the document. If no foreground TIP responds, capture falls back to Windows UI Automation in this order: focused element → `TextPattern` → `ValuePattern` → `LegacyIAccessible`. The more intrusive `Ctrl+A` / `Ctrl+C` clipboard probe is disabled by default; set `textbox_context.clipboard_fallback_enabled=true` only when that fallback is explicitly wanted. `textbox_context.max_tokens` limits the attached textbox context with a lightweight token estimate; the default is 600. `tsf_speech_tip_context_timeout_ms` controls the initial TIP/context wait independently from composition ACK timing.
    Press the client hotkey configured by `toggle_textbox_context_shortcut` in `config.toml` (default: `f16`) to quickly toggle `textbox_context.enabled`; set it to an empty string to disable the toggle hotkey.

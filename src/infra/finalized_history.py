@@ -27,6 +27,7 @@ def history_file_path() -> Path:
 class FinalizedHistoryItem:
     original_text: str
     current_text: str
+    asr_text: str = ""
     session_id: str | None = None
     tracking_status: str = "unchanged"
     committed_at: float = 0.0
@@ -48,7 +49,7 @@ def load_finalized_history() -> list[FinalizedHistoryItem]:
         _migrate_legacy_history()
         with state_db.connection() as database:
             rows = database.execute(
-                "SELECT session_id, original_text, current_text, tracking_status, "
+                "SELECT session_id, asr_text, original_text, current_text, tracking_status, "
                 "committed_at, modified_at FROM finalized_history "
                 "ORDER BY sequence DESC LIMIT ?",
                 (MAX_STORED_ITEMS,),
@@ -59,6 +60,7 @@ def load_finalized_history() -> list[FinalizedHistoryItem]:
         FinalizedHistoryItem(
             original_text=row["original_text"],
             current_text=row["current_text"],
+            asr_text=row["asr_text"],
             session_id=row["session_id"],
             tracking_status=row["tracking_status"],
             committed_at=row["committed_at"],
@@ -86,7 +88,7 @@ def _load_legacy_items() -> list[FinalizedHistoryItem]:
     for item in items:
         if isinstance(item, str) and item.strip():
             text = item.strip()
-            normalized.append(FinalizedHistoryItem(text, text))
+            normalized.append(FinalizedHistoryItem(text, text, asr_text=text))
             continue
         if not isinstance(item, dict):
             continue
@@ -100,6 +102,11 @@ def _load_legacy_items() -> list[FinalizedHistoryItem]:
             FinalizedHistoryItem(
                 original_text=original.strip(),
                 current_text=current.strip(),
+                asr_text=(
+                    item.get("asr_text").strip()
+                    if isinstance(item.get("asr_text"), str)
+                    else original.strip()
+                ),
                 session_id=(
                     item.get("session_id")
                     if isinstance(item.get("session_id"), str)
@@ -147,7 +154,11 @@ def save_finalized_history(items: Sequence[FinalizedHistoryItem | str]) -> bool:
     normalized_items = [
         item
         if isinstance(item, FinalizedHistoryItem)
-        else FinalizedHistoryItem(str(item).strip(), str(item).strip())
+        else FinalizedHistoryItem(
+            str(item).strip(),
+            str(item).strip(),
+            asr_text=str(item).strip(),
+        )
         for item in items
         if isinstance(item, FinalizedHistoryItem) or str(item).strip()
     ]
@@ -163,11 +174,13 @@ def _replace_history(items: Sequence[FinalizedHistoryItem]) -> None:
         database.execute("BEGIN IMMEDIATE")
         database.execute("DELETE FROM finalized_history")
         database.executemany(
-            "INSERT INTO finalized_history(session_id, original_text, current_text, "
-            "tracking_status, committed_at, modified_at) VALUES(?, ?, ?, ?, ?, ?)",
+            "INSERT INTO finalized_history(session_id, asr_text, original_text, "
+            "current_text, tracking_status, committed_at, modified_at) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     item.session_id,
+                    item.asr_text,
                     item.original_text,
                     item.current_text,
                     item.tracking_status,

@@ -559,6 +559,9 @@ async def send_audio():
     wav_cache_task: asyncio.Task[None] | None = None
     upload_cache_task: asyncio.Task[None] | None = None
     try:
+        from src.personalization.reflection import cancel_active_reflection
+
+        cancel_active_reflection()
         Cosmic.transcribe_busy = True
         Cosmic.active_task_id = task_id
         current_task = asyncio.current_task()
@@ -776,6 +779,9 @@ async def retry_latest_audio() -> None:
         return
 
     try:
+        from src.personalization.reflection import cancel_active_reflection
+
+        cancel_active_reflection()
         Cosmic.transcribe_busy = True
         payload_bytes = latest_path.read_bytes()
         if not payload_bytes:

@@ -213,7 +213,11 @@ def test_final_tsf_output_requires_confirmed_commit_or_cancelled_fallback(
     monkeypatch.setattr(pipeline, "regex_replace", lambda text: text)
     monkeypatch.setattr(pipeline.pangu, "spacing_text", lambda text: text)
     monkeypatch.setattr(pipeline, "type_result", fake_type_result)
-    monkeypatch.setattr(pipeline, "record_finalized_text", finalized.append)
+    monkeypatch.setattr(
+        pipeline,
+        "record_finalized_text",
+        lambda text, *_args, **_kwargs: finalized.append(text),
+    )
     monkeypatch.setattr(
         pipeline,
         "record_input_characters",
@@ -561,7 +565,11 @@ def _configure_final_message_test(monkeypatch, bridge, message, fake_polish):
     monkeypatch.setattr(pipeline, "polish_text", fake_polish)
     monkeypatch.setattr(pipeline, "regex_replace", lambda text: text)
     monkeypatch.setattr(pipeline.pangu, "spacing_text", lambda text: text)
-    monkeypatch.setattr(pipeline, "record_finalized_text", lambda _text: None)
+    monkeypatch.setattr(
+        pipeline,
+        "record_finalized_text",
+        lambda _text, *_args, **_kwargs: None,
+    )
     monkeypatch.setattr(pipeline.Config, "save_audio", False)
     monkeypatch.setattr(pipeline.Config, "save_markdown", False)
 

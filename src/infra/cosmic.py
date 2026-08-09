@@ -108,6 +108,8 @@ class Cosmic:
     active_task_id: str | None = None
     active_send_task: Task[Any] | None = None
     active_polish_task: Task[Any] | None = None
+    active_reflection_task: Task[Any] | None = None
+    reflection_worker_task: Task[Any] | None = None
     abandoned_task_ids: set[str] = set()
     _last_transcript_delta_len = 0
     _transcript_had_deltas = False

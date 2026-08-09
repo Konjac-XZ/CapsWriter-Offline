@@ -227,7 +227,19 @@ def _ensure_history_loaded_locked() -> None:
     _history_loaded = True
 
 
-def record_finalized_text(text: str, session_id: str | None = None) -> None:
+def _personalization_enabled() -> bool:
+    personalization = _cfg().get("personalization", {})
+    if not isinstance(personalization, Mapping):
+        return False
+    return bool(personalization.get("enabled", False))
+
+
+def record_finalized_text(
+    text: str,
+    session_id: str | None = None,
+    *,
+    asr_text: str | None = None,
+) -> None:
     """Append *text* to the rolling history buffer (called from recv_result).
 
     The text should already be post-LLM-polish + regex + pangu + end-punctuation
@@ -239,12 +251,21 @@ def record_finalized_text(text: str, session_id: str | None = None) -> None:
     h_cfg = _cfg().get("history", {})
     polish_history_enabled = bool(h_cfg.get("enabled", False))
     asr_history_enabled, asr_max_size = _qwen_asr_history_settings()
-    if not polish_history_enabled and not asr_history_enabled:
+    personalization_enabled = _personalization_enabled() and bool(session_id)
+    if (
+        not polish_history_enabled
+        and not asr_history_enabled
+        and not personalization_enabled
+    ):
         return
     polish_max_size = (
         max(1, int(h_cfg.get("max_size", 5))) if polish_history_enabled else 0
     )
-    max_size = max(polish_max_size, asr_max_size, 1)
+    max_size = max(
+        polish_max_size,
+        asr_max_size,
+        20 if personalization_enabled else 1,
+    )
     with _history_lock:
         _ensure_history_loaded_locked()
         current_text = text.strip()
@@ -261,6 +282,7 @@ def record_finalized_text(text: str, session_id: str | None = None) -> None:
             FinalizedHistoryItem(
                 original_text=text.strip(),
                 current_text=current_text,
+                asr_text=(asr_text or text).strip(),
                 session_id=session_id,
                 tracking_status=(
                     "unchanged"
@@ -273,6 +295,18 @@ def record_finalized_text(text: str, session_id: str | None = None) -> None:
         if len(_finalized_history) > max_size:
             _finalized_history = _finalized_history[-max_size:]
         save_finalized_history(_finalized_history)
+        if personalization_enabled and session_id and current_text != text.strip():
+            try:
+                from src.personalization import record_correction
+
+                record_correction(
+                    session_id=session_id,
+                    asr_text=(asr_text or text).strip(),
+                    committed_text=text.strip(),
+                    corrected_text=current_text,
+                )
+            except Exception:
+                pass
 
 
 def get_finalized_history() -> list[str]:
@@ -328,6 +362,19 @@ def update_finalized_text(session_id: str, current_text: str) -> bool:
             )
             item.modified_at = time.time()
             save_finalized_history(_finalized_history)
+            if _personalization_enabled():
+                try:
+                    from src.personalization import record_correction
+
+                    record_correction(
+                        session_id=session_id,
+                        asr_text=item.asr_text,
+                        committed_text=item.original_text,
+                        corrected_text=normalized,
+                        observed_at=item.modified_at,
+                    )
+                except Exception:
+                    pass
             return True
     return False
 
@@ -925,6 +972,7 @@ def _build_messages(
     textbox_context_has_position: bool = False,
     lexicon_message: str | None = None,
     session_constraint: str = "",
+    learned_preference_message: str | None = None,
 ) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = []
     system_sections: list[str] = []
@@ -960,6 +1008,13 @@ def _build_messages(
             {
                 "role": "user",
                 "content": lexicon_message,
+            }
+        )
+    if learned_preference_message:
+        messages.append(
+            {
+                "role": "user",
+                "content": learned_preference_message,
             }
         )
     if history:
@@ -1033,6 +1088,13 @@ async def polish_text(
     if not should_polish_text(text):
         return text
 
+    try:
+        from src.personalization.reflection import cancel_active_reflection
+
+        cancel_active_reflection()
+    except Exception:
+        pass
+
     context: PolishRequestContext | None = None
     if prepared_context is not None:
         try:
@@ -1063,6 +1125,20 @@ async def polish_text(
 
     _missing_config_warned = False
 
+    learned_preference_message: str | None = None
+    try:
+        from src.personalization.retrieval import retrieve_preference_message
+
+        learned_preference_message = await retrieve_preference_message(
+            cfg=context.cfg,
+            asr_text=text,
+            textbox_context=context.textbox_context,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        learned_preference_message = None
+
     request = PolishCompletionRequest(
         model=context.model,
         messages=_build_messages(
@@ -1074,6 +1150,7 @@ async def polish_text(
             context.textbox_context_has_position,
             context.lexicon_message,
             context.session_constraint,
+            learned_preference_message,
         ),
         temperature=(
             float(context.temperature) if context.temperature is not None else None

@@ -388,9 +388,13 @@ async def recv_result():
                     tsf_bridge, "take_committed_session_id", lambda _task_id: None
                 )(current_tid)
                 if tracked_session_id is None:
-                    record_finalized_text(text)
+                    record_finalized_text(text, asr_text=raw_asr)
                 else:
-                    record_finalized_text(text, tracked_session_id)
+                    record_finalized_text(
+                        text,
+                        tracked_session_id,
+                        asr_text=raw_asr,
+                    )
                 play_completion_sound()
             _clear_active_task(current_tid)
             if hide_status_overlay_when_done:
