@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using CapsWriter_WinUI.Models;
 using CapsWriter_WinUI.Services;
 using Microsoft.UI.Xaml;
@@ -63,5 +64,86 @@ public sealed partial class DiagnosticsPage : Page
         {
             ConnectionText.Text = $"刷新失败：{exception.Message}";
         }
+    }
+
+    private void OpenRepositoryInVsCode_Click(object sender, RoutedEventArgs e)
+    {
+        string? root = RepositoryLocator.FindRoot();
+        if (root is null)
+        {
+            ShowStatus("找不到仓库根目录，无法使用 VS Code 打开。", InfoBarSeverity.Error);
+            return;
+        }
+        LaunchExternalTool("Code.exe", root, root, "VS Code");
+    }
+
+    private void OpenPolishConfigInNotepadPlusPlus_Click(object sender, RoutedEventArgs e)
+    {
+        string? root = RepositoryLocator.FindRoot();
+        if (root is null)
+        {
+            ShowStatus("找不到仓库根目录，无法定位 polish.yaml。", InfoBarSeverity.Error);
+            return;
+        }
+
+        string polishConfigPath = Path.Combine(root, "config", "polish", "polish.yaml");
+        if (!File.Exists(polishConfigPath))
+        {
+            ShowStatus($"找不到配置文件：{polishConfigPath}", InfoBarSeverity.Error);
+            return;
+        }
+        LaunchExternalTool("notepad++.exe", polishConfigPath, root, "Notepad++");
+    }
+
+    private void OpenRuntimeLogInNotepadPlusPlus_Click(object sender, RoutedEventArgs e)
+    {
+        string? logDirectory = Environment.GetEnvironmentVariable("CAPSWRITER_LOG_DIR");
+        if (string.IsNullOrWhiteSpace(logDirectory))
+        {
+            string localAppData = Environment.GetFolderPath(
+                Environment.SpecialFolder.LocalApplicationData);
+            logDirectory = Path.Combine(localAppData, "CapsWriter-Offline", "Logs");
+        }
+
+        string logPath = Path.Combine(logDirectory, "capswriter.log");
+        if (!File.Exists(logPath))
+        {
+            ShowStatus($"找不到当前日志：{logPath}", InfoBarSeverity.Error);
+            return;
+        }
+        LaunchExternalTool("notepad++.exe", logPath, logDirectory, "Notepad++");
+    }
+
+    private void LaunchExternalTool(
+        string executable,
+        string target,
+        string workingDirectory,
+        string displayName)
+    {
+        try
+        {
+            ProcessStartInfo startInfo = new()
+            {
+                FileName = executable,
+                WorkingDirectory = workingDirectory,
+                UseShellExecute = true,
+            };
+            startInfo.ArgumentList.Add(target);
+            Process.Start(startInfo);
+            ShowStatus($"已交给 {displayName} 打开。", InfoBarSeverity.Success);
+        }
+        catch (Exception exception)
+        {
+            ShowStatus(
+                $"启动 {displayName} 失败：{exception.Message}",
+                InfoBarSeverity.Error);
+        }
+    }
+
+    private void ShowStatus(string message, InfoBarSeverity severity)
+    {
+        StatusBar.Message = message;
+        StatusBar.Severity = severity;
+        StatusBar.IsOpen = true;
     }
 }

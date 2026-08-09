@@ -11,6 +11,28 @@
                 <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="诊断" />
                 <Button HorizontalAlignment="Right" VerticalAlignment="Center" Click="Refresh_Click" Content="刷新" />
             </Grid>
+
+            <InfoBar x:Name="StatusBar" IsClosable="False" IsOpen="False" />
+
+            <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
+                <StackPanel Spacing="12">
+                    <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="快捷操作" />
+                    <Grid ColumnSpacing="10" RowSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Button HorizontalAlignment="Stretch" Click="OpenRepositoryInVsCode_Click" Content="使用 VS Code 打开源目录" />
+                        <Button Grid.Column="1" HorizontalAlignment="Stretch" Click="OpenPolishConfigInNotepadPlusPlus_Click" Content="使用 Notepad++ 打开 polish.yaml" />
+                        <Button Grid.Row="1" Grid.ColumnSpan="2" HorizontalAlignment="Stretch" Click="OpenRuntimeLogInNotepadPlusPlus_Click" Content="使用 Notepad++ 打开当前日志" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
             <Grid ColumnSpacing="12">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
