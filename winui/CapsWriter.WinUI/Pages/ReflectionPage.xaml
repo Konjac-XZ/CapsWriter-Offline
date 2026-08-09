@@ -16,7 +16,10 @@
 
         <Grid>
             <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="反思循环" />
-            <Button HorizontalAlignment="Right" VerticalAlignment="Center" Click="ReloadPreferences_Click" Content="刷新偏好" />
+            <StackPanel HorizontalAlignment="Right" VerticalAlignment="Center" Orientation="Horizontal" Spacing="8">
+                <Button Click="ClearPersonalization_Click" Content="清空学习数据" />
+                <Button Click="ReloadPreferences_Click" Content="刷新偏好" />
+            </StackPanel>
         </Grid>
 
         <Grid Grid.Row="1" ColumnSpacing="12">
@@ -107,11 +110,15 @@
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
                                             <TextBlock FontSize="16" FontWeight="SemiBold" Text="{Binding PreferredValue}" TextWrapping="Wrap" />
                                             <Border Grid.Column="1" Padding="8,3" Background="{ThemeResource ControlFillColorSecondaryBrush}" CornerRadius="10">
                                                 <TextBlock FontSize="12" Text="{Binding StatusAndKind}" />
                                             </Border>
+                                            <Button Grid.Column="2" Margin="8,0,0,0" Padding="10,4" Click="EditPreference_Click" Content="编辑" Tag="{Binding Id}" />
+                                            <Button Grid.Column="3" Margin="6,0,0,0" Padding="10,4" Click="DeletePreference_Click" Content="删除" Tag="{Binding Id}" />
                                         </Grid>
                                         <TextBlock Grid.Row="1" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding AvoidSummary}" TextWrapping="Wrap" Visibility="{Binding AvoidVisibility}" />
                                         <TextBlock Grid.Row="2" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding KeywordSummary}" TextWrapping="Wrap" Visibility="{Binding KeywordVisibility}" />

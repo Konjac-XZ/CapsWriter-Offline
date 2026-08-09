@@ -89,7 +89,8 @@ reflection evidence text, current TSF text, and audio payloads.
 The current command surface includes snapshots, the per-task temporary
 instruction, model/mode selection, ASR and LLM prompts, context switches,
 lexicon editing, recent-history clearing, provider reload, recent-recording
-retry/playback lookup, and abandon-current-task.
+retry/playback lookup, abandon-current-task, and learned-preference listing,
+editing, deletion, and clearing.
 
 ## Legacy GUI parity
 

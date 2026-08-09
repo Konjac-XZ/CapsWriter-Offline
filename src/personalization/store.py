@@ -9,6 +9,7 @@ import re
 import sqlite3
 import time
 import unicodedata
+from difflib import SequenceMatcher
 from dataclasses import dataclass, field
 from typing import Iterable, Sequence
 
@@ -24,8 +25,9 @@ ALLOWED_PREFERENCE_KINDS = {
     "style",
     "avoidance",
 }
-STRONG_SINGLE_EVIDENCE_KINDS = ALLOWED_PREFERENCE_KINDS - {"style"}
-ACTIVE_CONFIDENCE_THRESHOLD = 0.75
+EXACT_REPLACEMENT_KINDS = {"terminology", "spelling", "casing"}
+ALLOWED_PREFERENCE_STATUSES = {"active", "candidate", "superseded"}
+MINIMUM_EDIT_SIMILARITY = 0.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +50,6 @@ class PreferenceProposal:
     preferred_value: str
     avoid_values: tuple[str, ...]
     keywords: tuple[str, ...]
-    confidence: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +67,6 @@ class RetrievedPreference:
     preferred_value: str
     avoid_values: tuple[str, ...]
     matched_keywords: tuple[str, ...]
-    confidence: float
     evidence_count: int
     score: float
 
@@ -76,7 +76,6 @@ class _PreferenceAccumulator:
     kind: str
     preferred_value: str
     avoid_values_json: str
-    confidence: float
     evidence_count: int
     matches: list[str] = field(default_factory=list)
     score: float = 0.0
@@ -100,6 +99,21 @@ def _canonical_key(proposal: PreferenceProposal) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def is_learnable_correction(committed_text: str, corrected_text: str) -> bool:
+    """Return whether a tracked edit still resembles the committed speech span."""
+    committed = committed_text.strip()
+    corrected = corrected_text.strip()
+    if not committed or not corrected or committed == corrected:
+        return False
+    longest = max(len(committed), len(corrected))
+    shortest = min(len(committed), len(corrected))
+    if longest <= 32 and shortest / longest >= 0.4:
+        return True
+    return SequenceMatcher(None, committed, corrected, autojunk=False).ratio() >= (
+        MINIMUM_EDIT_SIMILARITY
+    )
+
+
 def record_correction(
     *,
     session_id: str,
@@ -109,7 +123,9 @@ def record_correction(
     observed_at: float | None = None,
 ) -> bool:
     """Upsert the latest trusted correction for a committed TSF session."""
-    if not session_id or not committed_text.strip():
+    committed = committed_text.strip()
+    corrected = corrected_text.strip()
+    if not session_id or not committed or not corrected:
         return False
     now = time.time() if observed_at is None else float(observed_at)
     try:
@@ -121,6 +137,9 @@ def record_correction(
                 (session_id,),
             ).fetchone()
             if existing is None:
+                if corrected == committed:
+                    database.commit()
+                    return False
                 database.execute(
                     "INSERT INTO correction_events("
                     "session_id, asr_text, committed_text, corrected_text, "
@@ -130,29 +149,29 @@ def record_correction(
                     (
                         session_id,
                         asr_text.strip(),
-                        committed_text.strip(),
-                        corrected_text.strip(),
-                        1 if corrected_text.strip() == committed_text.strip() else 0,
+                        committed,
+                        corrected,
+                        0 if is_learnable_correction(committed, corrected) else 1,
                         now,
                         now,
                     ),
                 )
-            elif str(existing["corrected_text"]) != corrected_text.strip():
+            elif str(existing["corrected_text"]) != corrected:
                 revision = int(existing["event_revision"]) + 1
+                learnable = is_learnable_correction(committed, corrected)
                 database.execute(
                     "UPDATE correction_events SET asr_text = ?, committed_text = ?, "
                     "corrected_text = ?, event_revision = ?, last_observed_at = ?, "
                     "attempt_count = 0, next_attempt_at = 0, lease_until = 0, "
-                    "last_error = NULL, processed_revision = CASE WHEN ? = ? "
-                    "THEN ? ELSE processed_revision END WHERE id = ?",
+                    "last_error = NULL, processed_revision = CASE WHEN ? "
+                    "THEN processed_revision ELSE ? END WHERE id = ?",
                     (
                         asr_text.strip(),
-                        committed_text.strip(),
-                        corrected_text.strip(),
+                        committed,
+                        corrected,
                         revision,
                         now,
-                        corrected_text.strip(),
-                        committed_text.strip(),
+                        learnable,
                         revision,
                         int(existing["id"]),
                     ),
@@ -180,6 +199,7 @@ def lease_due_corrections(
             "event_revision, processed_revision, first_observed_at, "
             "last_observed_at, attempt_count FROM correction_events "
             "WHERE event_revision > processed_revision "
+            "AND trim(corrected_text) <> '' "
             "AND corrected_text <> committed_text "
             "AND last_observed_at <= ? AND next_attempt_at <= ? "
             "AND lease_until <= ? ORDER BY last_observed_at, id LIMIT ?",
@@ -315,7 +335,7 @@ def _upsert_preference(
     canonical_key = _canonical_key(proposal)
     stored_avoid_values = _dedupe_values(proposal.avoid_values)
     existing = database.execute(
-        "SELECT id, evidence_count, confidence, avoid_values_json "
+        "SELECT id, evidence_count, avoid_values_json "
         "FROM learned_preferences "
         "WHERE canonical_key = ?",
         (canonical_key,),
@@ -331,7 +351,7 @@ def _upsert_preference(
                 proposal.kind,
                 proposal.preferred_value,
                 json.dumps(stored_avoid_values, ensure_ascii=False),
-                proposal.confidence,
+                1.0,
                 now,
                 now,
             ),
@@ -341,8 +361,6 @@ def _upsert_preference(
         preference_id = int(cursor.lastrowid)
     else:
         preference_id = int(existing["id"])
-        old_count = int(existing["evidence_count"])
-        old_confidence = float(existing["confidence"])
         try:
             old_avoid_values = json.loads(str(existing["avoid_values_json"]))
         except json.JSONDecodeError:
@@ -354,16 +372,12 @@ def _upsert_preference(
             )
         )
         stored_avoid_values = merged_avoid_values
-        confidence = ((old_confidence * old_count) + proposal.confidence) / max(
-            1, old_count + 1
-        )
         database.execute(
             "UPDATE learned_preferences SET preferred_value = ?, "
-            "avoid_values_json = ?, confidence = ?, updated_at = ? WHERE id = ?",
+            "avoid_values_json = ?, updated_at = ? WHERE id = ?",
             (
                 proposal.preferred_value,
                 json.dumps(merged_avoid_values, ensure_ascii=False),
-                confidence,
                 now,
                 preference_id,
             ),
@@ -388,14 +402,9 @@ def _upsert_preference(
             (preference_id,),
         ).fetchone()["count"]
     )
-    row = database.execute(
-        "SELECT confidence FROM learned_preferences WHERE id = ?",
-        (preference_id,),
-    ).fetchone()
-    confidence = float(row["confidence"])
-    active = confidence >= ACTIVE_CONFIDENCE_THRESHOLD and (
-        proposal.kind in STRONG_SINGLE_EVIDENCE_KINDS or evidence_count >= 2
-    )
+    active = (
+        proposal.kind in EXACT_REPLACEMENT_KINDS and bool(stored_avoid_values)
+    ) or evidence_count >= 2
     status = "active" if active else "candidate"
     if active:
         conflicts = _find_conflicting_active_preferences(
@@ -406,15 +415,12 @@ def _upsert_preference(
             avoid_values=stored_avoid_values,
         )
         if conflicts:
-            can_supersede = evidence_count >= 2 and all(
-                confidence >= conflict_confidence
-                for _, conflict_confidence in conflicts
-            )
+            can_supersede = evidence_count >= 2
             if can_supersede:
                 database.executemany(
                     "UPDATE learned_preferences SET status = 'superseded', "
                     "updated_at = ? WHERE id = ?",
-                    [(now, conflict_id) for conflict_id, _ in conflicts],
+                    [(now, conflict_id) for conflict_id in conflicts],
                 )
             else:
                 status = "candidate"
@@ -424,9 +430,7 @@ def _upsert_preference(
         (evidence_count, status, now, preference_id),
     )
 
-    keyword_values = _dedupe_values(
-        (*proposal.keywords, proposal.preferred_value, *proposal.avoid_values)
-    )
+    keyword_values = _preference_trigger_values(proposal, stored_avoid_values)
     database.executemany(
         "INSERT INTO preference_keywords("
         "preference_id, keyword, normalized_keyword, weight) VALUES(?, ?, ?, 1) "
@@ -448,15 +452,15 @@ def _find_conflicting_active_preferences(
     kind: str,
     preferred_value: str,
     avoid_values: Sequence[str],
-) -> list[tuple[int, float]]:
+) -> list[int]:
     preferred_normalized = normalize_match_text(preferred_value)
     avoid_normalized = {normalize_match_text(value) for value in avoid_values}
     rows = database.execute(
-        "SELECT id, preferred_value, avoid_values_json, confidence "
+        "SELECT id, preferred_value, avoid_values_json "
         "FROM learned_preferences WHERE status = 'active' AND kind = ? AND id <> ?",
         (kind, preference_id),
     ).fetchall()
-    conflicts: list[tuple[int, float]] = []
+    conflicts: list[int] = []
     for row in rows:
         existing_preferred = normalize_match_text(str(row["preferred_value"]))
         try:
@@ -472,8 +476,17 @@ def _find_conflicting_active_preferences(
             existing_preferred in avoid_normalized
             or preferred_normalized in existing_avoid
         ):
-            conflicts.append((int(row["id"]), float(row["confidence"])))
+            conflicts.append(int(row["id"]))
     return conflicts
+
+
+def _preference_trigger_values(
+    proposal: PreferenceProposal,
+    avoid_values: Sequence[str],
+) -> tuple[str, ...]:
+    if proposal.kind in EXACT_REPLACEMENT_KINDS and avoid_values:
+        return _dedupe_values(avoid_values)
+    return _dedupe_values(proposal.keywords)
 
 
 def _dedupe_values(values: Iterable[str]) -> tuple[str, ...]:
@@ -517,7 +530,7 @@ def search_preferences(
     with state_db.connection() as database:
         rows = database.execute(
             "SELECT p.id, p.kind, p.preferred_value, p.avoid_values_json, "
-            "p.confidence, p.evidence_count, k.keyword, k.normalized_keyword, "
+            "p.evidence_count, k.keyword, k.normalized_keyword, "
             "k.weight FROM learned_preferences p "
             "JOIN preference_keywords k ON k.preference_id = p.id "
             "WHERE p.status = 'active' AND ("
@@ -536,7 +549,6 @@ def search_preferences(
                 kind=str(row["kind"]),
                 preferred_value=str(row["preferred_value"]),
                 avoid_values_json=str(row["avoid_values_json"]),
-                confidence=float(row["confidence"]),
                 evidence_count=int(row["evidence_count"]),
             ),
         )
@@ -566,9 +578,8 @@ def search_preferences(
         avoid_values = tuple(
             str(value) for value in avoid_values_raw if isinstance(value, str)
         )
-        confidence = entry.confidence
         evidence_count = entry.evidence_count
-        score = entry.score + confidence + (0.25 * math.log1p(evidence_count))
+        score = entry.score + (0.25 * math.log1p(evidence_count))
         results.append(
             RetrievedPreference(
                 id=preference_id,
@@ -576,7 +587,6 @@ def search_preferences(
                 preferred_value=entry.preferred_value,
                 avoid_values=avoid_values,
                 matched_keywords=_dedupe_values(entry.matches),
-                confidence=confidence,
                 evidence_count=evidence_count,
                 score=score,
             )
@@ -706,7 +716,7 @@ def get_learned_preferences_snapshot(*, limit: int = 500) -> dict[str, object]:
             database.execute("SELECT COUNT(*) FROM learned_preferences").fetchone()[0]
         )
         rows = database.execute(
-            "SELECT id, kind, preferred_value, avoid_values_json, confidence, "
+            "SELECT id, kind, preferred_value, avoid_values_json, "
             "status, evidence_count, created_at, updated_at, last_matched_at, "
             "match_count FROM learned_preferences "
             "ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'candidate' THEN 1 "
@@ -750,7 +760,6 @@ def get_learned_preferences_snapshot(*, limit: int = 500) -> dict[str, object]:
                 "preferred_value": str(row["preferred_value"]),
                 "avoid_values": avoid_values,
                 "keywords": keywords_by_preference.get(preference_id, []),
-                "confidence": float(row["confidence"]),
                 "status": str(row["status"]),
                 "evidence_count": int(row["evidence_count"]),
                 "created_at": float(row["created_at"]),
@@ -764,3 +773,135 @@ def get_learned_preferences_snapshot(*, limit: int = 500) -> dict[str, object]:
             }
         )
     return {"total": total, "items": items}
+
+
+def update_learned_preference(
+    *,
+    preference_id: int,
+    kind: str,
+    preferred_value: str,
+    avoid_values: Sequence[str],
+    keywords: Sequence[str],
+    status: str,
+) -> None:
+    """Update one learned rule and rebuild its explicit retrieval triggers."""
+    safe_id = int(preference_id)
+    safe_kind = kind.strip().lower()
+    safe_status = status.strip().lower()
+    safe_preferred = preferred_value.strip()
+    if safe_id <= 0:
+        raise ValueError("preference_id must be positive")
+    if safe_kind not in ALLOWED_PREFERENCE_KINDS:
+        raise ValueError("unsupported preference kind")
+    if safe_status not in ALLOWED_PREFERENCE_STATUSES:
+        raise ValueError("unsupported preference status")
+    if not safe_preferred or len(safe_preferred) > 200:
+        raise ValueError("preferred_value must contain 1 to 200 characters")
+    safe_avoid = _validated_values(avoid_values, max_items=8, max_chars=80)
+    safe_keywords = _validated_values(keywords, max_items=12, max_chars=80)
+    trigger_values = _dedupe_values((*safe_keywords, *safe_avoid))
+    if safe_status == "active" and not trigger_values:
+        raise ValueError("active preference must contain retrieval keywords")
+    proposal = PreferenceProposal(
+        kind=safe_kind,
+        preferred_value=safe_preferred,
+        avoid_values=safe_avoid,
+        keywords=safe_keywords,
+    )
+    canonical_key = _canonical_key(proposal)
+    now = time.time()
+    with state_db.connection() as database:
+        database.execute("BEGIN IMMEDIATE")
+        row = database.execute(
+            "SELECT id FROM learned_preferences WHERE id = ?", (safe_id,)
+        ).fetchone()
+        if row is None:
+            database.rollback()
+            raise ValueError("learned preference does not exist")
+        duplicate = database.execute(
+            "SELECT id FROM learned_preferences WHERE canonical_key = ? AND id <> ?",
+            (canonical_key, safe_id),
+        ).fetchone()
+        if duplicate is not None:
+            database.rollback()
+            raise ValueError("another learned preference already uses this value")
+        database.execute(
+            "UPDATE learned_preferences SET canonical_key = ?, kind = ?, "
+            "preferred_value = ?, avoid_values_json = ?, status = ?, updated_at = ? "
+            "WHERE id = ?",
+            (
+                canonical_key,
+                safe_kind,
+                safe_preferred,
+                json.dumps(safe_avoid, ensure_ascii=False),
+                safe_status,
+                now,
+                safe_id,
+            ),
+        )
+        database.execute(
+            "DELETE FROM preference_keywords WHERE preference_id = ?", (safe_id,)
+        )
+        database.executemany(
+            "INSERT INTO preference_keywords("
+            "preference_id, keyword, normalized_keyword, weight) VALUES(?, ?, ?, 1)",
+            [
+                (safe_id, keyword, normalize_match_text(keyword))
+                for keyword in trigger_values
+                if _valid_keyword(keyword)
+            ],
+        )
+        database.commit()
+
+
+def delete_learned_preference(preference_id: int) -> bool:
+    """Delete one learned preference and its cascading evidence and keywords."""
+    safe_id = int(preference_id)
+    if safe_id <= 0:
+        raise ValueError("preference_id must be positive")
+    with state_db.connection() as database:
+        cursor = database.execute(
+            "DELETE FROM learned_preferences WHERE id = ?", (safe_id,)
+        )
+        database.commit()
+    return cursor.rowcount > 0
+
+
+def clear_personalization_data() -> dict[str, int]:
+    """Clear the correction journal, learned rules, and reflection audit runs."""
+    with state_db.connection() as database:
+        database.execute("BEGIN IMMEDIATE")
+        counts = {
+            "corrections": int(
+                database.execute("SELECT COUNT(*) FROM correction_events").fetchone()[0]
+            ),
+            "preferences": int(
+                database.execute("SELECT COUNT(*) FROM learned_preferences").fetchone()[
+                    0
+                ]
+            ),
+            "reflection_runs": int(
+                database.execute("SELECT COUNT(*) FROM reflection_runs").fetchone()[0]
+            ),
+        }
+        database.execute("DELETE FROM learned_preferences")
+        database.execute("DELETE FROM correction_events")
+        database.execute("DELETE FROM reflection_runs")
+        database.commit()
+    return counts
+
+
+def _validated_values(
+    values: Sequence[str], *, max_items: int, max_chars: int
+) -> tuple[str, ...]:
+    if len(values) > max_items:
+        raise ValueError("too many preference values")
+    cleaned: list[str] = []
+    for value in values:
+        if not isinstance(value, str):
+            raise ValueError("preference values must be strings")
+        item = value.strip()
+        if not item or len(item) > max_chars:
+            raise ValueError("preference value has an invalid length")
+        cleaned.append(item)
+    return _dedupe_values(cleaned)

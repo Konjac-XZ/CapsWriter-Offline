@@ -24,7 +24,6 @@ def test_rendered_preferences_are_bounded_data_before_asr():
         preferred_value="TypeScript",
         avoid_values=("Type Script",),
         matched_keywords=("TypeScript",),
-        confidence=0.9,
         evidence_count=1,
         score=5,
     )
@@ -43,7 +42,9 @@ def test_rendered_preferences_are_bounded_data_before_asr():
     )
 
     assert messages[0]["role"] == "system"
-    assert "当前任务优先" in messages[0]["content"]
+    assert "当前任务优先" not in messages[0]["content"]
+    assert messages[1]["role"] == "user"
+    assert "当前任务优先" in messages[1]["content"]
     assert messages[-2]["content"] == rendered
     assert messages[-1]["content"].endswith("ASR 原文")
 
@@ -55,7 +56,6 @@ def test_rendering_drops_whole_entries_instead_of_truncating_data():
         preferred_value="x" * 500,
         avoid_values=(),
         matched_keywords=("表达",),
-        confidence=0.9,
         evidence_count=2,
         score=5,
     )
@@ -94,6 +94,7 @@ def test_every_polish_request_retrieves_and_attaches_matching_preferences(monkey
         captured_textbox_context=None,
         textbox_context="前端项目",
         textbox_context_has_position=False,
+        active_textbox_state=None,
         vision_context=None,
         history=[],
         asr_history=[],

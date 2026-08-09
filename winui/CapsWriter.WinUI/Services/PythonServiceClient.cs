@@ -140,6 +140,34 @@ public sealed partial class PythonServiceClient : IAsyncDisposable
             ?? throw new InvalidDataException("Python 后端返回了无效偏好列表。");
     }
 
+    public Task<JsonElement> UpdateLearnedPreferenceAsync(
+        LearnedPreferenceState preference,
+        CancellationToken cancellationToken = default) =>
+        SendCommandAsync(
+            "update_learned_preference",
+            new
+            {
+                preference_id = preference.Id,
+                kind = preference.Kind,
+                preferred_value = preference.PreferredValue,
+                avoid_values = preference.AvoidValues,
+                keywords = preference.Keywords,
+                status = preference.Status,
+            },
+            cancellationToken);
+
+    public Task<JsonElement> DeleteLearnedPreferenceAsync(
+        int preferenceId,
+        CancellationToken cancellationToken = default) =>
+        SendCommandAsync(
+            "delete_learned_preference",
+            new { preference_id = preferenceId },
+            cancellationToken);
+
+    public Task<JsonElement> ClearPersonalizationAsync(
+        CancellationToken cancellationToken = default) =>
+        SendCommandAsync("clear_personalization", null, cancellationToken);
+
     public async Task<TsfDllInspectionResult> InspectTsfDllVersionsAsync(
         CancellationToken cancellationToken = default)
     {

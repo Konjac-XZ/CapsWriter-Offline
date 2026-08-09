@@ -10,6 +10,7 @@ from src.infra import state_db
 from src.personalization import reflection
 from src.personalization.reflection import (
     ReflectionSettings,
+    _build_reflection_messages,
     _process_reflection_batch,
     parse_reflection_response,
 )
@@ -53,8 +54,7 @@ def _response(event_id: int, revision: int) -> str:
                         "kind": "spelling",
                         "preferred_value": "TypeScript",
                         "avoid_values": ["Type Script"],
-                        "keywords": ["TypeScript", "Type Script"],
-                        "confidence": 0.95,
+                        "keywords": [],
                     },
                 }
             ]
@@ -85,6 +85,15 @@ def test_non_preference_result_must_not_smuggle_preference_payload():
 
     with pytest.raises(ValueError, match="must use null"):
         parse_reflection_response(json.dumps(payload), [event])
+
+
+def test_reflection_payload_only_exposes_user_edit_boundary():
+    messages = _build_reflection_messages([_event()], 1000)
+
+    assert "asr_text" not in messages[1]["content"]
+    assert "committed_text" in messages[1]["content"]
+    assert "corrected_text" in messages[1]["content"]
+    assert "不要输出confidence" in messages[0]["content"].replace(" ", "")
 
 
 def test_process_batch_persists_valid_provider_response(monkeypatch):

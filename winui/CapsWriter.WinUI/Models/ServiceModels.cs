@@ -180,9 +180,6 @@ public sealed class LearnedPreferenceState
     [JsonPropertyName("keywords")]
     public List<string> Keywords { get; set; } = [];
 
-    [JsonPropertyName("confidence")]
-    public double Confidence { get; set; }
-
     [JsonPropertyName("status")]
     public string Status { get; set; } = string.Empty;
 
@@ -226,7 +223,7 @@ public sealed class LearnedPreferenceState
     public string KeywordSummary => $"关键词：{string.Join("、", Keywords)}";
     public Visibility AvoidVisibility => AvoidValues.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
     public Visibility KeywordVisibility => Keywords.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-    public string Metadata => $"置信度 {Confidence:P0} · 证据 {EvidenceCount} 条 · 使用 {MatchCount} 次 · 更新 {FormatTimestamp(UpdatedAt)}";
+    public string Metadata => $"证据 {EvidenceCount} 条 · 使用 {MatchCount} 次 · 更新 {FormatTimestamp(UpdatedAt)}";
 
     private static string FormatTimestamp(double timestamp)
     {

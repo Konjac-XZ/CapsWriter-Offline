@@ -19,7 +19,12 @@ from src.gui_api.configuration import (
 from src.gui_api.lexicon import update_lexicon_editor_text
 from src.gui_api.tsf_versions import inspect_tsf_dll_versions
 from src.personalization.reflection import get_reflection_status_snapshot
-from src.personalization.store import get_learned_preferences_snapshot
+from src.personalization.store import (
+    clear_personalization_data,
+    delete_learned_preference,
+    get_learned_preferences_snapshot,
+    update_learned_preference,
+)
 from src.polish.session_constraint import (
     read_session_constraint,
     write_session_constraint,
@@ -111,6 +116,30 @@ async def _dispatch_command(command: str, payload: dict[str, Any]) -> object:
             get_learned_preferences_snapshot,
             limit=int(payload.get("limit", 500)),
         )
+    if command == "update_learned_preference":
+        avoid_values = payload.get("avoid_values", [])
+        keywords = payload.get("keywords", [])
+        if not isinstance(avoid_values, list) or not isinstance(keywords, list):
+            raise ValueError("avoid_values and keywords must be arrays")
+        preference_id = int(payload.get("preference_id", 0))
+        await asyncio.to_thread(
+            update_learned_preference,
+            preference_id=preference_id,
+            kind=str(payload.get("kind", "")),
+            preferred_value=str(payload.get("preferred_value", "")),
+            avoid_values=avoid_values,
+            keywords=keywords,
+            status=str(payload.get("status", "")),
+        )
+        return {"updated": preference_id}
+    if command == "delete_learned_preference":
+        preference_id = int(payload.get("preference_id", 0))
+        deleted = await asyncio.to_thread(delete_learned_preference, preference_id)
+        if not deleted:
+            raise ValueError("learned preference does not exist")
+        return {"deleted": preference_id}
+    if command == "clear_personalization":
+        return await asyncio.to_thread(clear_personalization_data)
     if command == "inspect_tsf_dll_versions":
         return await asyncio.to_thread(inspect_tsf_dll_versions)
     if command == "set_asr_prompt":

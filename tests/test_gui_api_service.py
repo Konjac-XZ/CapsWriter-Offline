@@ -112,6 +112,50 @@ def test_get_learned_preferences_is_loaded_on_demand(monkeypatch):
     assert result == expected | {"limit": 200}
 
 
+def test_learned_preference_edit_commands_are_dispatched(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        service,
+        "update_learned_preference",
+        lambda **kwargs: calls.append(("update", kwargs)),
+    )
+    monkeypatch.setattr(
+        service,
+        "delete_learned_preference",
+        lambda preference_id: calls.append(("delete", preference_id)) or True,
+    )
+    monkeypatch.setattr(
+        service,
+        "clear_personalization_data",
+        lambda: {"corrections": 3, "preferences": 2, "reflection_runs": 1},
+    )
+
+    updated = asyncio.run(
+        service._dispatch_command(
+            "update_learned_preference",
+            {
+                "preference_id": 7,
+                "kind": "terminology",
+                "preferred_value": "TypeScript",
+                "avoid_values": ["Type Script"],
+                "keywords": ["Type Script"],
+                "status": "active",
+            },
+        )
+    )
+    deleted = asyncio.run(
+        service._dispatch_command("delete_learned_preference", {"preference_id": 7})
+    )
+    cleared = asyncio.run(service._dispatch_command("clear_personalization", {}))
+
+    assert updated == {"updated": 7}
+    assert calls[0][0] == "update"
+    assert calls[0][1]["preferred_value"] == "TypeScript"
+    assert deleted == {"deleted": 7}
+    assert calls[1] == ("delete", 7)
+    assert cleared == {"corrections": 3, "preferences": 2, "reflection_runs": 1}
+
+
 def test_tsf_dll_inspection_is_loaded_on_demand(monkeypatch):
     expected = {
         "latest": {"version": "20260809-build", "dlls": {}},

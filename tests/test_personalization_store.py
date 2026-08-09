@@ -1,5 +1,6 @@
 import sqlite3
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -8,12 +9,15 @@ from src.personalization.store import (
     PreferenceProposal,
     ReflectionOutcome,
     apply_reflection_outcomes,
+    clear_personalization_data,
+    delete_learned_preference,
     get_learned_preferences_snapshot,
     get_reflection_store_snapshot,
     lease_due_corrections,
     mark_correction_failure,
     record_correction,
     search_preferences,
+    update_learned_preference,
 )
 
 
@@ -28,7 +32,6 @@ def _proposal(*, kind: str = "terminology") -> PreferenceProposal:
         preferred_value="TypeScript",
         avoid_values=("Type Script",),
         keywords=("TypeScript", "Type Script", "前端"),
-        confidence=0.95,
     )
 
 
@@ -72,12 +75,12 @@ def test_learned_preferences_snapshot_returns_displayable_details():
     snapshot = get_learned_preferences_snapshot()
 
     assert snapshot["total"] == 1
-    item = snapshot["items"][0]
+    item = cast(list[dict[str, object]], snapshot["items"])[0]
     assert item["preferred_value"] == "TypeScript"
     assert item["avoid_values"] == ["Type Script"]
     assert item["status"] == "active"
     assert item["evidence_count"] == 1
-    assert set(item["keywords"]) == {"TypeScript", "Type Script", "前端"}
+    assert item["keywords"] == ["Type Script"]
     assert "private raw text" not in repr(snapshot)
 
 
@@ -155,11 +158,11 @@ def test_reflection_upsert_activates_and_retrieves_scoped_preference():
     )
 
     assert apply_reflection_outcomes(events, [outcome], now=25) == (1, 0)
-    matches = search_preferences("我们用 TypeScript 开发前端", now=30)
+    matches = search_preferences("我们用 Type Script 开发前端", now=30)
 
     assert len(matches) == 1
     assert matches[0].preferred_value == "TypeScript"
-    assert "TypeScript" in matches[0].matched_keywords
+    assert "Type Script" in matches[0].matched_keywords
     with state_db.connection() as database:
         row = database.execute(
             "SELECT processed_revision, event_revision FROM correction_events"
@@ -190,7 +193,6 @@ def test_broad_style_preference_requires_two_distinct_evidence_events():
         preferred_value="使用简洁表达",
         avoid_values=(),
         keywords=("表达", "说明"),
-        confidence=0.9,
     )
 
     apply_reflection_outcomes(
@@ -229,14 +231,12 @@ def test_conflicting_preference_stays_candidate_until_repeated_then_supersedes()
             "TypeScript",
             ("TSF",),
             ("TypeScript", "TSF"),
-            0.9,
         ),
         PreferenceProposal(
             "terminology",
             "TSF",
             ("TypeScript",),
             ("TypeScript", "TSF"),
-            0.95,
         ),
     )
 
@@ -244,8 +244,8 @@ def test_conflicting_preference_stays_candidate_until_repeated_then_supersedes()
         record_correction(
             session_id=session,
             asr_text="术语",
-            committed_text=proposal.avoid_values[0],
-            corrected_text=proposal.preferred_value,
+            committed_text=f"请使用 {proposal.avoid_values[0]}",
+            corrected_text=f"请使用 {proposal.preferred_value}",
             observed_at=observed_at,
         )
         event = lease_due_corrections(
@@ -366,3 +366,76 @@ def test_schema_upgrade_adds_asr_column_to_existing_history(
         }
 
     assert "asr_text" in columns
+
+
+def test_empty_and_unrelated_tracked_text_do_not_enter_reflection_queue():
+    assert not record_correction(
+        session_id="empty",
+        asr_text="原文",
+        committed_text="已经上屏的完整语音文本",
+        corrected_text="   ",
+        observed_at=1,
+    )
+    assert record_correction(
+        session_id="focus-moved",
+        asr_text="原文",
+        committed_text="这是一段已经上屏、稍后应该保持关联的完整语音输入。",
+        corrected_text="修！",
+        observed_at=2,
+    )
+
+    assert lease_due_corrections(now=10, settle_seconds=0) == []
+    with state_db.connection() as database:
+        rows = database.execute(
+            "SELECT session_id, event_revision, processed_revision FROM correction_events"
+        ).fetchall()
+    assert [tuple(row) for row in rows] == [("focus-moved", 1, 1)]
+
+
+def test_preference_crud_and_full_personalization_clear():
+    record_correction(
+        session_id="session-crud",
+        asr_text="Type Script",
+        committed_text="Type Script",
+        corrected_text="TypeScript",
+        observed_at=1,
+    )
+    event = lease_due_corrections(now=2, settle_seconds=0)[0]
+    apply_reflection_outcomes(
+        [event],
+        [
+            ReflectionOutcome(
+                event.id,
+                event.event_revision,
+                "preference",
+                _proposal(),
+            )
+        ],
+        now=3,
+    )
+    items = cast(list[dict[str, object]], get_learned_preferences_snapshot()["items"])
+    preference_id = int(cast(int, items[0]["id"]))
+
+    update_learned_preference(
+        preference_id=preference_id,
+        kind="terminology",
+        preferred_value="TypeScript SDK",
+        avoid_values=("Type Script SDK",),
+        keywords=("Type Script SDK",),
+        status="candidate",
+    )
+    item = cast(list[dict[str, object]], get_learned_preferences_snapshot()["items"])[0]
+    assert item["preferred_value"] == "TypeScript SDK"
+    assert item["status"] == "candidate"
+    assert item["keywords"] == ["Type Script SDK"]
+
+    assert delete_learned_preference(preference_id)
+    assert not delete_learned_preference(preference_id)
+    assert get_learned_preferences_snapshot()["total"] == 0
+
+    counts = clear_personalization_data()
+    assert counts == {"corrections": 1, "preferences": 0, "reflection_runs": 0}
+    corrections = cast(
+        dict[str, int], get_reflection_store_snapshot(now=10)["corrections"]
+    )
+    assert corrections["total"] == 0

@@ -175,7 +175,7 @@ Launcher behavior: before starting, it terminates any existing running `start_cl
        max_prompt_chars: 1600
    ```
    Clearing recent-output history does not erase queued corrections or learned
-   preferences. Each settled reflection batch sends its ASR, committed, and
+   preferences. Each settled reflection batch sends the committed and
    user-corrected text to the same provider/model used for polishing. Remove or
    disable the section if durable correction records and background requests are
    not desired.
