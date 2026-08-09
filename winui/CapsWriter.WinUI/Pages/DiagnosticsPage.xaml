@@ -8,10 +8,7 @@
     <ScrollViewer>
         <StackPanel Padding="28,20,28,28" Spacing="14">
             <Grid>
-                <StackPanel>
-                    <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="诊断" />
-                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="原生壳、IPC 与 Python 后端的当前运行边界。" />
-                </StackPanel>
+                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="诊断" />
                 <Button HorizontalAlignment="Right" VerticalAlignment="Center" Click="Refresh_Click" Content="刷新" />
             </Grid>
             <Grid ColumnSpacing="12">
@@ -37,7 +34,6 @@
                     <TextBlock x:Name="RootText" FontFamily="Cascadia Mono, Consolas" Foreground="{ThemeResource TextFillColorSecondaryBrush}" IsTextSelectionEnabled="True" TextWrapping="Wrap" />
                 </StackPanel>
             </Border>
-            <InfoBar IsClosable="False" IsOpen="True" Message="状态快照不会包含 API Key、反思原文或 TSF 正在处理的正文；日志列表最多保留 500 条。" Severity="Informational" />
         </StackPanel>
     </ScrollViewer>
 </Page>

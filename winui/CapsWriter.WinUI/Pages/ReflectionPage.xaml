@@ -3,31 +3,127 @@
     x:Class="CapsWriter_WinUI.Pages.ReflectionPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:models="using:CapsWriter_WinUI.Models"
     Loaded="Page_Loaded"
     Unloaded="Page_Unloaded">
-    <ScrollViewer>
-        <StackPanel Padding="28,20,28,28" Spacing="14">
+    <Grid Padding="28,20,28,28" RowSpacing="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid>
             <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="反思循环" />
-            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="查看后台个性化学习是否启用、正在等待什么，以及最近一次处理结果。" TextWrapping="Wrap" />
-            <Grid ColumnSpacing="12">
-                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
-                    <StackPanel Spacing="5"><TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="当前阶段" /><TextBlock x:Name="PhaseText" Style="{StaticResource SubtitleTextBlockStyle}" Text="等待状态" /></StackPanel>
-                </Border>
-                <Border Grid.Column="1" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
-                    <StackPanel Spacing="5"><TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="待处理修正" /><TextBlock x:Name="PendingText" Style="{StaticResource SubtitleTextBlockStyle}" Text="0" /></StackPanel>
-                </Border>
-                <Border Grid.Column="2" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
-                    <StackPanel Spacing="5"><TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="已学习偏好" /><TextBlock x:Name="PreferenceText" Style="{StaticResource SubtitleTextBlockStyle}" Text="0" /></StackPanel>
-                </Border>
-            </Grid>
+            <Button HorizontalAlignment="Right" VerticalAlignment="Center" Click="ReloadPreferences_Click" Content="刷新偏好" />
+        </Grid>
+
+        <Grid Grid.Row="1" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
             <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
-                <StackPanel Spacing="10">
-                    <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="最近一次运行" />
-                    <TextBlock x:Name="LatestRunText" Text="还没有反思运行记录。" TextWrapping="Wrap" />
-                    <TextBlock x:Name="RuntimeDetailText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                <StackPanel Spacing="5">
+                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="当前阶段" />
+                    <TextBlock x:Name="PhaseText" Style="{StaticResource SubtitleTextBlockStyle}" Text="等待状态" />
                 </StackPanel>
             </Border>
-        </StackPanel>
-    </ScrollViewer>
+            <Border Grid.Column="1" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
+                <StackPanel Spacing="5">
+                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="待处理修正" />
+                    <TextBlock x:Name="PendingText" Style="{StaticResource SubtitleTextBlockStyle}" Text="0" />
+                </StackPanel>
+            </Border>
+            <Border Grid.Column="2" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
+                <StackPanel Spacing="5">
+                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="已学习偏好" />
+                    <TextBlock x:Name="PreferenceText" Style="{StaticResource SubtitleTextBlockStyle}" Text="0" />
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <Border Grid.Row="2" Padding="18,14" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
+            <Grid ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <TextBlock VerticalAlignment="Center" Style="{StaticResource SubtitleTextBlockStyle}" Text="最近一次运行" />
+                <StackPanel Grid.Column="1" Spacing="2">
+                    <TextBlock x:Name="LatestRunText" Text="还没有反思运行记录" TextWrapping="Wrap" />
+                    <TextBlock x:Name="RuntimeDetailText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="3" Padding="18,14,18,10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
+            <Grid RowSpacing="10">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <Grid ColumnSpacing="10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center" Orientation="Horizontal" Spacing="8">
+                        <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="学习到的偏好" />
+                        <TextBlock x:Name="DisplayedPreferenceCountText" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                    <ComboBox x:Name="StatusFilter" Grid.Column="1" MinWidth="100" SelectionChanged="StatusFilter_SelectionChanged">
+                        <ComboBoxItem Content="全部" Tag="all" />
+                        <ComboBoxItem Content="生效" Tag="active" />
+                        <ComboBoxItem Content="候选" Tag="candidate" />
+                        <ComboBoxItem Content="已替代" Tag="superseded" />
+                    </ComboBox>
+                    <ProgressRing x:Name="PreferencesProgress" Grid.Column="2" Width="20" Height="20" VerticalAlignment="Center" IsActive="False" />
+                </Grid>
+
+                <Grid Grid.Row="1">
+                    <ListView x:Name="PreferencesList" SelectionMode="None">
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                <Setter Property="Padding" Value="0" />
+                                <Setter Property="Margin" Value="0" />
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Border Margin="0,0,0,8" Padding="14" Background="{ThemeResource SubtleFillColorSecondaryBrush}" CornerRadius="8">
+                                    <Grid RowSpacing="5">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <Grid ColumnSpacing="12">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock FontSize="16" FontWeight="SemiBold" Text="{Binding PreferredValue}" TextWrapping="Wrap" />
+                                            <Border Grid.Column="1" Padding="8,3" Background="{ThemeResource ControlFillColorSecondaryBrush}" CornerRadius="10">
+                                                <TextBlock FontSize="12" Text="{Binding StatusAndKind}" />
+                                            </Border>
+                                        </Grid>
+                                        <TextBlock Grid.Row="1" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding AvoidSummary}" TextWrapping="Wrap" Visibility="{Binding AvoidVisibility}" />
+                                        <TextBlock Grid.Row="2" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding KeywordSummary}" TextWrapping="Wrap" Visibility="{Binding KeywordVisibility}" />
+                                        <TextBlock Grid.Row="3" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{Binding Metadata}" TextWrapping="Wrap" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                    <TextBlock x:Name="EmptyPreferencesText" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="还没有学习到偏好" Visibility="Collapsed" />
+                </Grid>
+            </Grid>
+        </Border>
+    </Grid>
 </Page>

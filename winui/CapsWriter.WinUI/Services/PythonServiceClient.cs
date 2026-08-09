@@ -114,6 +114,43 @@ public sealed partial class PythonServiceClient : IAsyncDisposable
             ?? throw new InvalidDataException("Python 后端返回了无效配置。");
     }
 
+    public async Task<IReadOnlyList<string>> GetPolishHistoryAsync(
+        CancellationToken cancellationToken = default)
+    {
+        JsonElement result = await SendCommandAsync("get_polish_history", null, cancellationToken);
+        if (!result.TryGetProperty("items", out JsonElement items)
+            || items.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidDataException("Python 后端返回了无效的最近上屏内容。");
+        }
+        return items.EnumerateArray()
+            .Where(item => item.ValueKind == JsonValueKind.String)
+            .Select(item => item.GetString() ?? string.Empty)
+            .ToArray();
+    }
+
+    public async Task<LearnedPreferencesResult> GetLearnedPreferencesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        JsonElement result = await SendCommandAsync(
+            "get_learned_preferences",
+            new { limit = 500 },
+            cancellationToken);
+        return result.Deserialize<LearnedPreferencesResult>()
+            ?? throw new InvalidDataException("Python 后端返回了无效偏好列表。");
+    }
+
+    public async Task<TsfDllInspectionResult> InspectTsfDllVersionsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        JsonElement result = await SendCommandAsync(
+            "inspect_tsf_dll_versions",
+            null,
+            cancellationToken);
+        return result.Deserialize<TsfDllInspectionResult>()
+            ?? throw new InvalidDataException("Python 后端返回了无效 TSF DLL 检查结果。");
+    }
+
     public Task<JsonElement> SetAsrPromptAsync(
         string providerId,
         string text,

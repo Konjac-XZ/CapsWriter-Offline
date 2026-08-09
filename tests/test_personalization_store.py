@@ -8,6 +8,7 @@ from src.personalization.store import (
     PreferenceProposal,
     ReflectionOutcome,
     apply_reflection_outcomes,
+    get_learned_preferences_snapshot,
     get_reflection_store_snapshot,
     lease_due_corrections,
     mark_correction_failure,
@@ -49,6 +50,35 @@ def test_reflection_store_snapshot_reports_queue_without_text_content():
         "leased": 0,
     }
     assert "sensitive" not in repr(snapshot)
+
+
+def test_learned_preferences_snapshot_returns_displayable_details():
+    record_correction(
+        session_id="session-preference-list",
+        asr_text="private raw text",
+        committed_text="Type Script",
+        corrected_text="TypeScript",
+        observed_at=10,
+    )
+    events = lease_due_corrections(now=20, settle_seconds=0)
+    outcome = ReflectionOutcome(
+        event_id=events[0].id,
+        event_revision=events[0].event_revision,
+        classification="preference",
+        proposal=_proposal(),
+    )
+    apply_reflection_outcomes(events, [outcome], now=25)
+
+    snapshot = get_learned_preferences_snapshot()
+
+    assert snapshot["total"] == 1
+    item = snapshot["items"][0]
+    assert item["preferred_value"] == "TypeScript"
+    assert item["avoid_values"] == ["Type Script"]
+    assert item["status"] == "active"
+    assert item["evidence_count"] == 1
+    assert set(item["keywords"]) == {"TypeScript", "Type Script", "前端"}
+    assert "private raw text" not in repr(snapshot)
 
 
 def test_correction_is_durable_and_multiple_edits_coalesce():

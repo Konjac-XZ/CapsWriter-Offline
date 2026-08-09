@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 using Windows.UI.ViewManagement;
 
@@ -49,28 +50,28 @@ public sealed class ServiceState
 public sealed class ModelState
 {
     [JsonPropertyName("provider_id")]
-    public string ProviderId { get; init; } = string.Empty;
+    public string ProviderId { get; set; } = string.Empty;
 
     [JsonPropertyName("model_id")]
-    public string ModelId { get; init; } = string.Empty;
+    public string ModelId { get; set; } = string.Empty;
 
     [JsonPropertyName("provider_name")]
-    public string ProviderName { get; init; } = string.Empty;
+    public string ProviderName { get; set; } = string.Empty;
 
     [JsonPropertyName("model_name")]
-    public string ModelName { get; init; } = string.Empty;
+    public string ModelName { get; set; } = string.Empty;
 
     [JsonPropertyName("label")]
-    public string Label { get; init; } = string.Empty;
+    public string Label { get; set; } = string.Empty;
 
     [JsonPropertyName("input_mode")]
-    public string InputMode { get; init; } = string.Empty;
+    public string InputMode { get; set; } = string.Empty;
 
     [JsonPropertyName("input_modes")]
-    public List<string> InputModes { get; init; } = [];
+    public List<string> InputModes { get; set; } = [];
 
     [JsonPropertyName("active")]
-    public bool Active { get; init; }
+    public bool Active { get; set; }
 
     public string Key => $"{ProviderId}/{ModelId}";
 }
@@ -153,6 +154,93 @@ public sealed class ReflectionRunState
     public string? ErrorType { get; init; }
 }
 
+public sealed class LearnedPreferencesResult
+{
+    [JsonPropertyName("total")]
+    public int Total { get; init; }
+
+    [JsonPropertyName("items")]
+    public List<LearnedPreferenceState> Items { get; init; } = [];
+}
+
+public sealed class LearnedPreferenceState
+{
+    [JsonPropertyName("id")]
+    public int Id { get; set; }
+
+    [JsonPropertyName("kind")]
+    public string Kind { get; set; } = string.Empty;
+
+    [JsonPropertyName("preferred_value")]
+    public string PreferredValue { get; set; } = string.Empty;
+
+    [JsonPropertyName("avoid_values")]
+    public List<string> AvoidValues { get; set; } = [];
+
+    [JsonPropertyName("keywords")]
+    public List<string> Keywords { get; set; } = [];
+
+    [JsonPropertyName("confidence")]
+    public double Confidence { get; set; }
+
+    [JsonPropertyName("status")]
+    public string Status { get; set; } = string.Empty;
+
+    [JsonPropertyName("evidence_count")]
+    public int EvidenceCount { get; set; }
+
+    [JsonPropertyName("created_at")]
+    public double CreatedAt { get; set; }
+
+    [JsonPropertyName("updated_at")]
+    public double UpdatedAt { get; set; }
+
+    [JsonPropertyName("last_matched_at")]
+    public double? LastMatchedAt { get; set; }
+
+    [JsonPropertyName("match_count")]
+    public int MatchCount { get; set; }
+
+    public string StatusLabel => Status switch
+    {
+        "active" => "生效",
+        "candidate" => "候选",
+        "superseded" => "已替代",
+        _ => Status,
+    };
+
+    public string KindLabel => Kind switch
+    {
+        "terminology" => "术语",
+        "spelling" => "拼写",
+        "casing" => "大小写",
+        "punctuation" => "标点",
+        "formatting" => "格式",
+        "style" => "风格",
+        "avoidance" => "规避",
+        _ => Kind,
+    };
+
+    public string StatusAndKind => $"{StatusLabel} · {KindLabel}";
+    public string AvoidSummary => $"避免：{string.Join("、", AvoidValues)}";
+    public string KeywordSummary => $"关键词：{string.Join("、", Keywords)}";
+    public Visibility AvoidVisibility => AvoidValues.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility KeywordVisibility => Keywords.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+    public string Metadata => $"置信度 {Confidence:P0} · 证据 {EvidenceCount} 条 · 使用 {MatchCount} 次 · 更新 {FormatTimestamp(UpdatedAt)}";
+
+    private static string FormatTimestamp(double timestamp)
+    {
+        if (timestamp <= 0)
+        {
+            return "—";
+        }
+        return DateTimeOffset
+            .FromUnixTimeMilliseconds((long)(timestamp * 1000))
+            .ToLocalTime()
+            .ToString("yyyy-MM-dd HH:mm");
+    }
+}
+
 public sealed class TsfState
 {
     [JsonPropertyName("enabled")]
@@ -211,6 +299,67 @@ public sealed class TsfCompositionState
 
     [JsonPropertyName("defer_final")]
     public bool DeferFinal { get; init; }
+}
+
+public sealed class TsfDllInspectionResult
+{
+    [JsonPropertyName("latest")]
+    public TsfDllDeploymentState Latest { get; init; } = new();
+
+    [JsonPropertyName("hosts")]
+    public List<TsfLoadedDllState> Hosts { get; init; } = [];
+
+    [JsonPropertyName("warnings")]
+    public List<string> Warnings { get; init; } = [];
+
+    [JsonPropertyName("latest_count")]
+    public int LatestCount { get; init; }
+
+    [JsonPropertyName("old_count")]
+    public int OldCount { get; init; }
+
+    [JsonPropertyName("unknown_count")]
+    public int UnknownCount { get; init; }
+}
+
+public sealed class TsfDllDeploymentState
+{
+    [JsonPropertyName("version")]
+    public string Version { get; init; } = string.Empty;
+}
+
+public sealed class TsfLoadedDllState
+{
+    [JsonPropertyName("process_name")]
+    public string ProcessName { get; set; } = string.Empty;
+
+    [JsonPropertyName("status")]
+    public string Status { get; set; } = "unknown";
+
+    public string StatusLabel => Status switch
+    {
+        "latest" => "最新",
+        "old" => "过时",
+        _ => "无法验证",
+    };
+    public int StatusOrder => Status switch
+    {
+        "old" => 0,
+        "unknown" => 1,
+        _ => 2,
+    };
+    public Brush StatusForeground => new SolidColorBrush(Status switch
+    {
+        "latest" => Windows.UI.Color.FromArgb(255, 16, 124, 16),
+        "old" => Windows.UI.Color.FromArgb(255, 196, 43, 28),
+        _ => Windows.UI.Color.FromArgb(255, 157, 93, 0),
+    });
+    public Brush StatusBackground => new SolidColorBrush(Status switch
+    {
+        "latest" => Windows.UI.Color.FromArgb(28, 16, 124, 16),
+        "old" => Windows.UI.Color.FromArgb(28, 196, 43, 28),
+        _ => Windows.UI.Color.FromArgb(28, 157, 93, 0),
+    });
 }
 
 public sealed class ConfigurationState

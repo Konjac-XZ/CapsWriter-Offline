@@ -696,3 +696,71 @@ def get_reflection_store_snapshot(*, now: float | None = None) -> dict[str, obje
         "preferences": preferences,
         "latest_run": latest,
     }
+
+
+def get_learned_preferences_snapshot(*, limit: int = 500) -> dict[str, object]:
+    """Return learned preference details for the private, on-demand GUI view."""
+    safe_limit = max(1, min(500, int(limit)))
+    with state_db.connection() as database:
+        total = int(
+            database.execute("SELECT COUNT(*) FROM learned_preferences").fetchone()[0]
+        )
+        rows = database.execute(
+            "SELECT id, kind, preferred_value, avoid_values_json, confidence, "
+            "status, evidence_count, created_at, updated_at, last_matched_at, "
+            "match_count FROM learned_preferences "
+            "ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'candidate' THEN 1 "
+            "ELSE 2 END, updated_at DESC, id DESC LIMIT ?",
+            (safe_limit,),
+        ).fetchall()
+        preference_ids = [int(row["id"]) for row in rows]
+        keywords_by_preference: dict[int, list[str]] = {
+            preference_id: [] for preference_id in preference_ids
+        }
+        if preference_ids:
+            placeholders = ",".join("?" for _ in preference_ids)
+            keyword_rows = database.execute(
+                "SELECT preference_id, keyword FROM preference_keywords "
+                f"WHERE preference_id IN ({placeholders}) "
+                "ORDER BY preference_id, weight DESC, normalized_keyword",
+                preference_ids,
+            ).fetchall()
+            for keyword_row in keyword_rows:
+                preference_id = int(keyword_row["preference_id"])
+                keywords_by_preference[preference_id].append(
+                    str(keyword_row["keyword"])
+                )
+
+    items: list[dict[str, object]] = []
+    for row in rows:
+        try:
+            parsed_avoid_values = json.loads(str(row["avoid_values_json"]))
+        except (json.JSONDecodeError, TypeError):
+            parsed_avoid_values = []
+        avoid_values = (
+            [str(value) for value in parsed_avoid_values if str(value).strip()]
+            if isinstance(parsed_avoid_values, list)
+            else []
+        )
+        preference_id = int(row["id"])
+        items.append(
+            {
+                "id": preference_id,
+                "kind": str(row["kind"]),
+                "preferred_value": str(row["preferred_value"]),
+                "avoid_values": avoid_values,
+                "keywords": keywords_by_preference.get(preference_id, []),
+                "confidence": float(row["confidence"]),
+                "status": str(row["status"]),
+                "evidence_count": int(row["evidence_count"]),
+                "created_at": float(row["created_at"]),
+                "updated_at": float(row["updated_at"]),
+                "last_matched_at": (
+                    float(row["last_matched_at"])
+                    if row["last_matched_at"] is not None
+                    else None
+                ),
+                "match_count": int(row["match_count"]),
+            }
+        )
+    return {"total": total, "items": items}

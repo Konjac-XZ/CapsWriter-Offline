@@ -94,6 +94,40 @@ def test_set_session_constraint_returns_persisted_value(monkeypatch):
     assert result == {"session_constraint": "只输出一句"}
 
 
+def test_get_learned_preferences_is_loaded_on_demand(monkeypatch):
+    expected = {
+        "total": 1,
+        "items": [{"preferred_value": "TypeScript", "status": "active"}],
+    }
+    monkeypatch.setattr(
+        service,
+        "get_learned_preferences_snapshot",
+        lambda *, limit: expected | {"limit": limit},
+    )
+
+    result = asyncio.run(
+        service._dispatch_command("get_learned_preferences", {"limit": 200})
+    )
+
+    assert result == expected | {"limit": 200}
+
+
+def test_tsf_dll_inspection_is_loaded_on_demand(monkeypatch):
+    expected = {
+        "latest": {"version": "20260809-build", "dlls": {}},
+        "hosts": [{"process_name": "explorer.exe", "status": "latest"}],
+        "warnings": [],
+        "latest_count": 1,
+        "old_count": 0,
+        "unknown_count": 0,
+    }
+    monkeypatch.setattr(service, "inspect_tsf_dll_versions", lambda: expected)
+
+    result = asyncio.run(service._dispatch_command("inspect_tsf_dll_versions", {}))
+
+    assert result == expected
+
+
 def test_command_loop_emits_correlated_result(monkeypatch):
     events = []
     monkeypatch.setenv(service.GUI_PROTOCOL_ENV, "1")

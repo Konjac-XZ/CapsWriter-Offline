@@ -17,7 +17,9 @@ from src.gui_api.configuration import (
     update_llm_prompt,
 )
 from src.gui_api.lexicon import update_lexicon_editor_text
+from src.gui_api.tsf_versions import inspect_tsf_dll_versions
 from src.personalization.reflection import get_reflection_status_snapshot
+from src.personalization.store import get_learned_preferences_snapshot
 from src.polish.session_constraint import (
     read_session_constraint,
     write_session_constraint,
@@ -100,6 +102,17 @@ async def _dispatch_command(command: str, payload: dict[str, Any]) -> object:
         return {"session_constraint": await asyncio.to_thread(read_session_constraint)}
     if command == "get_configuration":
         return await asyncio.to_thread(get_configuration_snapshot)
+    if command == "get_polish_history":
+        from src.polish.llm_polish import get_finalized_history
+
+        return {"items": await asyncio.to_thread(get_finalized_history)}
+    if command == "get_learned_preferences":
+        return await asyncio.to_thread(
+            get_learned_preferences_snapshot,
+            limit=int(payload.get("limit", 500)),
+        )
+    if command == "inspect_tsf_dll_versions":
+        return await asyncio.to_thread(inspect_tsf_dll_versions)
     if command == "set_asr_prompt":
         return await asyncio.to_thread(
             update_asr_prompt,

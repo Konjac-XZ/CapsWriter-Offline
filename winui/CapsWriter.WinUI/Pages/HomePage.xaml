@@ -5,10 +5,38 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:models="using:CapsWriter_WinUI.Models"
+    xmlns:pages="using:CapsWriter_WinUI.Pages"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     Loaded="Page_Loaded"
     Unloaded="Page_Unloaded"
     mc:Ignorable="d">
+
+    <Page.Resources>
+        <DataTemplate x:Key="SelectedModelTemplate">
+            <TextBlock
+                Text="{Binding ModelName}"
+                TextTrimming="CharacterEllipsis"
+                TextWrapping="NoWrap" />
+        </DataTemplate>
+        <DataTemplate x:Key="ModelMenuItemTemplate">
+            <StackPanel Padding="0,3" Spacing="1">
+                <TextBlock
+                    Text="{Binding ModelName}"
+                    TextTrimming="CharacterEllipsis"
+                    TextWrapping="NoWrap" />
+                <TextBlock
+                    FontSize="12"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="{Binding ProviderName}"
+                    TextTrimming="CharacterEllipsis"
+                    TextWrapping="NoWrap" />
+            </StackPanel>
+        </DataTemplate>
+        <pages:ModelComboBoxTemplateSelector
+            x:Key="ModelComboBoxTemplateSelector"
+            MenuItemTemplate="{StaticResource ModelMenuItemTemplate}"
+            SelectedItemTemplate="{StaticResource SelectedModelTemplate}" />
+    </Page.Resources>
 
     <Grid Padding="16,12,16,16" RowSpacing="10">
         <Grid.KeyboardAccelerators>
@@ -90,7 +118,7 @@
                         VerticalAlignment="Center"
                         Click="ClearLog_Click"
                         Style="{StaticResource CompactIconButtonStyle}"
-                        ToolTipService.ToolTip="只清空当前界面中的日志">
+                        ToolTipService.ToolTip="清空日志">
                         <FontIcon
                             FontFamily="{StaticResource SymbolThemeFontFamily}"
                             FontSize="14"
@@ -146,11 +174,7 @@
             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
             BorderThickness="1"
             CornerRadius="10">
-            <Grid ColumnSpacing="12">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
+            <Grid>
                 <StackPanel Spacing="7">
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <TextBlock FontWeight="SemiBold" Text="当前任务临时指示" />
@@ -161,16 +185,9 @@
                         AcceptsReturn="True"
                         MinHeight="58"
                         MaxHeight="96"
-                        PlaceholderText="例如：这一阶段保持简短；保留英文术语；不要把口语改得过于正式。"
                         TextChanged="SessionConstraintBox_TextChanged"
                         TextWrapping="Wrap" />
                 </StackPanel>
-                <Button
-                    Grid.Column="1"
-                    VerticalAlignment="Bottom"
-                    Click="ClearConstraint_Click"
-                    Content="清空"
-                    Style="{StaticResource SubtleButtonStyle}" />
             </Grid>
         </Border>
 
@@ -185,9 +202,8 @@
             <ComboBox
                 x:Name="ModelComboBox"
                 MinWidth="340"
-                DropDownClosed="ModelComboBox_DropDownClosed"
-                DropDownOpened="ModelComboBox_DropDownOpened"
                 Header="转录模型"
+                ItemTemplateSelector="{StaticResource ModelComboBoxTemplateSelector}"
                 PlaceholderText="选择转录模型"
                 SelectionChanged="ModelComboBox_SelectionChanged" />
             <ToggleSwitch

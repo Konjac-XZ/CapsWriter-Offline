@@ -18,12 +18,15 @@ public sealed partial class HomePage : Page
     private bool _subscribed;
     private bool _applyingSnapshot;
     private bool _constraintDirty;
+    private string? _requestedModelKey;
 
     public ObservableCollection<LogEntry> LogEntries { get; } = [];
+    public ObservableCollection<ModelState> ModelOptions { get; } = [];
 
     public HomePage()
     {
         InitializeComponent();
+        ModelComboBox.ItemsSource = ModelOptions;
         _client = ((App)Application.Current).ServiceClient;
         _audioPlayer = ((App)Application.Current).AudioPlayer;
         _constraintTimer = DispatcherQueue.CreateTimer();
@@ -119,11 +122,13 @@ public sealed partial class HomePage : Page
                 || snapshot.Service.Transcribing
                 || !string.IsNullOrWhiteSpace(snapshot.Service.ActiveTaskId);
 
-            string? selectedKey = (ModelComboBox.SelectedItem as ModelState)?.Key;
-            ModelComboBox.ItemsSource = snapshot.Models;
-            UpdateModelDisplayMember();
-            ModelComboBox.SelectedItem = snapshot.Models.FirstOrDefault(model =>
-                model.Key == (selectedKey ?? snapshot.ActiveModel?.Key));
+            SyncModelOptions(snapshot.Models);
+            string? activeModelKey = snapshot.ActiveModel?.Key;
+            if (_requestedModelKey == activeModelKey)
+            {
+                _requestedModelKey = null;
+            }
+            SelectModel(_requestedModelKey ?? activeModelKey);
             ModelState? active = snapshot.ActiveModel;
             RealtimeToggle.Visibility = active is not null
                 && active.InputModes.Contains("live_audio")
@@ -182,22 +187,38 @@ public sealed partial class HomePage : Page
             : Visibility.Visible;
     }
 
-    private void UpdateModelDisplayMember() =>
-        ModelComboBox.DisplayMemberPath = ModelComboBox.IsDropDownOpen
-            ? nameof(ModelState.Label)
-            : nameof(ModelState.ModelName);
-
-    private void ModelComboBox_DropDownOpened(object sender, object args) =>
-        UpdateModelDisplayMember();
-
-    private void ModelComboBox_DropDownClosed(object sender, object args) =>
-        UpdateModelDisplayMember();
-
-    private void ClearConstraint_Click(object sender, RoutedEventArgs e)
+    private void SyncModelOptions(IReadOnlyList<ModelState> models)
     {
-        SessionConstraintBox.Text = string.Empty;
-        _constraintTimer.Stop();
-        _constraintTimer.Start();
+        bool unchanged = ModelOptions.Count == models.Count;
+        for (int index = 0; unchanged && index < models.Count; index++)
+        {
+            ModelState current = ModelOptions[index];
+            ModelState incoming = models[index];
+            unchanged = current.Key == incoming.Key
+                && current.ModelName == incoming.ModelName
+                && current.ProviderName == incoming.ProviderName
+                && current.InputMode == incoming.InputMode
+                && current.InputModes.SequenceEqual(incoming.InputModes);
+        }
+        if (unchanged)
+        {
+            return;
+        }
+
+        ModelOptions.Clear();
+        foreach (ModelState model in models)
+        {
+            ModelOptions.Add(model);
+        }
+    }
+
+    private void SelectModel(string? key)
+    {
+        if ((ModelComboBox.SelectedItem as ModelState)?.Key == key)
+        {
+            return;
+        }
+        ModelComboBox.SelectedItem = ModelOptions.FirstOrDefault(model => model.Key == key);
     }
 
     private void ClearLog_Click(object sender, RoutedEventArgs e) => LogEntries.Clear();
@@ -223,12 +244,23 @@ public sealed partial class HomePage : Page
         {
             return;
         }
+        _requestedModelKey = model.Key;
         try
         {
             await _client.SetActiveModelAsync(model);
         }
         catch (Exception exception)
         {
+            _requestedModelKey = null;
+            _applyingSnapshot = true;
+            try
+            {
+                SelectModel(_client.LastSnapshot?.ActiveModel?.Key);
+            }
+            finally
+            {
+                _applyingSnapshot = false;
+            }
             AddLogEntry(new LogEntry(DateTimeOffset.Now, $"切换模型失败：{exception.Message}"));
         }
     }
@@ -286,4 +318,16 @@ public sealed partial class HomePage : Page
             AddLogEntry(new LogEntry(DateTimeOffset.Now, $"播放最近录音失败：{exception.Message}", "#C42B1C"));
         }
     }
+}
+
+public sealed class ModelComboBoxTemplateSelector : DataTemplateSelector
+{
+    public DataTemplate SelectedItemTemplate { get; set; } = null!;
+
+    public DataTemplate MenuItemTemplate { get; set; } = null!;
+
+    protected override DataTemplate SelectTemplateCore(object item) => MenuItemTemplate;
+
+    protected override DataTemplate SelectTemplateCore(object item, DependencyObject container) =>
+        container is ComboBoxItem ? MenuItemTemplate : SelectedItemTemplate;
 }

@@ -3,37 +3,107 @@
     x:Class="CapsWriter_WinUI.Pages.TsfPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Loaded="Page_Loaded"
-    Unloaded="Page_Unloaded">
-    <ScrollViewer>
-        <StackPanel Padding="28,20,28,28" Spacing="14">
+    xmlns:models="using:CapsWriter_WinUI.Models"
+    Loaded="Page_Loaded">
+    <Grid Padding="28,20,28,28" RowSpacing="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid>
             <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="TSF-TIP" />
-            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="这是面向本机实验性文本服务的运行面板，状态直接来自 Python TSF bridge。" TextWrapping="Wrap" />
-            <Grid ColumnSpacing="12">
-                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10"><StackPanel Spacing="5"><TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="Pipe 服务" /><TextBlock x:Name="ServerText" Style="{StaticResource SubtitleTextBlockStyle}" Text="等待状态" /></StackPanel></Border>
-                <Border Grid.Column="1" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10"><StackPanel Spacing="5"><TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="TIP 客户端" /><TextBlock x:Name="ClientCountText" Style="{StaticResource SubtitleTextBlockStyle}" Text="0" /></StackPanel></Border>
-                <Border Grid.Column="2" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10"><StackPanel Spacing="5"><TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="Composition" /><TextBlock x:Name="CompositionStateText" Style="{StaticResource SubtitleTextBlockStyle}" Text="空闲" /></StackPanel></Border>
-            </Grid>
+            <Button HorizontalAlignment="Right" VerticalAlignment="Center" Click="Refresh_Click" Content="检查 DLL" />
+        </Grid>
+
+        <Grid Grid.Row="1" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="2*" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
             <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
-                <StackPanel Spacing="8">
-                    <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="当前 Composition" />
-                    <TextBlock x:Name="CompositionDetailText" Text="当前没有由 TIP 接管的任务。" TextWrapping="Wrap" />
-                    <TextBlock x:Name="StartupErrorText" Foreground="{ThemeResource SystemFillColorCriticalBrush}" TextWrapping="Wrap" />
+                <StackPanel Spacing="5">
+                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="最新部署" />
+                    <TextBlock x:Name="LatestVersionText" Style="{StaticResource SubtitleTextBlockStyle}" Text="等待检查" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
                 </StackPanel>
             </Border>
-            <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
-                <StackPanel Spacing="8">
-                    <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="已连接宿主" />
-                    <ItemsControl x:Name="ClientList">
+            <Border Grid.Column="1" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
+                <StackPanel Spacing="5">
+                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="最新" />
+                    <TextBlock x:Name="LatestCountText" Style="{StaticResource SubtitleTextBlockStyle}" Text="0" />
+                </StackPanel>
+            </Border>
+            <Border Grid.Column="2" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
+                <StackPanel Spacing="5">
+                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="过时" />
+                    <TextBlock x:Name="OldCountText" Foreground="{ThemeResource SystemFillColorCriticalBrush}" Style="{StaticResource SubtitleTextBlockStyle}" Text="0" />
+                </StackPanel>
+            </Border>
+            <Border Grid.Column="3" Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
+                <StackPanel Spacing="5">
+                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="无法验证" />
+                    <TextBlock x:Name="UnknownCountText" Style="{StaticResource SubtitleTextBlockStyle}" Text="0" />
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <Border Grid.Row="2" Padding="18,14,18,10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
+            <Grid RowSpacing="10">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="已加载宿主" />
+                        <TextBlock x:Name="HostCountText" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                    <ProgressRing x:Name="InspectionProgress" Width="20" Height="20" HorizontalAlignment="Right" IsActive="False" />
+                </Grid>
+
+                <Grid Grid.Row="1">
+                    <ListView x:Name="HostList" SelectionMode="None">
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                <Setter Property="Padding" Value="0" />
+                                <Setter Property="Margin" Value="0" />
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Border Margin="0,0,0,6" Padding="14,10" Background="{ThemeResource SubtleFillColorSecondaryBrush}" CornerRadius="8">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock VerticalAlignment="Center" FontSize="15" FontWeight="SemiBold" Text="{Binding ProcessName}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                        <Border Grid.Column="1" Padding="8,3" Background="{Binding StatusBackground}" CornerRadius="10">
+                                            <TextBlock FontSize="12" Foreground="{Binding StatusForeground}" Text="{Binding StatusLabel}" />
+                                        </Border>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                    <TextBlock x:Name="EmptyHostText" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="没有宿主加载 TIP DLL" Visibility="Collapsed" />
+                </Grid>
+
+                <Border x:Name="WarningPanel" Grid.Row="2" Padding="12,8" Background="{ThemeResource SystemFillColorCautionBackgroundBrush}" CornerRadius="6" Visibility="Collapsed">
+                    <ItemsControl x:Name="WarningList">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <TextBlock Margin="0,3" Text="{Binding}" />
+                                <TextBlock Foreground="{ThemeResource SystemFillColorCautionBrush}" Text="{Binding}" TextWrapping="Wrap" />
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
-                </StackPanel>
-            </Border>
-        </StackPanel>
-    </ScrollViewer>
+                </Border>
+            </Grid>
+        </Border>
+    </Grid>
 </Page>

@@ -1,21 +1,54 @@
+using System.Collections.ObjectModel;
 using CapsWriter_WinUI.Models;
 using CapsWriter_WinUI.Services;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Windows.Foundation;
 
 namespace CapsWriter_WinUI.Pages;
 
 public sealed partial class ConfigurationPage : Page
 {
+    private static readonly TimeSpan AutoSaveDelay = TimeSpan.FromMilliseconds(500);
     private readonly PythonServiceClient _client;
+    private readonly DispatcherQueueTimer _asrPromptSaveTimer;
+    private readonly DispatcherQueueTimer _llmPromptSaveTimer;
+    private readonly DispatcherQueueTimer _lexiconSaveTimer;
+    private readonly DispatcherQueueTimer _historyRefreshTimer;
+    private readonly SemaphoreSlim _configurationSaveLock = new(1, 1);
     private string? _providerId;
+    private string _savedAsrPrompt = string.Empty;
+    private string _savedLlmPrompt = string.Empty;
+    private string _savedLexicon = string.Empty;
     private bool _loading;
+    private bool _loadingHistory;
     private bool _subscribed;
+
+    public ObservableCollection<string> PolishHistoryItems { get; } = [];
 
     public ConfigurationPage()
     {
         InitializeComponent();
         _client = ((App)Application.Current).ServiceClient;
+        _asrPromptSaveTimer = CreateAutoSaveTimer(AsrPromptSaveTimer_Tick);
+        _llmPromptSaveTimer = CreateAutoSaveTimer(LlmPromptSaveTimer_Tick);
+        _lexiconSaveTimer = CreateAutoSaveTimer(LexiconSaveTimer_Tick);
+        _historyRefreshTimer = DispatcherQueue.CreateTimer();
+        _historyRefreshTimer.Interval = TimeSpan.FromSeconds(2);
+        _historyRefreshTimer.IsRepeating = true;
+        _historyRefreshTimer.Tick += HistoryRefreshTimer_Tick;
+        PolishHistoryList.ItemsSource = PolishHistoryItems;
+    }
+
+    private DispatcherQueueTimer CreateAutoSaveTimer(
+        TypedEventHandler<DispatcherQueueTimer, object> tickHandler)
+    {
+        DispatcherQueueTimer timer = DispatcherQueue.CreateTimer();
+        timer.Interval = AutoSaveDelay;
+        timer.IsRepeating = false;
+        timer.Tick += tickHandler;
+        return timer;
     }
 
     private async void Page_Loaded(object sender, RoutedEventArgs e)
@@ -26,10 +59,13 @@ public sealed partial class ConfigurationPage : Page
             _subscribed = true;
         }
         await LoadConfigurationAsync();
+        await RefreshPolishHistoryAsync();
+        _historyRefreshTimer.Start();
     }
 
     private void Page_Unloaded(object sender, RoutedEventArgs e)
     {
+        _historyRefreshTimer.Stop();
         if (!_subscribed)
         {
             return;
@@ -63,16 +99,18 @@ public sealed partial class ConfigurationPage : Page
             ShowStatus("正在读取配置…", InfoBarSeverity.Informational, true);
             ConfigurationState state = await _client.GetConfigurationAsync();
             _providerId = state.ProviderId;
-            ProviderNameText.Text = state.ProviderName is null
-                ? "当前没有可用的转录服务商"
-                : $"当前服务商：{state.ProviderName}";
+            AsrPromptTitle.Text = state.ProviderName is null
+                ? "ASR Prompt"
+                : $"ASR Prompt · {state.ProviderName}";
             AsrPromptBox.Text = state.AsrPrompt;
             LlmPromptBox.Text = state.LlmPrompt;
-            LlmStateText.Text = state.LlmEnabled ? "LLM 润色已启用" : "LLM 润色当前关闭";
             HistoryToggle.IsOn = state.HistoryContextEnabled;
             TextboxToggle.IsOn = state.TextboxContextEnabled;
             VisionToggle.IsOn = state.VisionContextEnabled;
             LexiconBox.Text = state.LexiconText;
+            _savedAsrPrompt = state.AsrPrompt;
+            _savedLlmPrompt = state.LlmPrompt;
+            _savedLexicon = state.LexiconText;
             StatusBar.IsOpen = false;
         }
         catch (Exception exception)
@@ -87,34 +125,174 @@ public sealed partial class ConfigurationPage : Page
 
     private async void Reload_Click(object sender, RoutedEventArgs e) => await LoadConfigurationAsync();
 
-    private async void SaveAsrPrompt_Click(object sender, RoutedEventArgs e)
+    private void AsrPromptBox_TextChanged(object sender, TextChangedEventArgs e)
     {
+        RestartAutoSaveTimer(_asrPromptSaveTimer);
+    }
+
+    private void LlmPromptBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        RestartAutoSaveTimer(_llmPromptSaveTimer);
+    }
+
+    private void LexiconBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        RestartAutoSaveTimer(_lexiconSaveTimer);
+    }
+
+    private void RestartAutoSaveTimer(DispatcherQueueTimer timer)
+    {
+        if (_loading)
+        {
+            return;
+        }
+        timer.Stop();
+        timer.Start();
+    }
+
+    private async void EditableTextBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_loading || sender is not TextBox textBox)
+        {
+            return;
+        }
+        if (ReferenceEquals(textBox, AsrPromptBox))
+        {
+            _asrPromptSaveTimer.Stop();
+            await SaveAsrPromptAsync();
+        }
+        else if (ReferenceEquals(textBox, LlmPromptBox))
+        {
+            _llmPromptSaveTimer.Stop();
+            await SaveLlmPromptAsync();
+        }
+        else if (ReferenceEquals(textBox, LexiconBox))
+        {
+            _lexiconSaveTimer.Stop();
+            await SaveLexiconAsync();
+        }
+    }
+
+    private async void AsrPromptSaveTimer_Tick(DispatcherQueueTimer sender, object args) =>
+        await SaveAsrPromptAsync();
+
+    private async void LlmPromptSaveTimer_Tick(DispatcherQueueTimer sender, object args) =>
+        await SaveLlmPromptAsync();
+
+    private async void LexiconSaveTimer_Tick(DispatcherQueueTimer sender, object args) =>
+        await SaveLexiconAsync();
+
+    private async void HistoryRefreshTimer_Tick(DispatcherQueueTimer sender, object args) =>
+        await RefreshPolishHistoryAsync();
+
+    private async Task RefreshPolishHistoryAsync()
+    {
+        if (_loadingHistory)
+        {
+            return;
+        }
+        _loadingHistory = true;
+        try
+        {
+            IReadOnlyList<string> items = await _client.GetPolishHistoryAsync();
+            if (!PolishHistoryItems.SequenceEqual(items))
+            {
+                PolishHistoryItems.Clear();
+                foreach (string item in items)
+                {
+                    PolishHistoryItems.Add(item);
+                }
+            }
+            bool hasItems = PolishHistoryItems.Count > 0;
+            PolishHistoryList.Visibility = hasItems
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            EmptyPolishHistoryText.Text = HistoryToggle.IsOn ? "暂无内容" : "已关闭";
+            EmptyPolishHistoryText.Visibility = hasItems
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+        }
+        catch
+        {
+            if (PolishHistoryItems.Count == 0)
+            {
+                PolishHistoryList.Visibility = Visibility.Collapsed;
+                EmptyPolishHistoryText.Text = "读取失败";
+                EmptyPolishHistoryText.Visibility = Visibility.Visible;
+            }
+        }
+        finally
+        {
+            _loadingHistory = false;
+        }
+    }
+
+    private async Task SaveAsrPromptAsync()
+    {
+        string text = AsrPromptBox.Text;
+        if (text == _savedAsrPrompt)
+        {
+            return;
+        }
         if (string.IsNullOrWhiteSpace(_providerId))
         {
             ShowStatus("当前没有可保存 Prompt 的转录服务商。", InfoBarSeverity.Warning);
             return;
         }
+        await _configurationSaveLock.WaitAsync();
         try
         {
-            await _client.SetAsrPromptAsync(_providerId, AsrPromptBox.Text);
-            ShowStatus("ASR Prompt 已保存，将从下一次录音开始生效。", InfoBarSeverity.Success);
+            if (text == _savedAsrPrompt)
+            {
+                return;
+            }
+            await _client.SetAsrPromptAsync(_providerId, text);
+            _savedAsrPrompt = text;
+            ShowStatus("ASR Prompt 已自动保存。", InfoBarSeverity.Success);
         }
         catch (Exception exception)
         {
             ShowStatus($"保存 ASR Prompt 失败：{exception.Message}", InfoBarSeverity.Error);
         }
+        finally
+        {
+            _configurationSaveLock.Release();
+            if (text != AsrPromptBox.Text)
+            {
+                RestartAutoSaveTimer(_asrPromptSaveTimer);
+            }
+        }
     }
 
-    private async void SaveLlmPrompt_Click(object sender, RoutedEventArgs e)
+    private async Task SaveLlmPromptAsync()
     {
+        string text = LlmPromptBox.Text;
+        if (text == _savedLlmPrompt)
+        {
+            return;
+        }
+        await _configurationSaveLock.WaitAsync();
         try
         {
-            await _client.SetLlmPromptAsync(LlmPromptBox.Text);
-            ShowStatus("LLM Prompt 已保存并立即生效。", InfoBarSeverity.Success);
+            if (text == _savedLlmPrompt)
+            {
+                return;
+            }
+            await _client.SetLlmPromptAsync(text);
+            _savedLlmPrompt = text;
+            ShowStatus("LLM Prompt 已自动保存。", InfoBarSeverity.Success);
         }
         catch (Exception exception)
         {
             ShowStatus($"保存 LLM Prompt 失败：{exception.Message}", InfoBarSeverity.Error);
+        }
+        finally
+        {
+            _configurationSaveLock.Release();
+            if (text != LlmPromptBox.Text)
+            {
+                RestartAutoSaveTimer(_llmPromptSaveTimer);
+            }
         }
     }
 
@@ -133,6 +311,10 @@ public sealed partial class ConfigurationPage : Page
         {
             await _client.SetContextSettingAsync(name, toggle.IsOn);
             ShowStatus("上下文设置已保存并立即生效。", InfoBarSeverity.Success);
+            if (ReferenceEquals(toggle, HistoryToggle))
+            {
+                await RefreshPolishHistoryAsync();
+            }
         }
         catch (Exception exception)
         {
@@ -141,19 +323,34 @@ public sealed partial class ConfigurationPage : Page
         }
     }
 
-    private async void SaveLexicon_Click(object sender, RoutedEventArgs e)
+    private async Task SaveLexiconAsync()
     {
+        string text = LexiconBox.Text;
+        if (text == _savedLexicon)
+        {
+            return;
+        }
+        await _configurationSaveLock.WaitAsync();
         try
         {
-            System.Text.Json.JsonElement result = await _client.SetLexiconAsync(LexiconBox.Text);
+            System.Text.Json.JsonElement result = await _client.SetLexiconAsync(text);
             int count = result.TryGetProperty("entry_count", out System.Text.Json.JsonElement value)
                 ? value.GetInt32()
                 : 0;
-            ShowStatus($"用户词库已保存，共 {count} 条。", InfoBarSeverity.Success);
+            _savedLexicon = text;
+            ShowStatus($"用户词库已自动保存，共 {count} 条。", InfoBarSeverity.Success);
         }
         catch (Exception exception)
         {
             ShowStatus($"保存用户词库失败：{exception.Message}", InfoBarSeverity.Error);
+        }
+        finally
+        {
+            _configurationSaveLock.Release();
+            if (text != LexiconBox.Text)
+            {
+                RestartAutoSaveTimer(_lexiconSaveTimer);
+            }
         }
     }
 
@@ -166,6 +363,7 @@ public sealed partial class ConfigurationPage : Page
                 ? count.GetInt32()
                 : 0;
             ShowStatus($"已清空 {cleared} 条最近上屏历史。", InfoBarSeverity.Success);
+            await RefreshPolishHistoryAsync();
         }
         catch (Exception exception)
         {
