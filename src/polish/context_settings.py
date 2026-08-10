@@ -45,15 +45,22 @@ def _set_section_bool(section: str, key: str, enabled: bool) -> bool:
     )
 
     in_section = False
+    section_found = False
+    insertion_index = len(lines)
     for idx, line in enumerate(lines):
         stripped = line.rstrip("\r\n")
         if not in_section:
             if section_pattern.match(stripped):
                 in_section = True
+                section_found = True
+                insertion_index = idx + 1
             continue
 
         if stripped and not stripped.startswith((" ", "\t", "#")):
+            insertion_index = idx
             break
+
+        insertion_index = idx + 1
 
         match = value_pattern.match(stripped)
         if not match:
@@ -73,7 +80,29 @@ def _set_section_bool(section: str, key: str, enabled: bool) -> bool:
         except Exception:
             return False
 
-    return False
+    newline = "\r\n" if any(line.endswith("\r\n") for line in lines) else "\n"
+    if section_found:
+        lines.insert(insertion_index, f"  {key}: {replacement}{newline}")
+    else:
+        if lines and not lines[-1].endswith(("\n", "\r")):
+            lines[-1] += newline
+        if lines and lines[-1].strip():
+            lines.append(newline)
+        lines.extend(
+            [
+                f"{section}:{newline}",
+                f"  {key}: {replacement}{newline}",
+            ]
+        )
+
+    try:
+        path.write_text("".join(lines), encoding="utf-8")
+        from src.polish.llm_polish import reload_polish_config
+
+        reload_polish_config()
+        return True
+    except Exception:
+        return False
 
 
 def get_textbox_context_enabled(default: bool = False) -> bool:
@@ -82,6 +111,14 @@ def get_textbox_context_enabled(default: bool = False) -> bool:
 
 def set_textbox_context_enabled(enabled: bool) -> bool:
     return _set_section_bool("textbox_context", "enabled", enabled)
+
+
+def get_active_textbox_state_enabled(default: bool = False) -> bool:
+    return _get_section_bool("active_textbox_state", "enabled", default)
+
+
+def set_active_textbox_state_enabled(enabled: bool) -> bool:
+    return _set_section_bool("active_textbox_state", "enabled", enabled)
 
 
 def get_history_context_enabled(default: bool = False) -> bool:

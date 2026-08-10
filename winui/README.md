@@ -100,7 +100,7 @@ editing, deletion, and clearing.
 | Temporary task instruction | Connected; 400 ms debounce and backend acknowledgement |
 | Model selection and live/file mode | Connected; applies to the next recording |
 | ASR/LLM prompt editing | Connected through the Python configuration API |
-| History/textbox/vision context switches | Connected; vision worker starts/stops with the switch |
+| History/textbox/active-control-state/vision context switches | Connected; vision worker starts/stops with the switch |
 | User lexicon | Connected as one entry per line; YAML remains the persisted format |
 | Clear recent polish history | Connected |
 | Retry, play, and abandon | Connected |

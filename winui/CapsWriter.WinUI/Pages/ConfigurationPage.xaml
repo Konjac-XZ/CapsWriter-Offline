@@ -28,15 +28,19 @@
                                         <Setter Target="ContextColumn1.Width" Value="*" />
                                         <Setter Target="ContextColumn2.Width" Value="0" />
                                         <Setter Target="ContextColumn3.Width" Value="0" />
+                                        <Setter Target="ContextColumn4.Width" Value="0" />
                                         <Setter Target="ContextRow1.Height" Value="Auto" />
                                         <Setter Target="ContextRow2.Height" Value="Auto" />
                                         <Setter Target="ContextRow3.Height" Value="Auto" />
+                                        <Setter Target="ContextRow4.Height" Value="Auto" />
                                         <Setter Target="HistoryToggle.(Grid.Row)" Value="0" />
                                         <Setter Target="HistoryToggle.(Grid.Column)" Value="0" />
                                         <Setter Target="TextboxToggle.(Grid.Row)" Value="1" />
                                         <Setter Target="TextboxToggle.(Grid.Column)" Value="0" />
                                         <Setter Target="VisionToggle.(Grid.Row)" Value="2" />
                                         <Setter Target="VisionToggle.(Grid.Column)" Value="0" />
+                                        <Setter Target="TextboxStateToggle.(Grid.Row)" Value="3" />
+                                        <Setter Target="TextboxStateToggle.(Grid.Column)" Value="0" />
                                     </VisualState.Setters>
                                 </VisualState>
                                 <VisualState x:Name="MediumContextLayout">
@@ -47,15 +51,19 @@
                                         <Setter Target="ContextColumn1.Width" Value="*" />
                                         <Setter Target="ContextColumn2.Width" Value="*" />
                                         <Setter Target="ContextColumn3.Width" Value="0" />
+                                        <Setter Target="ContextColumn4.Width" Value="0" />
                                         <Setter Target="ContextRow1.Height" Value="Auto" />
                                         <Setter Target="ContextRow2.Height" Value="Auto" />
                                         <Setter Target="ContextRow3.Height" Value="0" />
+                                        <Setter Target="ContextRow4.Height" Value="0" />
                                         <Setter Target="HistoryToggle.(Grid.Row)" Value="0" />
                                         <Setter Target="HistoryToggle.(Grid.Column)" Value="0" />
                                         <Setter Target="TextboxToggle.(Grid.Row)" Value="0" />
                                         <Setter Target="TextboxToggle.(Grid.Column)" Value="1" />
                                         <Setter Target="VisionToggle.(Grid.Row)" Value="1" />
                                         <Setter Target="VisionToggle.(Grid.Column)" Value="0" />
+                                        <Setter Target="TextboxStateToggle.(Grid.Row)" Value="1" />
+                                        <Setter Target="TextboxStateToggle.(Grid.Column)" Value="1" />
                                     </VisualState.Setters>
                                 </VisualState>
                                 <VisualState x:Name="WideContextLayout">
@@ -66,15 +74,19 @@
                                         <Setter Target="ContextColumn1.Width" Value="*" />
                                         <Setter Target="ContextColumn2.Width" Value="*" />
                                         <Setter Target="ContextColumn3.Width" Value="*" />
+                                        <Setter Target="ContextColumn4.Width" Value="*" />
                                         <Setter Target="ContextRow1.Height" Value="Auto" />
                                         <Setter Target="ContextRow2.Height" Value="0" />
                                         <Setter Target="ContextRow3.Height" Value="0" />
+                                        <Setter Target="ContextRow4.Height" Value="0" />
                                         <Setter Target="HistoryToggle.(Grid.Row)" Value="0" />
                                         <Setter Target="HistoryToggle.(Grid.Column)" Value="0" />
                                         <Setter Target="TextboxToggle.(Grid.Row)" Value="0" />
                                         <Setter Target="TextboxToggle.(Grid.Column)" Value="1" />
                                         <Setter Target="VisionToggle.(Grid.Row)" Value="0" />
-                                        <Setter Target="VisionToggle.(Grid.Column)" Value="2" />
+                                        <Setter Target="VisionToggle.(Grid.Column)" Value="3" />
+                                        <Setter Target="TextboxStateToggle.(Grid.Row)" Value="0" />
+                                        <Setter Target="TextboxStateToggle.(Grid.Column)" Value="2" />
                                     </VisualState.Setters>
                                 </VisualState>
                             </VisualStateGroup>
@@ -83,15 +95,18 @@
                             <ColumnDefinition x:Name="ContextColumn1" Width="*" />
                             <ColumnDefinition x:Name="ContextColumn2" Width="*" />
                             <ColumnDefinition x:Name="ContextColumn3" Width="*" />
+                            <ColumnDefinition x:Name="ContextColumn4" Width="*" />
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
                             <RowDefinition x:Name="ContextRow1" Height="Auto" />
                             <RowDefinition x:Name="ContextRow2" Height="0" />
                             <RowDefinition x:Name="ContextRow3" Height="0" />
+                            <RowDefinition x:Name="ContextRow4" Height="0" />
                         </Grid.RowDefinitions>
                         <ToggleSwitch x:Name="HistoryToggle" Header="最近上屏内容" Toggled="ContextToggle_Toggled" OnContent="启用" OffContent="关闭" />
                         <ToggleSwitch x:Name="TextboxToggle" Grid.Column="1" Header="当前文本框" Toggled="ContextToggle_Toggled" OnContent="启用" OffContent="关闭" />
-                        <ToggleSwitch x:Name="VisionToggle" Grid.Column="2" Header="活动窗口视觉摘要" Toggled="ContextToggle_Toggled" OnContent="启用" OffContent="关闭" />
+                        <ToggleSwitch x:Name="TextboxStateToggle" Grid.Column="2" Header="活动输入控件状态" Toggled="ContextToggle_Toggled" OnContent="启用" OffContent="关闭" />
+                        <ToggleSwitch x:Name="VisionToggle" Grid.Column="3" Header="活动窗口视觉摘要" Toggled="ContextToggle_Toggled" OnContent="启用" OffContent="关闭" />
                     </Grid>
                 </StackPanel>
             </Border>

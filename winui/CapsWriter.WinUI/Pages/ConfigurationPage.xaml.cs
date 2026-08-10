@@ -106,6 +106,7 @@ public sealed partial class ConfigurationPage : Page
             LlmPromptBox.Text = state.LlmPrompt;
             HistoryToggle.IsOn = state.HistoryContextEnabled;
             TextboxToggle.IsOn = state.TextboxContextEnabled;
+            TextboxStateToggle.IsOn = state.ActiveTextboxStateEnabled;
             VisionToggle.IsOn = state.VisionContextEnabled;
             LexiconBox.Text = state.LexiconText;
             _savedAsrPrompt = state.AsrPrompt;
@@ -306,10 +307,32 @@ public sealed partial class ConfigurationPage : Page
             ? "history"
             : ReferenceEquals(toggle, TextboxToggle)
                 ? "textbox"
-                : "vision";
+                : ReferenceEquals(toggle, TextboxStateToggle)
+                    ? "textbox_state"
+                    : "vision";
+        bool requested = toggle.IsOn;
+        _client.ReportLocalLog($"上下文设置请求：{name}={requested}", "#666666");
         try
         {
-            await _client.SetContextSettingAsync(name, toggle.IsOn);
+            System.Text.Json.JsonElement result = await _client.SetContextSettingAsync(
+                name,
+                requested);
+            if (!result.TryGetProperty("enabled", out System.Text.Json.JsonElement value)
+                || value.ValueKind is not System.Text.Json.JsonValueKind.True
+                    and not System.Text.Json.JsonValueKind.False)
+            {
+                throw new InvalidDataException("Python 后端未返回有效的配置读回值。");
+            }
+            bool persisted = value.GetBoolean();
+            _loading = true;
+            toggle.IsOn = persisted;
+            _loading = false;
+            if (persisted != requested)
+            {
+                throw new InvalidDataException(
+                    $"配置读回不一致：请求 {requested}，实际 {persisted}。");
+            }
+            _client.ReportLocalLog($"上下文设置已确认：{name}={persisted}", "#107C10");
             ShowStatus("上下文设置已保存并立即生效。", InfoBarSeverity.Success);
             if (ReferenceEquals(toggle, HistoryToggle))
             {
@@ -318,6 +341,10 @@ public sealed partial class ConfigurationPage : Page
         }
         catch (Exception exception)
         {
+            _loading = false;
+            _client.ReportLocalLog(
+                $"上下文设置失败：{name}={requested}，{exception.Message}",
+                "#C42B1C");
             ShowStatus($"保存上下文设置失败：{exception.Message}", InfoBarSeverity.Error);
             await LoadConfigurationAsync();
         }

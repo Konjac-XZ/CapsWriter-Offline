@@ -388,6 +388,9 @@ public sealed class ConfigurationState
     [JsonPropertyName("textbox_context_enabled")]
     public bool TextboxContextEnabled { get; init; }
 
+    [JsonPropertyName("active_textbox_state_enabled")]
+    public bool ActiveTextboxStateEnabled { get; init; }
+
     [JsonPropertyName("vision_context_enabled")]
     public bool VisionContextEnabled { get; init; }
 

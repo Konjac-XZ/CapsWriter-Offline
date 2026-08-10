@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import logging
+
 from src.polish.context_settings import (
+    get_active_textbox_state_enabled,
     get_history_context_enabled,
     get_textbox_context_enabled,
+    set_active_textbox_state_enabled,
     set_history_context_enabled,
     set_textbox_context_enabled,
 )
@@ -20,6 +24,9 @@ from src.provider.provider_config import provider_manager
 from .lexicon import get_lexicon_editor_text
 
 
+_LOGGER = logging.getLogger("capswriter.gui_api.configuration")
+
+
 def get_configuration_snapshot() -> dict[str, object]:
     active = provider_manager.get_active_model()
     provider_id = active.ref.provider_id if active is not None else None
@@ -31,6 +38,7 @@ def get_configuration_snapshot() -> dict[str, object]:
         "llm_enabled": is_llm_polish_enabled(),
         "history_context_enabled": get_history_context_enabled(default=False),
         "textbox_context_enabled": get_textbox_context_enabled(default=False),
+        "active_textbox_state_enabled": get_active_textbox_state_enabled(default=False),
         "vision_context_enabled": is_vision_context_enabled(),
         "lexicon_text": get_lexicon_editor_text(),
     }
@@ -55,14 +63,46 @@ def update_llm_prompt(text: str) -> dict[str, object]:
 
 
 def update_context_setting(name: str, enabled: bool) -> dict[str, object]:
-    setters = {
-        "history": set_history_context_enabled,
-        "textbox": set_textbox_context_enabled,
-        "vision": set_vision_context_enabled,
+    settings = {
+        "history": (
+            set_history_context_enabled,
+            lambda: get_history_context_enabled(default=False),
+        ),
+        "textbox": (
+            set_textbox_context_enabled,
+            lambda: get_textbox_context_enabled(default=False),
+        ),
+        "textbox_state": (
+            set_active_textbox_state_enabled,
+            lambda: get_active_textbox_state_enabled(default=False),
+        ),
+        "vision": (set_vision_context_enabled, is_vision_context_enabled),
     }
-    setter = setters.get(name)
-    if setter is None:
+    setting = settings.get(name)
+    if setting is None:
+        _LOGGER.warning("Context setting rejected name=%s reason=unsupported", name)
         raise ValueError(f"unsupported context setting: {name}")
+    setter, getter = setting
+    _LOGGER.info("Context setting update requested name=%s enabled=%s", name, enabled)
     if not setter(enabled):
+        _LOGGER.error(
+            "Context setting update failed name=%s enabled=%s stage=write",
+            name,
+            enabled,
+        )
         raise OSError(f"failed to persist context setting: {name}")
-    return {"name": name, "enabled": enabled, "apply_mode": "immediate"}
+    persisted = bool(getter())
+    if persisted != enabled:
+        _LOGGER.error(
+            "Context setting update failed name=%s requested=%s persisted=%s stage=readback",
+            name,
+            enabled,
+            persisted,
+        )
+        raise OSError(f"context setting readback mismatch: {name}")
+    _LOGGER.info(
+        "Context setting update confirmed name=%s enabled=%s",
+        name,
+        persisted,
+    )
+    return {"name": name, "enabled": persisted, "apply_mode": "immediate"}

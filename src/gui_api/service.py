@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import sys
 import threading
@@ -38,6 +39,7 @@ from src.tsf_ipc import get_tsf_speech_tip_bridge
 GUI_PROTOCOL_VERSION = 1
 COMMAND_MARKER = "CW_COMMAND:"
 GUI_PROTOCOL_ENV = "CAPSWRITER_GUI_PROTOCOL"
+_LOGGER = logging.getLogger("capswriter.gui_api.service")
 
 
 def gui_protocol_enabled() -> bool:
@@ -171,6 +173,11 @@ async def _dispatch_command(command: str, payload: dict[str, Any]) -> object:
     if command == "set_context_setting":
         name = str(payload.get("name", ""))
         enabled = bool(payload.get("enabled", False))
+        _LOGGER.info(
+            "GUI context setting command received name=%s enabled=%s",
+            name,
+            enabled,
+        )
         result = await asyncio.to_thread(
             update_context_setting,
             name,

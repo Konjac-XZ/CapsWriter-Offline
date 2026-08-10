@@ -364,6 +364,8 @@ def _prepare_background_context() -> Any | None:
         return _prepare_polish_request_context(
             captured_textbox_context=None,
             textbox_context_prepared=True,
+            active_textbox_state=None,
+            active_textbox_state_prepared=True,
         )
     except Exception:
         return None
