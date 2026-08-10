@@ -81,6 +81,9 @@ class TsfSpeechTipBridge:
         self._rollback_failed_tasks: set[str] = set()
         self._committed_sessions: dict[str, str] = {}
         self._tracked_text: dict[str, str] = {}
+        self._tracking_committed_text: dict[str, str] = {}
+        self._tracking_tail_replacement_open: set[str] = set()
+        self._tracking_processors: dict[str, HostProcessor] = {}
         self._active_tracked_session_id: str | None = None
         self._tracking_started_at = 0.0
         self._tracking_baselines: dict[str, TsfContextSnapshot] = {}
@@ -254,10 +257,59 @@ class TsfSpeechTipBridge:
                 self._stop_tracking(session_id, reason="reconciliation_rejected")
             return
         previous = self._tracked_text.get(session_id)
+        processor = self._tracking_processors.get(session_id)
+        opens_tail_replacement = (
+            processor is not None
+            and previous is not None
+            and processor.opens_tail_replacement(previous, result.text)
+        )
+        if (
+            opens_tail_replacement
+            and session_id not in self._tracking_tail_replacement_open
+        ):
+            self._tracking_tail_replacement_open.add(session_id)
+            _LOGGER.info(
+                "TSF tracking tail replacement opened session=%s",
+                session_id[:8],
+            )
+        normalized_text = (
+            processor.normalize_tracked_text(
+                previous,
+                result.text,
+                committed_text=self._tracking_committed_text.get(session_id),
+                preceding_text=current.text[: result.start],
+                following_text=current.text[result.end :],
+                tail_replacement_open=(
+                    session_id in self._tracking_tail_replacement_open
+                ),
+            )
+            if processor is not None and previous is not None
+            else result.text
+        )
+        if normalized_text != result.text:
+            _LOGGER.info(
+                "TSF tracking host normalization session=%s processor=%s "
+                "observed_chars=%d normalized_chars=%d",
+                session_id[:8],
+                processor.name if processor is not None else "default",
+                len(result.text),
+                len(normalized_text),
+            )
+        representation_only = previous is not None and normalized_text == previous
+        if representation_only:
+            _LOGGER.info(
+                "TSF tracking reconciliation session=%s mode=%s "
+                "alignment_score=%.3f history_matched=False "
+                "representation_normalized=True",
+                session_id[:8],
+                mode,
+                result.alignment_score,
+            )
+            return
         if (
             previous is not None
             and not has_meaningful_tracking_anchor(baseline)
-            and not is_plausible_tracking_edit(previous, result.text)
+            and not is_plausible_tracking_edit(previous, normalized_text)
         ):
             self._stop_tracking(session_id, reason="content_discontinuity")
             return
@@ -265,13 +317,13 @@ class TsfSpeechTipBridge:
         try:
             from src.polish.llm_polish import update_finalized_text
 
-            matched = update_finalized_text(session_id, result.text)
+            matched = update_finalized_text(session_id, normalized_text)
         except Exception:  # noqa: BLE001 - edit feedback is best-effort
             _LOGGER.exception(
                 "Failed to update reconciled TSF history session=%s", session_id[:8]
             )
         if matched:
-            self._tracked_text[session_id] = result.text
+            self._tracked_text[session_id] = normalized_text
         _LOGGER.info(
             "TSF tracking reconciliation session=%s mode=%s alignment_score=%.3f "
             "history_matched=%s text=%r",
@@ -279,7 +331,7 @@ class TsfSpeechTipBridge:
             mode,
             result.alignment_score,
             matched,
-            result.text,
+            normalized_text,
         )
 
     def _stop_tracking(self, session_id: str, *, reason: str) -> None:
@@ -291,6 +343,9 @@ class TsfSpeechTipBridge:
         self._active_tracked_session_id = None
         self._tracking_started_at = 0.0
         self._tracked_text.clear()
+        self._tracking_committed_text.clear()
+        self._tracking_tail_replacement_open.clear()
+        self._tracking_processors.clear()
         self._tracking_baselines.clear()
         self._tracking_incremental.clear()
         self._tracking_current.clear()
@@ -687,14 +742,18 @@ class TsfSpeechTipBridge:
             session_id = str(state.session_id)
             self._active_tracked_session_id = session_id
             self._tracking_started_at = time.monotonic()
+            self._tracked_text.clear()
+            self._tracked_text[session_id] = state.text
+            self._tracking_committed_text.clear()
+            self._tracking_committed_text[session_id] = state.text
+            self._tracking_tail_replacement_open.clear()
+            self._tracking_processors.clear()
+            self._tracking_processors[session_id] = state.processor
             committed = await self._request_applied(
                 Frame(Operation.COMMIT, state.session_id, state.revision)
             )
             if committed:
                 self._committed_sessions[task_id] = session_id
-                self._tracked_text.clear()
-                if self._active_tracked_session_id == session_id:
-                    self._tracked_text[session_id] = state.text
                 self._state = None
             else:
                 self._stop_tracking(session_id, reason="commit_failed")
