@@ -3,7 +3,7 @@ from typing import cast
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QStandardItemModel
-from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox
+from PySide6.QtWidgets import QApplication, QComboBox
 
 from src.provider.domain import InputMode, ModelRef
 from start_client_gui import AdaptivePopupComboBox, GUI
@@ -15,6 +15,27 @@ class _ModelCombo:
 
     def currentData(self):
         return self.ref
+
+
+class _CheckBox:
+    def __init__(self) -> None:
+        self._checked = False
+        self._visible = False
+
+    def blockSignals(self, _blocked: bool) -> None:
+        pass
+
+    def setChecked(self, checked: bool) -> None:
+        self._checked = checked
+
+    def setVisible(self, visible: bool) -> None:
+        self._visible = visible
+
+    def isChecked(self) -> bool:
+        return self._checked
+
+    def isHidden(self) -> bool:
+        return not self._visible
 
 
 class _ProviderManager:
@@ -37,7 +58,6 @@ class _ProviderManager:
 
 
 def test_realtime_checkbox_visibility_is_driven_by_model_capabilities():
-    app = QApplication.instance() or QApplication([])
     ref = ModelRef("provider", "model")
     manager = _ProviderManager(
         {InputMode.FILE_UPLOAD, InputMode.LIVE_AUDIO}, InputMode.LIVE_AUDIO
@@ -45,31 +65,26 @@ def test_realtime_checkbox_visibility_is_driven_by_model_capabilities():
     owner = SimpleNamespace(
         provider_manager=manager,
         model_combo=_ModelCombo(ref),
-        asr_realtime_checkbox=QCheckBox("流式音频"),
+        asr_realtime_checkbox=_CheckBox(),
     )
 
     GUI.sync_asr_realtime_control(cast(GUI, owner))
 
     assert owner.asr_realtime_checkbox.isHidden() is False
     assert owner.asr_realtime_checkbox.isChecked() is True
-    owner.asr_realtime_checkbox.deleteLater()
-    app.processEvents()
 
 
 def test_single_mode_model_hides_realtime_checkbox():
-    app = QApplication.instance() or QApplication([])
     ref = ModelRef("provider", "model")
     owner = SimpleNamespace(
         provider_manager=_ProviderManager({InputMode.FILE_UPLOAD}),
         model_combo=_ModelCombo(ref),
-        asr_realtime_checkbox=QCheckBox("流式音频"),
+        asr_realtime_checkbox=_CheckBox(),
     )
 
     GUI.sync_asr_realtime_control(cast(GUI, owner))
 
     assert owner.asr_realtime_checkbox.isHidden() is True
-    owner.asr_realtime_checkbox.deleteLater()
-    app.processEvents()
 
 
 def test_realtime_toggle_persists_mode_for_selected_model():
