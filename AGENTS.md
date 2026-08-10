@@ -23,6 +23,19 @@
 - Use `python test_replicate.py <audio>` to exercise external provider uploads; mock network calls when promoting these flows to automated tests.
 - Place new automated checks in `tests/` and target async flows with `pytest` plus `pytest-asyncio`; mirror filenames from `src/` for traceability.
 - Verify GUI edits by running `start_client_gui.py`, then capture before/after screenshots of modified dialogs.
+- Computer Use is optional and should be used only when GUI interaction is
+  necessary for the requested task and the user has not asked to keep control
+  of the desktop. A build or deployment alone does not require Computer Use.
+- Whenever a compiled Windows GUI is rebuilt or redeployed and will be opened
+  with Computer Use for testing, reset the Node REPL with `node_repl.js_reset`
+  before interacting with the rebuilt application. Treat every build/deploy as
+  invalidating the previous Node REPL state, exec context, window handles,
+  screenshots, and accessibility element indices.
+- After that reset, import `@oai/sky`, rediscover the target window, and perform
+  the current state/action sequence in the same fresh `node_repl.js` exec. Do
+  not reuse a cached `globalThis.sky` client or other Computer Use bindings from
+  an earlier exec; cross-exec reuse can fail with
+  `node_repl exec context not found`.
 
 ## Commit & Pull Request Guidelines
 - Follow the existing Conventional Commit pattern (`feat:`, `refactor:`, `chore:`) and keep subject lines within 72 characters.
