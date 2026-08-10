@@ -101,9 +101,7 @@ public sealed partial class ConfigurationPage : Page
             ShowStatus("正在读取配置…", InfoBarSeverity.Informational, true);
             ConfigurationState state = await _client.GetConfigurationAsync();
             _providerId = state.ProviderId;
-            AsrPromptTitle.Text = state.ProviderName is null
-                ? "ASR Prompt"
-                : $"ASR Prompt · {state.ProviderName}";
+            AsrPromptTitle.Text = "ASR Prompt";
             AsrPromptBox.Text = state.AsrPrompt;
             LlmPromptBox.Text = state.LlmPrompt;
             HistoryToggle.IsOn = state.HistoryContextEnabled;

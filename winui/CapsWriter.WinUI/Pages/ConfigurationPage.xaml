@@ -5,8 +5,134 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Loaded="Page_Loaded"
     Unloaded="Page_Unloaded">
-    <ScrollViewer>
-        <StackPanel Padding="28,20,28,28" Spacing="14">
+    <Grid x:Name="RootGrid">
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup x:Name="ContextLayoutStates">
+                <VisualState x:Name="NarrowContextLayout">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="0" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="ContextColumn1.Width" Value="*" />
+                        <Setter Target="ContextColumn2.Width" Value="0" />
+                        <Setter Target="ContextColumn3.Width" Value="0" />
+                        <Setter Target="ContextColumn4.Width" Value="0" />
+                        <Setter Target="ContextRow1.Height" Value="Auto" />
+                        <Setter Target="ContextRow2.Height" Value="Auto" />
+                        <Setter Target="ContextRow3.Height" Value="Auto" />
+                        <Setter Target="ContextRow4.Height" Value="Auto" />
+                        <Setter Target="HistoryToggle.(Grid.Row)" Value="0" />
+                        <Setter Target="HistoryToggle.(Grid.Column)" Value="0" />
+                        <Setter Target="TextboxToggle.(Grid.Row)" Value="1" />
+                        <Setter Target="TextboxToggle.(Grid.Column)" Value="0" />
+                        <Setter Target="VisionToggle.(Grid.Row)" Value="2" />
+                        <Setter Target="VisionToggle.(Grid.Column)" Value="0" />
+                        <Setter Target="TextboxStateToggle.(Grid.Row)" Value="3" />
+                        <Setter Target="TextboxStateToggle.(Grid.Column)" Value="0" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="MediumContextLayout">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="600" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="ContextColumn1.Width" Value="*" />
+                        <Setter Target="ContextColumn2.Width" Value="*" />
+                        <Setter Target="ContextColumn3.Width" Value="0" />
+                        <Setter Target="ContextColumn4.Width" Value="0" />
+                        <Setter Target="ContextRow1.Height" Value="Auto" />
+                        <Setter Target="ContextRow2.Height" Value="Auto" />
+                        <Setter Target="ContextRow3.Height" Value="0" />
+                        <Setter Target="ContextRow4.Height" Value="0" />
+                        <Setter Target="HistoryToggle.(Grid.Row)" Value="0" />
+                        <Setter Target="HistoryToggle.(Grid.Column)" Value="0" />
+                        <Setter Target="TextboxToggle.(Grid.Row)" Value="0" />
+                        <Setter Target="TextboxToggle.(Grid.Column)" Value="1" />
+                        <Setter Target="VisionToggle.(Grid.Row)" Value="1" />
+                        <Setter Target="VisionToggle.(Grid.Column)" Value="0" />
+                        <Setter Target="TextboxStateToggle.(Grid.Row)" Value="1" />
+                        <Setter Target="TextboxStateToggle.(Grid.Column)" Value="1" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="WideContextLayout">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="820" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="ContextColumn1.Width" Value="*" />
+                        <Setter Target="ContextColumn2.Width" Value="*" />
+                        <Setter Target="ContextColumn3.Width" Value="*" />
+                        <Setter Target="ContextColumn4.Width" Value="*" />
+                        <Setter Target="ContextRow1.Height" Value="Auto" />
+                        <Setter Target="ContextRow2.Height" Value="0" />
+                        <Setter Target="ContextRow3.Height" Value="0" />
+                        <Setter Target="ContextRow4.Height" Value="0" />
+                        <Setter Target="HistoryToggle.(Grid.Row)" Value="0" />
+                        <Setter Target="HistoryToggle.(Grid.Column)" Value="0" />
+                        <Setter Target="TextboxToggle.(Grid.Row)" Value="0" />
+                        <Setter Target="TextboxToggle.(Grid.Column)" Value="1" />
+                        <Setter Target="VisionToggle.(Grid.Row)" Value="0" />
+                        <Setter Target="VisionToggle.(Grid.Column)" Value="3" />
+                        <Setter Target="TextboxStateToggle.(Grid.Row)" Value="0" />
+                        <Setter Target="TextboxStateToggle.(Grid.Column)" Value="2" />
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+            <VisualStateGroup x:Name="EditorLayoutStates">
+                <VisualState x:Name="CollapsedEditorLayout">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="0" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="EditorGrid.ColumnSpacing" Value="0" />
+                        <Setter Target="EditorGrid.RowSpacing" Value="8" />
+                        <Setter Target="EditorColumn1.Width" Value="*" />
+                        <Setter Target="EditorColumn2.Width" Value="0" />
+                        <Setter Target="EditorColumn3.Width" Value="0" />
+                        <Setter Target="EditorRow1.Height" Value="Auto" />
+                        <Setter Target="EditorRow2.Height" Value="Auto" />
+                        <Setter Target="EditorRow3.Height" Value="Auto" />
+                        <Setter Target="AsrPromptCard.(Grid.Row)" Value="0" />
+                        <Setter Target="AsrPromptCard.(Grid.Column)" Value="0" />
+                        <Setter Target="LlmPromptCard.(Grid.Row)" Value="1" />
+                        <Setter Target="LlmPromptCard.(Grid.Column)" Value="0" />
+                        <Setter Target="LexiconCard.(Grid.Row)" Value="2" />
+                        <Setter Target="LexiconCard.(Grid.Column)" Value="0" />
+                        <Setter Target="AsrPromptEditor.IsExpanded" Value="False" />
+                        <Setter Target="LlmPromptEditor.IsExpanded" Value="False" />
+                        <Setter Target="LexiconEditor.IsExpanded" Value="False" />
+                        <Setter Target="AsrPromptBox.MinHeight" Value="150" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="ExpandedEditorLayout">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="1200" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="EditorGrid.ColumnSpacing" Value="12" />
+                        <Setter Target="EditorGrid.RowSpacing" Value="0" />
+                        <Setter Target="EditorColumn1.Width" Value="*" />
+                        <Setter Target="EditorColumn2.Width" Value="*" />
+                        <Setter Target="EditorColumn3.Width" Value="*" />
+                        <Setter Target="EditorRow1.Height" Value="Auto" />
+                        <Setter Target="EditorRow2.Height" Value="0" />
+                        <Setter Target="EditorRow3.Height" Value="0" />
+                        <Setter Target="AsrPromptCard.(Grid.Row)" Value="0" />
+                        <Setter Target="AsrPromptCard.(Grid.Column)" Value="0" />
+                        <Setter Target="LlmPromptCard.(Grid.Row)" Value="0" />
+                        <Setter Target="LlmPromptCard.(Grid.Column)" Value="1" />
+                        <Setter Target="LexiconCard.(Grid.Row)" Value="0" />
+                        <Setter Target="LexiconCard.(Grid.Column)" Value="2" />
+                        <Setter Target="AsrPromptEditor.IsExpanded" Value="True" />
+                        <Setter Target="LlmPromptEditor.IsExpanded" Value="True" />
+                        <Setter Target="LexiconEditor.IsExpanded" Value="True" />
+                        <Setter Target="AsrPromptBox.MinHeight" Value="220" />
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+        <ScrollViewer>
+            <StackPanel Padding="28,20,28,28" Spacing="14">
             <Grid>
                 <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="Prompt 与配置" />
                 <Button HorizontalAlignment="Right" VerticalAlignment="Center" Click="Reload_Click" Content="重新加载" />
@@ -18,79 +144,6 @@
                 <StackPanel Spacing="12">
                     <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="上下文来源" />
                     <Grid ColumnSpacing="20" RowSpacing="8">
-                        <VisualStateManager.VisualStateGroups>
-                            <VisualStateGroup>
-                                <VisualState x:Name="NarrowContextLayout">
-                                    <VisualState.StateTriggers>
-                                        <AdaptiveTrigger MinWindowWidth="0" />
-                                    </VisualState.StateTriggers>
-                                    <VisualState.Setters>
-                                        <Setter Target="ContextColumn1.Width" Value="*" />
-                                        <Setter Target="ContextColumn2.Width" Value="0" />
-                                        <Setter Target="ContextColumn3.Width" Value="0" />
-                                        <Setter Target="ContextColumn4.Width" Value="0" />
-                                        <Setter Target="ContextRow1.Height" Value="Auto" />
-                                        <Setter Target="ContextRow2.Height" Value="Auto" />
-                                        <Setter Target="ContextRow3.Height" Value="Auto" />
-                                        <Setter Target="ContextRow4.Height" Value="Auto" />
-                                        <Setter Target="HistoryToggle.(Grid.Row)" Value="0" />
-                                        <Setter Target="HistoryToggle.(Grid.Column)" Value="0" />
-                                        <Setter Target="TextboxToggle.(Grid.Row)" Value="1" />
-                                        <Setter Target="TextboxToggle.(Grid.Column)" Value="0" />
-                                        <Setter Target="VisionToggle.(Grid.Row)" Value="2" />
-                                        <Setter Target="VisionToggle.(Grid.Column)" Value="0" />
-                                        <Setter Target="TextboxStateToggle.(Grid.Row)" Value="3" />
-                                        <Setter Target="TextboxStateToggle.(Grid.Column)" Value="0" />
-                                    </VisualState.Setters>
-                                </VisualState>
-                                <VisualState x:Name="MediumContextLayout">
-                                    <VisualState.StateTriggers>
-                                        <AdaptiveTrigger MinWindowWidth="600" />
-                                    </VisualState.StateTriggers>
-                                    <VisualState.Setters>
-                                        <Setter Target="ContextColumn1.Width" Value="*" />
-                                        <Setter Target="ContextColumn2.Width" Value="*" />
-                                        <Setter Target="ContextColumn3.Width" Value="0" />
-                                        <Setter Target="ContextColumn4.Width" Value="0" />
-                                        <Setter Target="ContextRow1.Height" Value="Auto" />
-                                        <Setter Target="ContextRow2.Height" Value="Auto" />
-                                        <Setter Target="ContextRow3.Height" Value="0" />
-                                        <Setter Target="ContextRow4.Height" Value="0" />
-                                        <Setter Target="HistoryToggle.(Grid.Row)" Value="0" />
-                                        <Setter Target="HistoryToggle.(Grid.Column)" Value="0" />
-                                        <Setter Target="TextboxToggle.(Grid.Row)" Value="0" />
-                                        <Setter Target="TextboxToggle.(Grid.Column)" Value="1" />
-                                        <Setter Target="VisionToggle.(Grid.Row)" Value="1" />
-                                        <Setter Target="VisionToggle.(Grid.Column)" Value="0" />
-                                        <Setter Target="TextboxStateToggle.(Grid.Row)" Value="1" />
-                                        <Setter Target="TextboxStateToggle.(Grid.Column)" Value="1" />
-                                    </VisualState.Setters>
-                                </VisualState>
-                                <VisualState x:Name="WideContextLayout">
-                                    <VisualState.StateTriggers>
-                                        <AdaptiveTrigger MinWindowWidth="820" />
-                                    </VisualState.StateTriggers>
-                                    <VisualState.Setters>
-                                        <Setter Target="ContextColumn1.Width" Value="*" />
-                                        <Setter Target="ContextColumn2.Width" Value="*" />
-                                        <Setter Target="ContextColumn3.Width" Value="*" />
-                                        <Setter Target="ContextColumn4.Width" Value="*" />
-                                        <Setter Target="ContextRow1.Height" Value="Auto" />
-                                        <Setter Target="ContextRow2.Height" Value="0" />
-                                        <Setter Target="ContextRow3.Height" Value="0" />
-                                        <Setter Target="ContextRow4.Height" Value="0" />
-                                        <Setter Target="HistoryToggle.(Grid.Row)" Value="0" />
-                                        <Setter Target="HistoryToggle.(Grid.Column)" Value="0" />
-                                        <Setter Target="TextboxToggle.(Grid.Row)" Value="0" />
-                                        <Setter Target="TextboxToggle.(Grid.Column)" Value="1" />
-                                        <Setter Target="VisionToggle.(Grid.Row)" Value="0" />
-                                        <Setter Target="VisionToggle.(Grid.Column)" Value="3" />
-                                        <Setter Target="TextboxStateToggle.(Grid.Row)" Value="0" />
-                                        <Setter Target="TextboxStateToggle.(Grid.Column)" Value="2" />
-                                    </VisualState.Setters>
-                                </VisualState>
-                            </VisualStateGroup>
-                        </VisualStateManager.VisualStateGroups>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition x:Name="ContextColumn1" Width="*" />
                             <ColumnDefinition x:Name="ContextColumn2" Width="*" />
@@ -144,26 +197,52 @@
                 </Grid>
             </Border>
 
-            <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
-                <StackPanel Spacing="10">
-                    <TextBlock x:Name="AsrPromptTitle" Style="{StaticResource SubtitleTextBlockStyle}" Text="ASR Prompt" />
-                    <TextBox x:Name="AsrPromptBox" AcceptsReturn="True" MinHeight="150" MaxHeight="320" CopyingToClipboard="EditableTextBox_CopyingToClipboard" CuttingToClipboard="EditableTextBox_CuttingToClipboard" FontFamily="Cascadia Mono, Consolas" LostFocus="EditableTextBox_LostFocus" TextChanged="AsrPromptBox_TextChanged" TextWrapping="Wrap" />
-                </StackPanel>
-            </Border>
+            <Grid x:Name="EditorGrid" RowSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition x:Name="EditorColumn1" Width="*" />
+                    <ColumnDefinition x:Name="EditorColumn2" Width="0" />
+                    <ColumnDefinition x:Name="EditorColumn3" Width="0" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition x:Name="EditorRow1" Height="Auto" />
+                    <RowDefinition x:Name="EditorRow2" Height="Auto" />
+                    <RowDefinition x:Name="EditorRow3" Height="Auto" />
+                </Grid.RowDefinitions>
 
-            <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
-                <StackPanel Spacing="10">
-                    <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="LLM 润色 Prompt" />
-                    <TextBox x:Name="LlmPromptBox" AcceptsReturn="True" MinHeight="220" MaxHeight="520" CopyingToClipboard="EditableTextBox_CopyingToClipboard" CuttingToClipboard="EditableTextBox_CuttingToClipboard" FontFamily="Cascadia Mono, Consolas" LostFocus="EditableTextBox_LostFocus" TextChanged="LlmPromptBox_TextChanged" TextWrapping="Wrap" />
-                </StackPanel>
-            </Border>
+                <Border x:Name="AsrPromptCard" VerticalAlignment="Top" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
+                    <Expander x:Name="AsrPromptEditor" HorizontalAlignment="Stretch" VerticalAlignment="Top" HorizontalContentAlignment="Stretch" IsExpanded="False">
+                        <Expander.Header>
+                            <TextBlock x:Name="AsrPromptTitle" Style="{StaticResource SubtitleTextBlockStyle}" Text="ASR Prompt" />
+                        </Expander.Header>
+                        <Grid Margin="18,8,18,18">
+                            <TextBox x:Name="AsrPromptBox" AcceptsReturn="True" MinHeight="150" MaxHeight="520" CopyingToClipboard="EditableTextBox_CopyingToClipboard" CuttingToClipboard="EditableTextBox_CuttingToClipboard" FontFamily="Cascadia Mono, Consolas" LostFocus="EditableTextBox_LostFocus" TextChanged="AsrPromptBox_TextChanged" TextWrapping="Wrap" />
+                        </Grid>
+                    </Expander>
+                </Border>
 
-            <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
-                <StackPanel Spacing="10">
-                    <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="用户词库" />
-                    <TextBox x:Name="LexiconBox" AcceptsReturn="True" MinHeight="220" MaxHeight="520" CopyingToClipboard="EditableTextBox_CopyingToClipboard" CuttingToClipboard="EditableTextBox_CuttingToClipboard" FontFamily="Cascadia Mono, Consolas" LostFocus="EditableTextBox_LostFocus" TextChanged="LexiconBox_TextChanged" TextWrapping="NoWrap" />
-                </StackPanel>
-            </Border>
-        </StackPanel>
-    </ScrollViewer>
+                <Border x:Name="LlmPromptCard" Grid.Row="1" VerticalAlignment="Top" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
+                    <Expander x:Name="LlmPromptEditor" HorizontalAlignment="Stretch" VerticalAlignment="Top" HorizontalContentAlignment="Stretch" IsExpanded="False">
+                        <Expander.Header>
+                            <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="LLM 润色 Prompt" />
+                        </Expander.Header>
+                        <Grid Margin="18,8,18,18">
+                            <TextBox x:Name="LlmPromptBox" AcceptsReturn="True" MinHeight="220" MaxHeight="520" CopyingToClipboard="EditableTextBox_CopyingToClipboard" CuttingToClipboard="EditableTextBox_CuttingToClipboard" FontFamily="Cascadia Mono, Consolas" LostFocus="EditableTextBox_LostFocus" TextChanged="LlmPromptBox_TextChanged" TextWrapping="Wrap" />
+                        </Grid>
+                    </Expander>
+                </Border>
+
+                <Border x:Name="LexiconCard" Grid.Row="2" VerticalAlignment="Top" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
+                    <Expander x:Name="LexiconEditor" HorizontalAlignment="Stretch" VerticalAlignment="Top" HorizontalContentAlignment="Stretch" IsExpanded="False">
+                        <Expander.Header>
+                            <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="用户词库" />
+                        </Expander.Header>
+                        <Grid Margin="18,8,18,18">
+                            <TextBox x:Name="LexiconBox" AcceptsReturn="True" MinHeight="220" MaxHeight="520" CopyingToClipboard="EditableTextBox_CopyingToClipboard" CuttingToClipboard="EditableTextBox_CuttingToClipboard" FontFamily="Cascadia Mono, Consolas" LostFocus="EditableTextBox_LostFocus" TextChanged="LexiconBox_TextChanged" TextWrapping="NoWrap" />
+                        </Grid>
+                    </Expander>
+                </Border>
+            </Grid>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
 </Page>
