@@ -98,22 +98,31 @@ public sealed partial class ReflectionPage : Page
         {
             return;
         }
-        ContentDialog confirmation = new()
+        await RunPreferenceMutationAsync(
+            () => _client.DeleteLearnedPreferenceAsync(preference.Id),
+            "删除偏好失败");
+    }
+
+    private async void AddPreference_Click(object sender, RoutedEventArgs e)
+    {
+        if (_mutatingPreferences)
         {
-            XamlRoot = XamlRoot,
-            Title = "删除这条偏好？",
-            Content = preference.PreferredValue,
-            PrimaryButtonText = "删除",
-            CloseButtonText = "取消",
-            DefaultButton = ContentDialogButton.Close,
-        };
-        if (await confirmation.ShowAsync() != ContentDialogResult.Primary)
+            return;
+        }
+        LearnedPreferenceState? created = await ShowPreferenceEditorAsync(
+            new LearnedPreferenceState
+            {
+                Kind = "terminology",
+                Status = "active",
+            },
+            "手动添加偏好");
+        if (created is null)
         {
             return;
         }
         await RunPreferenceMutationAsync(
-            () => _client.DeleteLearnedPreferenceAsync(preference.Id),
-            "删除偏好失败");
+            () => _client.CreateLearnedPreferenceAsync(created),
+            "添加偏好失败");
     }
 
     private async void EditPreference_Click(object sender, RoutedEventArgs e)
@@ -123,7 +132,23 @@ public sealed partial class ReflectionPage : Page
         {
             return;
         }
+        LearnedPreferenceState? updated = await ShowPreferenceEditorAsync(
+            preference,
+            "编辑学习偏好");
+        if (updated is null)
+        {
+            return;
+        }
+        updated.Id = preference.Id;
+        await RunPreferenceMutationAsync(
+            () => _client.UpdateLearnedPreferenceAsync(updated),
+            "保存偏好失败");
+    }
 
+    private async Task<LearnedPreferenceState?> ShowPreferenceEditorAsync(
+        LearnedPreferenceState preference,
+        string title)
+    {
         TextBox preferredValueBox = new()
         {
             Header = "首选内容",
@@ -178,7 +203,7 @@ public sealed partial class ReflectionPage : Page
         ContentDialog dialog = new()
         {
             XamlRoot = XamlRoot,
-            Title = "编辑学习偏好",
+            Title = title,
             Content = editor,
             PrimaryButtonText = "保存",
             CloseButtonText = "取消",
@@ -186,21 +211,17 @@ public sealed partial class ReflectionPage : Page
         };
         if (await dialog.ShowAsync() != ContentDialogResult.Primary)
         {
-            return;
+            return null;
         }
 
-        LearnedPreferenceState updated = new()
+        return new LearnedPreferenceState
         {
-            Id = preference.Id,
             Kind = SelectedOption(kindBox),
             PreferredValue = preferredValueBox.Text.Trim(),
             AvoidValues = ParseLines(avoidValuesBox.Text),
             Keywords = ParseLines(keywordsBox.Text),
             Status = SelectedOption(statusBox),
         };
-        await RunPreferenceMutationAsync(
-            () => _client.UpdateLearnedPreferenceAsync(updated),
-            "保存偏好失败");
     }
 
     private async Task RunPreferenceMutationAsync(
@@ -313,11 +334,7 @@ public sealed partial class ReflectionPage : Page
         IEnumerable<LearnedPreferenceState> visible = status == "all"
             ? _allPreferences
             : _allPreferences.Where(preference => preference.Status == status);
-        Preferences.Clear();
-        foreach (LearnedPreferenceState preference in visible)
-        {
-            Preferences.Add(preference);
-        }
+        SynchronizePreferences(visible.ToList());
         DisplayedPreferenceCountText.Text = status == "all"
             ? Preferences.Count.ToString()
             : $"{Preferences.Count} / {_allPreferences.Count}";
@@ -326,6 +343,60 @@ public sealed partial class ReflectionPage : Page
             ? Visibility.Visible
             : Visibility.Collapsed;
     }
+
+    private void SynchronizePreferences(IReadOnlyList<LearnedPreferenceState> target)
+    {
+        HashSet<int> targetIds = target.Select(preference => preference.Id).ToHashSet();
+        for (int index = Preferences.Count - 1; index >= 0; index--)
+        {
+            if (!targetIds.Contains(Preferences[index].Id))
+            {
+                Preferences.RemoveAt(index);
+            }
+        }
+
+        for (int targetIndex = 0; targetIndex < target.Count; targetIndex++)
+        {
+            LearnedPreferenceState targetPreference = target[targetIndex];
+            int currentIndex = -1;
+            for (int index = targetIndex; index < Preferences.Count; index++)
+            {
+                if (Preferences[index].Id == targetPreference.Id)
+                {
+                    currentIndex = index;
+                    break;
+                }
+            }
+            if (currentIndex < 0)
+            {
+                Preferences.Insert(targetIndex, targetPreference);
+                continue;
+            }
+            if (currentIndex != targetIndex)
+            {
+                Preferences.Move(currentIndex, targetIndex);
+            }
+            if (!PreferenceEquals(Preferences[targetIndex], targetPreference))
+            {
+                Preferences[targetIndex] = targetPreference;
+            }
+        }
+    }
+
+    private static bool PreferenceEquals(
+        LearnedPreferenceState left,
+        LearnedPreferenceState right) =>
+        left.Id == right.Id
+        && left.Kind == right.Kind
+        && left.PreferredValue == right.PreferredValue
+        && left.AvoidValues.SequenceEqual(right.AvoidValues)
+        && left.Keywords.SequenceEqual(right.Keywords)
+        && left.Status == right.Status
+        && left.EvidenceCount == right.EvidenceCount
+        && left.CreatedAt == right.CreatedAt
+        && left.UpdatedAt == right.UpdatedAt
+        && left.LastMatchedAt == right.LastMatchedAt
+        && left.MatchCount == right.MatchCount;
 
     private static string FormatPhase(string phase) => phase switch
     {

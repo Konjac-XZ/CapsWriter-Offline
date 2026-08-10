@@ -10,6 +10,7 @@ from src.personalization.store import (
     ReflectionOutcome,
     apply_reflection_outcomes,
     clear_personalization_data,
+    create_learned_preference,
     delete_learned_preference,
     get_learned_preferences_snapshot,
     get_reflection_store_snapshot,
@@ -82,6 +83,32 @@ def test_learned_preferences_snapshot_returns_displayable_details():
     assert item["evidence_count"] == 1
     assert item["keywords"] == ["Type Script"]
     assert "private raw text" not in repr(snapshot)
+
+
+def test_manual_preference_can_be_created_and_retrieved():
+    preference_id = create_learned_preference(
+        kind="terminology",
+        preferred_value="CapsWriter",
+        avoid_values=("Caps Writer",),
+        keywords=("Caps Writer",),
+        status="active",
+    )
+
+    snapshot = get_learned_preferences_snapshot()
+    item = cast(list[dict[str, object]], snapshot["items"])[0]
+    assert item["id"] == preference_id
+    assert item["preferred_value"] == "CapsWriter"
+    assert item["evidence_count"] == 0
+    assert item["keywords"] == ["Caps Writer"]
+
+    with pytest.raises(ValueError, match="already uses this value"):
+        create_learned_preference(
+            kind="terminology",
+            preferred_value="CapsWriter",
+            avoid_values=("Caps Writer",),
+            keywords=(),
+            status="active",
+        )
 
 
 def test_correction_is_durable_and_multiple_edits_coalesce():

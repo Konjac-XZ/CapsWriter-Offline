@@ -94,6 +94,19 @@ def test_reflection_payload_only_exposes_user_edit_boundary():
     assert "committed_text" in messages[1]["content"]
     assert "corrected_text" in messages[1]["content"]
     assert "不要输出confidence" in messages[0]["content"].replace(" ", "")
+    assert "单纯的标点变化不应形成学习偏好" in messages[0]["content"]
+    assert "casing|punctuation" not in messages[0]["content"]
+
+
+def test_reflection_response_discards_punctuation_preference():
+    event = _event()
+    payload = json.loads(_response(event.id, event.event_revision))
+    payload["results"][0]["preference"]["kind"] = "punctuation"
+
+    outcomes = parse_reflection_response(json.dumps(payload), [event])
+
+    assert outcomes[0].classification == "discard"
+    assert outcomes[0].proposal is None
 
 
 def test_process_batch_persists_valid_provider_response(monkeypatch):

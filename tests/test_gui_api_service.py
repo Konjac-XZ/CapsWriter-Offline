@@ -116,6 +116,11 @@ def test_learned_preference_edit_commands_are_dispatched(monkeypatch):
     calls = []
     monkeypatch.setattr(
         service,
+        "create_learned_preference",
+        lambda **kwargs: calls.append(("create", kwargs)) or 9,
+    )
+    monkeypatch.setattr(
+        service,
         "update_learned_preference",
         lambda **kwargs: calls.append(("update", kwargs)),
     )
@@ -130,6 +135,18 @@ def test_learned_preference_edit_commands_are_dispatched(monkeypatch):
         lambda: {"corrections": 3, "preferences": 2, "reflection_runs": 1},
     )
 
+    created = asyncio.run(
+        service._dispatch_command(
+            "create_learned_preference",
+            {
+                "kind": "terminology",
+                "preferred_value": "CapsWriter",
+                "avoid_values": ["Caps Writer"],
+                "keywords": ["Caps Writer"],
+                "status": "active",
+            },
+        )
+    )
     updated = asyncio.run(
         service._dispatch_command(
             "update_learned_preference",
@@ -148,11 +165,14 @@ def test_learned_preference_edit_commands_are_dispatched(monkeypatch):
     )
     cleared = asyncio.run(service._dispatch_command("clear_personalization", {}))
 
+    assert created == {"created": 9}
+    assert calls[0][0] == "create"
+    assert calls[0][1]["preferred_value"] == "CapsWriter"
     assert updated == {"updated": 7}
-    assert calls[0][0] == "update"
-    assert calls[0][1]["preferred_value"] == "TypeScript"
+    assert calls[1][0] == "update"
+    assert calls[1][1]["preferred_value"] == "TypeScript"
     assert deleted == {"deleted": 7}
-    assert calls[1] == ("delete", 7)
+    assert calls[2] == ("delete", 7)
     assert cleared == {"corrections": 3, "preferences": 2, "reflection_runs": 1}
 
 

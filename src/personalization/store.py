@@ -775,22 +775,17 @@ def get_learned_preferences_snapshot(*, limit: int = 500) -> dict[str, object]:
     return {"total": total, "items": items}
 
 
-def update_learned_preference(
+def _prepare_manual_preference(
     *,
-    preference_id: int,
     kind: str,
     preferred_value: str,
     avoid_values: Sequence[str],
     keywords: Sequence[str],
     status: str,
-) -> None:
-    """Update one learned rule and rebuild its explicit retrieval triggers."""
-    safe_id = int(preference_id)
+) -> tuple[str, str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]]:
     safe_kind = kind.strip().lower()
     safe_status = status.strip().lower()
     safe_preferred = preferred_value.strip()
-    if safe_id <= 0:
-        raise ValueError("preference_id must be positive")
     if safe_kind not in ALLOWED_PREFERENCE_KINDS:
         raise ValueError("unsupported preference kind")
     if safe_status not in ALLOWED_PREFERENCE_STATUSES:
@@ -808,7 +803,111 @@ def update_learned_preference(
         avoid_values=safe_avoid,
         keywords=safe_keywords,
     )
-    canonical_key = _canonical_key(proposal)
+    return (
+        safe_kind,
+        safe_status,
+        safe_preferred,
+        safe_avoid,
+        safe_keywords,
+        _canonical_key(proposal),
+        trigger_values,
+    )
+
+
+def create_learned_preference(
+    *,
+    kind: str,
+    preferred_value: str,
+    avoid_values: Sequence[str],
+    keywords: Sequence[str],
+    status: str,
+) -> int:
+    """Create one manual learned rule and its explicit retrieval triggers."""
+    (
+        safe_kind,
+        safe_status,
+        safe_preferred,
+        safe_avoid,
+        _safe_keywords,
+        canonical_key,
+        trigger_values,
+    ) = _prepare_manual_preference(
+        kind=kind,
+        preferred_value=preferred_value,
+        avoid_values=avoid_values,
+        keywords=keywords,
+        status=status,
+    )
+    now = time.time()
+    with state_db.connection() as database:
+        database.execute("BEGIN IMMEDIATE")
+        duplicate = database.execute(
+            "SELECT id FROM learned_preferences WHERE canonical_key = ?",
+            (canonical_key,),
+        ).fetchone()
+        if duplicate is not None:
+            database.rollback()
+            raise ValueError("another learned preference already uses this value")
+        cursor = database.execute(
+            "INSERT INTO learned_preferences("
+            "canonical_key, kind, preferred_value, avoid_values_json, confidence, "
+            "status, evidence_count, created_at, updated_at) "
+            "VALUES(?, ?, ?, ?, 1, ?, 0, ?, ?)",
+            (
+                canonical_key,
+                safe_kind,
+                safe_preferred,
+                json.dumps(safe_avoid, ensure_ascii=False),
+                safe_status,
+                now,
+                now,
+            ),
+        )
+        if cursor.lastrowid is None:
+            database.rollback()
+            raise RuntimeError("failed to create learned preference")
+        preference_id = cursor.lastrowid
+        database.executemany(
+            "INSERT INTO preference_keywords("
+            "preference_id, keyword, normalized_keyword, weight) VALUES(?, ?, ?, 1)",
+            [
+                (preference_id, keyword, normalize_match_text(keyword))
+                for keyword in trigger_values
+                if _valid_keyword(keyword)
+            ],
+        )
+        database.commit()
+    return preference_id
+
+
+def update_learned_preference(
+    *,
+    preference_id: int,
+    kind: str,
+    preferred_value: str,
+    avoid_values: Sequence[str],
+    keywords: Sequence[str],
+    status: str,
+) -> None:
+    """Update one learned rule and rebuild its explicit retrieval triggers."""
+    safe_id = int(preference_id)
+    if safe_id <= 0:
+        raise ValueError("preference_id must be positive")
+    (
+        safe_kind,
+        safe_status,
+        safe_preferred,
+        safe_avoid,
+        _safe_keywords,
+        canonical_key,
+        trigger_values,
+    ) = _prepare_manual_preference(
+        kind=kind,
+        preferred_value=preferred_value,
+        avoid_values=avoid_values,
+        keywords=keywords,
+        status=status,
+    )
     now = time.time()
     with state_db.connection() as database:
         database.execute("BEGIN IMMEDIATE")

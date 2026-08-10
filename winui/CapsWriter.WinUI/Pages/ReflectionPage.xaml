@@ -73,6 +73,7 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center" Orientation="Horizontal" Spacing="8">
                         <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="学习到的偏好" />
@@ -84,7 +85,8 @@
                         <ComboBoxItem Content="候选" Tag="candidate" />
                         <ComboBoxItem Content="已替代" Tag="superseded" />
                     </ComboBox>
-                    <ProgressRing x:Name="PreferencesProgress" Grid.Column="2" Width="20" Height="20" VerticalAlignment="Center" IsActive="False" />
+                    <Button Grid.Column="2" Click="AddPreference_Click" Content="手动添加" />
+                    <ProgressRing x:Name="PreferencesProgress" Grid.Column="3" Width="20" Height="20" VerticalAlignment="Center" IsActive="False" />
                 </Grid>
 
                 <Grid Grid.Row="1">

@@ -21,6 +21,7 @@ from src.gui_api.tsf_versions import inspect_tsf_dll_versions
 from src.personalization.reflection import get_reflection_status_snapshot
 from src.personalization.store import (
     clear_personalization_data,
+    create_learned_preference,
     delete_learned_preference,
     get_learned_preferences_snapshot,
     update_learned_preference,
@@ -116,6 +117,20 @@ async def _dispatch_command(command: str, payload: dict[str, Any]) -> object:
             get_learned_preferences_snapshot,
             limit=int(payload.get("limit", 500)),
         )
+    if command == "create_learned_preference":
+        avoid_values = payload.get("avoid_values", [])
+        keywords = payload.get("keywords", [])
+        if not isinstance(avoid_values, list) or not isinstance(keywords, list):
+            raise ValueError("avoid_values and keywords must be arrays")
+        preference_id = await asyncio.to_thread(
+            create_learned_preference,
+            kind=str(payload.get("kind", "")),
+            preferred_value=str(payload.get("preferred_value", "")),
+            avoid_values=avoid_values,
+            keywords=keywords,
+            status=str(payload.get("status", "")),
+        )
+        return {"created": preference_id}
     if command == "update_learned_preference":
         avoid_values = payload.get("avoid_values", [])
         keywords = payload.get("keywords", [])
