@@ -157,6 +157,21 @@ def _choose_interval(
 
     mapped_text = current_text[slice(*mapped_interval)]
     native_text = current_text[slice(*native_interval)]
+    # A live range that crosses a line boundary while the document-aligned
+    # interval remains on one line has almost certainly slid sideways.  This
+    # was observed repeatedly in Obsidian: the native interval started with
+    # the last character of the previous list item and ended just before the
+    # last character of the edited item.  The native score can still be high
+    # because most of the target is intact, so prefer the mapped interval when
+    # it has enough independent support.
+    native_crosses_adjacent_line = (
+        native_interval != (0, len(current_text))
+        and ("\n" in native_text or "\r" in native_text)
+        and "\n" not in mapped_text
+        and "\r" not in mapped_text
+    )
+    if native_crosses_adjacent_line and mapped_score >= native_minimum:
+        return mapped_score, *mapped_interval
     boundary_repair = abs(len(mapped_text) - len(native_text)) <= 2 and (
         mapped_text.endswith(native_text) or mapped_text.startswith(native_text)
     )

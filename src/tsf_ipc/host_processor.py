@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
+from rapidfuzz import fuzz
 from rapidfuzz.distance import Levenshtein
 
 from .protocol import CompositionStyle
@@ -73,7 +74,10 @@ class DefaultHostProcessor:
         following_text: str = "",
         tail_replacement_open: bool = False,
     ) -> str:
-        return observed_text
+        return _trim_followup_after_new_terminal(
+            committed_text or previous_text,
+            observed_text,
+        )
 
     def opens_tail_replacement(self, previous_text: str, observed_text: str) -> bool:
         return False
@@ -101,6 +105,18 @@ _BACKTICK_RUN = re.compile(r"`+")
 _SENTENCE_TERMINATOR = re.compile(r"[。！？!?…]+[\"'”’」』】）》]*")
 _NON_SUBSTANTIVE_TAIL = re.compile(r"^[\s。！？!?…\"'“”‘’「」『』【】（）《》]*$")
 _MAXIMUM_TRAILING_REPAIR_CHARACTERS = 16
+
+
+def _trim_followup_after_new_terminal(reference: str, observed: str) -> str:
+    """Keep new terminal punctuation without absorbing the next sentence."""
+    reference = reference.strip()
+    if not reference or observed == reference or not observed.startswith(reference):
+        return observed
+    suffix = observed[len(reference) :]
+    boundary = _SENTENCE_TERMINATOR.match(suffix)
+    if boundary is None or boundary.end() == len(suffix):
+        return observed
+    return observed[: len(reference) + boundary.end()]
 
 
 class ObsidianHostProcessor(DefaultHostProcessor):
@@ -143,6 +159,12 @@ class ObsidianHostProcessor(DefaultHostProcessor):
             return observed_text
 
         reference = (committed_text or previous_text).strip()
+        candidate = _repair_obsidian_line_boundary(
+            reference,
+            candidate,
+            preceding_text,
+            following_text,
+        )
         if reference and not reference.startswith(("\r", "\n")):
             candidate = candidate.lstrip("\r\n")
         return _repair_obsidian_sentence_boundary(
@@ -160,6 +182,43 @@ class ObsidianHostProcessor(DefaultHostProcessor):
 
 def _backtick_run_signature(text: str) -> tuple[int, ...]:
     return tuple(len(match.group()) for match in _BACKTICK_RUN.finditer(text))
+
+
+def _repair_obsidian_line_boundary(
+    reference: str,
+    observed: str,
+    preceding: str,
+    following: str,
+) -> str:
+    """Recover one logical line from a live range that slid on both sides."""
+    if not reference or "\n" in reference or "\r" in reference:
+        return observed
+    observed_lines = observed.splitlines()
+    preceding_line = preceding.splitlines()[-1] if preceding else ""
+    following_line = following.splitlines()[0] if following else ""
+    candidates = [line.strip("\r") for line in observed_lines if line]
+    if observed_lines:
+        candidates.extend(
+            (
+                preceding_line + observed_lines[0].strip("\r"),
+                observed_lines[-1].strip("\r") + following_line,
+            )
+        )
+    for line in tuple(candidates):
+        alignment = fuzz.partial_ratio_alignment(reference, line)
+        if alignment is not None and alignment.score >= 60:
+            candidates.append(line[alignment.dest_start :])
+    if not candidates:
+        return observed
+    best = max(
+        candidates,
+        key=lambda line: Levenshtein.normalized_similarity(reference, line),
+    )
+    best_score = Levenshtein.normalized_similarity(reference, best)
+    observed_score = Levenshtein.normalized_similarity(reference, observed.strip())
+    if best_score < 0.6 or best_score <= observed_score:
+        return observed
+    return best
 
 
 def _repair_obsidian_sentence_boundary(

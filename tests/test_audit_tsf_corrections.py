@@ -79,6 +79,20 @@ def test_word_initial_range_damage_requires_review():
     assert any("词内开始" in reason for reason in result.reasons)
 
 
+def test_2026_08_10_742837e9_interrupted_tail_rewrite_is_rejected():
+    """The session ended before the rewritten Obsidian item was observable."""
+    result = classify_capture(
+        _capture(
+            "envoy #6 错误地拒绝带有 Transfer-Encoding = chunked 的请求",
+            "envoy #6 错误地",
+        ),
+        LogEvidence(prefix_window_full=True, alignment_score=0.881),
+    )
+
+    assert result.verdict == "reject"
+    assert any("不足原提交长度" in reason for reason in result.reasons)
+
+
 def test_parses_snapshot_and_reconciliation_log_evidence(tmp_path):
     log = tmp_path / "capswriter.log"
     log.write_text(
