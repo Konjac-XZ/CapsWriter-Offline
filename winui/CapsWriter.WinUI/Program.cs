@@ -10,8 +10,11 @@ public static class Program
     private static AppInstance? _mainInstance;
     private static App? _application;
 
+    // Keep the real CLR entry point synchronous. With async Task Main, the C#
+    // compiler emits an unannotated <Main> wrapper, so [STAThread] does not
+    // initialize COM for the WinUI thread (Clipboard then fails with 0x800401F0).
     [STAThread]
-    public static async Task Main(string[] args)
+    public static void Main(string[] args)
     {
         WinRT.ComWrappersSupport.InitializeComWrappers();
 
@@ -20,7 +23,7 @@ public static class Program
         _mainInstance = AppInstance.FindOrRegisterForKey(MainInstanceKey);
         if (!_mainInstance.IsCurrent)
         {
-            await _mainInstance.RedirectActivationToAsync(activationArgs);
+            _mainInstance.RedirectActivationToAsync(activationArgs).GetAwaiter().GetResult();
             return;
         }
 

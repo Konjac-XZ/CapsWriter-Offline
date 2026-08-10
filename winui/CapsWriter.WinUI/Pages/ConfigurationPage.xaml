@@ -147,21 +147,21 @@
             <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
                 <StackPanel Spacing="10">
                     <TextBlock x:Name="AsrPromptTitle" Style="{StaticResource SubtitleTextBlockStyle}" Text="ASR Prompt" />
-                    <TextBox x:Name="AsrPromptBox" AcceptsReturn="True" MinHeight="150" MaxHeight="320" FontFamily="Cascadia Mono, Consolas" LostFocus="EditableTextBox_LostFocus" TextChanged="AsrPromptBox_TextChanged" TextWrapping="Wrap" />
+                    <TextBox x:Name="AsrPromptBox" AcceptsReturn="True" MinHeight="150" MaxHeight="320" CopyingToClipboard="EditableTextBox_CopyingToClipboard" CuttingToClipboard="EditableTextBox_CuttingToClipboard" FontFamily="Cascadia Mono, Consolas" LostFocus="EditableTextBox_LostFocus" TextChanged="AsrPromptBox_TextChanged" TextWrapping="Wrap" />
                 </StackPanel>
             </Border>
 
             <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
                 <StackPanel Spacing="10">
                     <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="LLM 润色 Prompt" />
-                    <TextBox x:Name="LlmPromptBox" AcceptsReturn="True" MinHeight="220" MaxHeight="520" FontFamily="Cascadia Mono, Consolas" LostFocus="EditableTextBox_LostFocus" TextChanged="LlmPromptBox_TextChanged" TextWrapping="Wrap" />
+                    <TextBox x:Name="LlmPromptBox" AcceptsReturn="True" MinHeight="220" MaxHeight="520" CopyingToClipboard="EditableTextBox_CopyingToClipboard" CuttingToClipboard="EditableTextBox_CuttingToClipboard" FontFamily="Cascadia Mono, Consolas" LostFocus="EditableTextBox_LostFocus" TextChanged="LlmPromptBox_TextChanged" TextWrapping="Wrap" />
                 </StackPanel>
             </Border>
 
             <Border Padding="18" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
                 <StackPanel Spacing="10">
                     <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="用户词库" />
-                    <TextBox x:Name="LexiconBox" AcceptsReturn="True" MinHeight="220" MaxHeight="520" FontFamily="Cascadia Mono, Consolas" LostFocus="EditableTextBox_LostFocus" TextChanged="LexiconBox_TextChanged" TextWrapping="NoWrap" />
+                    <TextBox x:Name="LexiconBox" AcceptsReturn="True" MinHeight="220" MaxHeight="520" CopyingToClipboard="EditableTextBox_CopyingToClipboard" CuttingToClipboard="EditableTextBox_CuttingToClipboard" FontFamily="Cascadia Mono, Consolas" LostFocus="EditableTextBox_LostFocus" TextChanged="LexiconBox_TextChanged" TextWrapping="NoWrap" />
                 </StackPanel>
             </Border>
         </StackPanel>

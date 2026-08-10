@@ -4,6 +4,7 @@ using CapsWriter_WinUI.Services;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Windows.ApplicationModel.DataTransfer;
 using Windows.Foundation;
 
 namespace CapsWriter_WinUI.Pages;
@@ -96,6 +97,7 @@ public sealed partial class ConfigurationPage : Page
         try
         {
             _loading = true;
+            StopEditorSaveTimers();
             ShowStatus("正在读取配置…", InfoBarSeverity.Informational, true);
             ConfigurationState state = await _client.GetConfigurationAsync();
             _providerId = state.ProviderId;
@@ -109,9 +111,12 @@ public sealed partial class ConfigurationPage : Page
             TextboxStateToggle.IsOn = state.ActiveTextboxStateEnabled;
             VisionToggle.IsOn = state.VisionContextEnabled;
             LexiconBox.Text = state.LexiconText;
-            _savedAsrPrompt = state.AsrPrompt;
-            _savedLlmPrompt = state.LlmPrompt;
-            _savedLexicon = state.LexiconText;
+            // TextBox can normalize multiline text (notably line endings). Use the
+            // value read back from the control as the clean baseline so merely
+            // loading the page cannot look like a user edit.
+            _savedAsrPrompt = AsrPromptBox.Text;
+            _savedLlmPrompt = LlmPromptBox.Text;
+            _savedLexicon = LexiconBox.Text;
             StatusBar.IsOpen = false;
         }
         catch (Exception exception)
@@ -128,17 +133,30 @@ public sealed partial class ConfigurationPage : Page
 
     private void AsrPromptBox_TextChanged(object sender, TextChangedEventArgs e)
     {
-        RestartAutoSaveTimer(_asrPromptSaveTimer);
+        UpdateAutoSaveTimer(AsrPromptBox, _savedAsrPrompt, _asrPromptSaveTimer);
     }
 
     private void LlmPromptBox_TextChanged(object sender, TextChangedEventArgs e)
     {
-        RestartAutoSaveTimer(_llmPromptSaveTimer);
+        UpdateAutoSaveTimer(LlmPromptBox, _savedLlmPrompt, _llmPromptSaveTimer);
     }
 
     private void LexiconBox_TextChanged(object sender, TextChangedEventArgs e)
     {
-        RestartAutoSaveTimer(_lexiconSaveTimer);
+        UpdateAutoSaveTimer(LexiconBox, _savedLexicon, _lexiconSaveTimer);
+    }
+
+    private void UpdateAutoSaveTimer(
+        TextBox textBox,
+        string savedText,
+        DispatcherQueueTimer timer)
+    {
+        timer.Stop();
+        if (_loading || textBox.Text == savedText)
+        {
+            return;
+        }
+        timer.Start();
     }
 
     private void RestartAutoSaveTimer(DispatcherQueueTimer timer)
@@ -150,6 +168,100 @@ public sealed partial class ConfigurationPage : Page
         timer.Stop();
         timer.Start();
     }
+
+    private void StopEditorSaveTimers()
+    {
+        _asrPromptSaveTimer.Stop();
+        _llmPromptSaveTimer.Stop();
+        _lexiconSaveTimer.Stop();
+    }
+
+    private void EditableTextBox_CopyingToClipboard(
+        TextBox sender,
+        TextControlCopyingToClipboardEventArgs args)
+    {
+        args.Handled = true;
+        CopySelectionToClipboard(sender, cut: false);
+    }
+
+    private void EditableTextBox_CuttingToClipboard(
+        TextBox sender,
+        TextControlCuttingToClipboardEventArgs args)
+    {
+        args.Handled = true;
+        CopySelectionToClipboard(sender, cut: true);
+    }
+
+    private void CopySelectionToClipboard(TextBox textBox, bool cut)
+    {
+        string operation = cut ? "cut" : "copy";
+        string editor = GetEditorLogName(textBox);
+        int selectionLength = textBox.SelectionLength;
+        _client.ReportLocalLog(
+            $"剪贴板命令触发：operation={operation} editor={editor} selection_length={selectionLength}",
+            "#666666");
+        if (selectionLength <= 0)
+        {
+            return;
+        }
+
+        string selectedText = textBox.SelectedText;
+        try
+        {
+            DataPackage dataPackage = new();
+            dataPackage.SetText(selectedText);
+            Clipboard.SetContent(dataPackage);
+            try
+            {
+                Clipboard.Flush();
+            }
+            catch (Exception exception)
+            {
+                // SetContent already completed. Flush only detaches the data from
+                // this process so it survives application shutdown; a Flush
+                // failure must not turn a usable copy into a failed cut.
+                _client.ReportLocalLog(
+                    "剪贴板持久化警告："
+                        + DescribeClipboardException("flush", exception),
+                    "#CA5010");
+            }
+            if (cut)
+            {
+                textBox.SelectedText = string.Empty;
+            }
+            _client.ReportLocalLog(
+                $"剪贴板写入成功：operation={operation} editor={editor} text_length={selectedText.Length}",
+                "#107C10");
+        }
+        catch (Exception exception)
+        {
+            string diagnostic = DescribeClipboardException("set_content", exception);
+            _client.ReportLocalLog(
+                $"剪贴板写入失败：operation={operation} editor={editor} {diagnostic}",
+                "#C42B1C");
+            ShowStatus(
+                $"{(cut ? "剪切" : "复制")}失败：{diagnostic}",
+                InfoBarSeverity.Error);
+        }
+    }
+
+    private static string DescribeClipboardException(string stage, Exception exception)
+    {
+        string message = string.IsNullOrWhiteSpace(exception.Message)
+            ? "（异常未提供消息）"
+            : exception.Message;
+        return $"stage={stage} exception={exception.GetType().Name} "
+            + $"hresult=0x{exception.HResult:X8} message={message}";
+    }
+
+    private string GetEditorLogName(TextBox textBox) =>
+        ReferenceEquals(textBox, AsrPromptBox)
+            ? "asr_prompt"
+            : ReferenceEquals(textBox, LlmPromptBox)
+                ? "llm_prompt"
+                : ReferenceEquals(textBox, LexiconBox)
+                    ? "lexicon"
+                    : "unknown";
 
     private async void EditableTextBox_LostFocus(object sender, RoutedEventArgs e)
     {
@@ -195,7 +307,9 @@ public sealed partial class ConfigurationPage : Page
         _loadingHistory = true;
         try
         {
-            IReadOnlyList<string> items = await _client.GetPolishHistoryAsync();
+            IReadOnlyList<string> items = (await _client.GetPolishHistoryAsync())
+                .Reverse()
+                .ToArray();
             if (!PolishHistoryItems.SequenceEqual(items))
             {
                 PolishHistoryItems.Clear();
@@ -360,6 +474,10 @@ public sealed partial class ConfigurationPage : Page
         await _configurationSaveLock.WaitAsync();
         try
         {
+            if (text == _savedLexicon)
+            {
+                return;
+            }
             System.Text.Json.JsonElement result = await _client.SetLexiconAsync(text);
             int count = result.TryGetProperty("entry_count", out System.Text.Json.JsonElement value)
                 ? value.GetInt32()
