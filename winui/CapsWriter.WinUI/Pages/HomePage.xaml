@@ -38,7 +38,10 @@
             SelectedItemTemplate="{StaticResource SelectedModelTemplate}" />
     </Page.Resources>
 
-    <Grid Padding="16,12,16,16" RowSpacing="10">
+    <Grid
+        Padding="16,12,16,16"
+        RowSpacing="10"
+        KeyboardAcceleratorPlacementMode="Hidden">
         <Grid.KeyboardAccelerators>
             <KeyboardAccelerator Key="L" Modifiers="Control" Invoked="ClearLogAccelerator_Invoked" />
         </Grid.KeyboardAccelerators>

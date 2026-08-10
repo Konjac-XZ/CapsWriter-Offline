@@ -42,6 +42,7 @@
             IsPaneToggleButtonVisible="True"
             IsSettingsVisible="False"
             IsTitleBarAutoPaddingEnabled="False"
+            KeyboardAcceleratorPlacementMode="Hidden"
             Loaded="NavView_Loaded"
             OpenPaneLength="240"
             PaneDisplayMode="Left"
