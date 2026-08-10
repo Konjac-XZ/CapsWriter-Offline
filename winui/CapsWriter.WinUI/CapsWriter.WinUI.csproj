@@ -27,6 +27,9 @@
     <Content Include="Assets\StoreLogo.png" />
     <Content Include="Assets\Wide310x150Logo.scale-200.png" />
     <Content Include="..\..\assets\client-icon.ico" Link="Assets\client-icon.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\assets\SpeechOn.wav" Link="Assets\Feedback\SpeechOn.wav" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\assets\SpeechOff.wav" Link="Assets\Feedback\SpeechOff.wav" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\assets\bubble.wav" Link="Assets\Feedback\bubble.wav" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

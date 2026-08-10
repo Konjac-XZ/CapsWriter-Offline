@@ -51,6 +51,7 @@
 #     except sd.PortAudioError as e:
 #         console.print(f"音频播放失败: {e}")
 
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -128,8 +129,41 @@ def _fallback_beep():
         pass
 
 
+def _native_gui_audio_enabled() -> bool:
+    return os.getenv("CAPSWRITER_GUI_PROTOCOL", "").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+def _emit_native_audio_cue(cue: str) -> bool:
+    """Let the Native UI play preloaded feedback audio when it owns the backend."""
+    if not _native_gui_audio_enabled():
+        return False
+
+    from src.infra.gui_output import gui_event
+
+    gui_event("audio_cue", cue=cue)
+    return True
+
+
+def play_feedback_sound(
+    cue: str,
+    file_path: Path,
+    volume_level: str = "50",
+) -> None:
+    """Play a recording cue through the active UI's lowest-latency path."""
+    if _emit_native_audio_cue(cue):
+        return
+    play_music(file_path, volume_level)
+
+
 def play_completion_sound() -> None:
     """Play the bundled completion sound without blocking result delivery."""
+    if _emit_native_audio_cue("success"):
+        return
+
     sound_file = _resolve_audio_file(Path("assets/bubble.wav"))
     if sound_file is None:
         console.print("上屏提示音文件不存在: assets/bubble.wav")

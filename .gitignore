@@ -30,6 +30,8 @@ downloads/
 models/
 *.wav
 !assets/bubble.wav
+!assets/SpeechOff.wav
+!assets/SpeechOn.wav
 *.mp3
 !assets/SpeechOff.mp3
 !assets/SpeechOn.mp3

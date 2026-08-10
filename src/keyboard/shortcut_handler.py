@@ -24,6 +24,7 @@ escape_abort_pressed = False
 sessions = []
 _debug_action_count = 0
 _DEBUG_SLOW_MS = 250.0
+_FEEDBACK_AUDIO_PROCESS_NAMES = frozenset({"ffplay.exe", "capswriter.winui.exe"})
 
 
 def _debug_enabled(force: bool = False) -> bool:
@@ -101,6 +102,13 @@ def _safe_session_process_name(session) -> str | None:
         return None
 
 
+def _is_feedback_audio_process(process_name: str | None) -> bool:
+    return (
+        process_name is not None
+        and process_name.casefold() in _FEEDBACK_AUDIO_PROCESS_NAMES
+    )
+
+
 def _emit_status_overlay(action: str, state: str | None = None) -> None:
     if not Config.show_listening_overlay:
         return
@@ -146,33 +154,43 @@ def mute_all_sessions():
     with _timed_step("mute:GetAllSessions"):
         sessions = AudioUtilities.GetAllSessions()
     muted_count = 0
+    feedback_skipped = 0
     for session in sessions:
         process_name = _safe_session_process_name(session)
-        # 排除 ffplay.exe
-        if process_name != "ffplay.exe":
-            try:
-                volume = session.SimpleAudioVolume
-                volume.SetMute(1, None)
-                muted_count += 1
-            except Exception:
-                continue
-    _debug_log(f"mute:sessions total={len(sessions)} muted={muted_count}")
+        if _is_feedback_audio_process(process_name):
+            feedback_skipped += 1
+            continue
+        try:
+            volume = session.SimpleAudioVolume
+            volume.SetMute(1, None)
+            muted_count += 1
+        except Exception:
+            continue
+    _debug_log(
+        f"mute:sessions total={len(sessions)} muted={muted_count} "
+        f"feedback_skipped={feedback_skipped}"
+    )
 
 
 def unmute_all_sessions():
     global sessions
     unmuted_count = 0
+    feedback_skipped = 0
     for session in sessions:
         process_name = _safe_session_process_name(session)
-        # 排除 ffplay.exe
-        if process_name != "ffplay.exe":
-            try:
-                volume = session.SimpleAudioVolume
-                volume.SetMute(0, None)
-                unmuted_count += 1
-            except Exception:
-                continue
-    _debug_log(f"unmute:sessions total={len(sessions)} unmuted={unmuted_count}")
+        if _is_feedback_audio_process(process_name):
+            feedback_skipped += 1
+            continue
+        try:
+            volume = session.SimpleAudioVolume
+            volume.SetMute(0, None)
+            unmuted_count += 1
+        except Exception:
+            continue
+    _debug_log(
+        f"unmute:sessions total={len(sessions)} unmuted={unmuted_count} "
+        f"feedback_skipped={feedback_skipped}"
+    )
 
 
 def launch_task():
@@ -186,10 +204,14 @@ def launch_task():
     # 开始任务时播放提示音
     if Config.play_start_music:
         with _timed_step("launch:play_start_music_import"):
-            from src.keyboard.play_music import play_music
+            from src.keyboard.play_music import play_feedback_sound
 
         with _timed_step("launch:play_start_music"):
-            play_music(Config.start_music_path, Config.start_music_volume)
+            play_feedback_sound(
+                "start",
+                Config.start_music_path,
+                Config.start_music_volume,
+            )
 
     if Config.only_enable_microphones_when_pressed_record_shortcut:
         # Recreate only the input stream on the normal path. PortAudio is
@@ -219,11 +241,10 @@ def launch_task():
     if Config.pause_other_audio and not unpause_needed:
         with _timed_step("launch:audio_playering_app_name"):
             process_name = audio_playering_app_name()
-        if process_name:
-            if process_name != "ffplay.exe":
-                with _timed_step("launch:keyboard_play_pause"):
-                    keyboard.send("play/pause")
-                unpause_needed = True
+        if process_name and not _is_feedback_audio_process(process_name):
+            with _timed_step("launch:keyboard_play_pause"):
+                keyboard.send("play/pause")
+            unpause_needed = True
 
     # 通知录音线程可以向队列放数据了
     Cosmic.on = t1
@@ -350,10 +371,14 @@ def finish_task():
     # 结束任务时播放提示音
     if Config.play_stop_music:
         with _timed_step("finish:play_stop_music_import"):
-            from src.keyboard.play_music import play_music
+            from src.keyboard.play_music import play_feedback_sound
 
         with _timed_step("finish:play_stop_music"):
-            play_music(Config.stop_music_path, Config.stop_music_volume)
+            play_feedback_sound(
+                "stop",
+                Config.stop_music_path,
+                Config.stop_music_volume,
+            )
 
     # 取消音频暂停
     global unpause_needed
@@ -453,7 +478,7 @@ def escape_abort_handler(e: keyboard.KeyboardEvent) -> None:
 
 def bond_shortcut():
     keyboard.hook_key(
-        Config.speech_recognition_shortcut, record_shortcut_handler, suppress=True
+        Config.speech_recognition_shortcut, record_shortcut_handler, suppress=False
     )
 
     keyboard.hook_key("esc", escape_abort_handler, suppress=False)

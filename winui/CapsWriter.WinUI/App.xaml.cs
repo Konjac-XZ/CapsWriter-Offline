@@ -21,6 +21,7 @@ public partial class App : Application
     private StatusOverlayWindow? _statusOverlay;
     private DispatcherQueue? _mainDispatcherQueue;
     private bool _showRequestedBeforeLaunch;
+    private readonly FeedbackSoundPlayer _feedbackSoundPlayer = new();
     public PythonServiceClient ServiceClient { get; } = new();
     public LatestAudioPlayer AudioPlayer { get; } = new();
 
@@ -45,6 +46,7 @@ public partial class App : Application
         mainWindow.Activate();
         mainWindow.InitializeDesktopServices();
         ServiceClient.StatusOverlayReceived += ServiceClient_StatusOverlayReceived;
+        ServiceClient.AudioCueReceived += ServiceClient_AudioCueReceived;
         bool skipBackend = args.Arguments
             .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Any(argument => string.Equals(argument, "--no-backend", StringComparison.OrdinalIgnoreCase));
@@ -94,11 +96,25 @@ public partial class App : Application
         });
     }
 
+    private void ServiceClient_AudioCueReceived(
+        object? sender,
+        Models.AudioCueEvent audioCueEvent)
+    {
+        if (!_feedbackSoundPlayer.TryPlay(audioCueEvent.Cue))
+        {
+            ServiceClient.ReportLocalLog(
+                $"无法播放原生提示音：{audioCueEvent.Cue}",
+                "#C42B1C");
+        }
+    }
+
     public async Task ShutdownAsync()
     {
         ServiceClient.StatusOverlayReceived -= ServiceClient_StatusOverlayReceived;
+        ServiceClient.AudioCueReceived -= ServiceClient_AudioCueReceived;
         _statusOverlay?.Dispose();
         _statusOverlay = null;
+        _feedbackSoundPlayer.Dispose();
         AudioPlayer.Dispose();
         await ServiceClient.DisposeAsync();
     }

@@ -20,6 +20,7 @@ public sealed partial class PythonServiceClient : IAsyncDisposable
     public event EventHandler<LogEntry>? LogReceived;
     public event EventHandler<ServiceSnapshot>? SnapshotReceived;
     public event EventHandler<StatusOverlayEvent>? StatusOverlayReceived;
+    public event EventHandler<AudioCueEvent>? AudioCueReceived;
     public event EventHandler<int>? DailyInputCountChanged;
     public event EventHandler<ContextSettingChangedEvent>? ContextSettingChanged;
     public event EventHandler<string>? ConnectionStateChanged;
@@ -390,6 +391,13 @@ public sealed partial class PythonServiceClient : IAsyncDisposable
                     if (overlayEvent is not null)
                     {
                         StatusOverlayReceived?.Invoke(this, overlayEvent);
+                    }
+                    break;
+                case "audio_cue":
+                    AudioCueEvent? audioCueEvent = root.Deserialize<AudioCueEvent>();
+                    if (audioCueEvent is not null)
+                    {
+                        AudioCueReceived?.Invoke(this, audioCueEvent);
                     }
                     break;
                 case "daily_input_count":

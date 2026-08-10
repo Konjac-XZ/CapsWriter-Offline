@@ -47,6 +47,12 @@ public sealed class ServiceState
     public string? ActiveTaskId { get; init; }
 }
 
+public sealed class AudioCueEvent
+{
+    [JsonPropertyName("cue")]
+    public string Cue { get; init; } = string.Empty;
+}
+
 public sealed class ModelState
 {
     [JsonPropertyName("provider_id")]
