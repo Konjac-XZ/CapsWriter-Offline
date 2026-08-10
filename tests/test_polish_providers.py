@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from src.polish.providers import normalize_provider_name
-from src.polish.providers.base import PolishCompletionRequest, PolishProviderConfig
+from src.polish.providers.base import (
+    PolishCompletionRequest,
+    PolishCompletionResult,
+    PolishProviderConfig,
+)
+from src.polish.providers.openai_compatible import OpenAICompatiblePolishProvider
 from src.polish.providers.openrouter import OpenRouterPolishProvider
 
 
@@ -45,7 +51,17 @@ class _FakeChat:
                 [
                     {"choices": [{"delta": {"content": "润色"}}]},
                     {"choices": [{"delta": {"content": "完成"}}]},
-                    {"choices": []},
+                    {
+                        "choices": [],
+                        "usage": {
+                            "prompt_tokens": 800,
+                            "completion_tokens": 2,
+                            "prompt_tokens_details": {
+                                "cached_tokens": 640,
+                                "cache_write_tokens": 0,
+                            },
+                        },
+                    },
                 ]
             )
         return {"choices": [{"message": {"content": "非流式结果"}}]}
@@ -159,7 +175,7 @@ def test_openrouter_provider_uses_official_sdk_routing(
     deltas: list[str] = []
     accumulated: list[str] = []
 
-    async def run_case() -> str | None:
+    async def run_case() -> PolishCompletionResult:
         provider = OpenRouterPolishProvider(
             PolishProviderConfig(
                 name="openrouter",
@@ -190,9 +206,15 @@ def test_openrouter_provider_uses_official_sdk_routing(
             on_text=accumulated.append,
         )
         await provider.close()
-        return result.text
+        return result
 
-    assert asyncio.run(run_case()) == "润色完成"
+    result = asyncio.run(run_case())
+    assert result.text == "润色完成"
+    assert result.usage is not None
+    assert result.usage.prompt_tokens == 800
+    assert result.usage.cached_tokens == 640
+    assert result.usage.cache_write_tokens == 0
+    assert result.usage.completion_tokens == 2
     assert deltas == ["润色", "完成"]
     assert accumulated == ["润色", "润色完成"]
 
@@ -214,6 +236,147 @@ def test_openrouter_provider_uses_official_sdk_routing(
     }
     assert request["reasoning"] == {"enabled": False}
     assert request["stream"] is True
+
+
+def test_openai_compatible_provider_saves_streamed_cache_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import src.polish.providers.openai_compatible as compatible_provider
+
+    class _FakeEvent:
+        def __init__(self, data: str) -> None:
+            self.data = data
+
+    class _FakeEventSource:
+        response = SimpleNamespace(status_code=200)
+
+        async def aiter_sse(self):
+            for data in (
+                '{"choices":[{"delta":{"content":"润色完成"}}]}',
+                (
+                    '{"choices":[],"usage":{"prompt_tokens":1000,'
+                    '"completion_tokens":4,"prompt_tokens_details":'
+                    '{"cached_tokens":768,"cache_write_tokens":128}}}'
+                ),
+                "[DONE]",
+            ):
+                yield _FakeEvent(data)
+
+    class _FakeSSEContext:
+        async def __aenter__(self):
+            return _FakeEventSource()
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+    monkeypatch.setattr(compatible_provider.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(
+        compatible_provider,
+        "aconnect_sse",
+        lambda *_args, **_kwargs: _FakeSSEContext(),
+    )
+
+    async def run_case() -> PolishCompletionResult:
+        provider = OpenAICompatiblePolishProvider(
+            PolishProviderConfig(
+                name="openai_compatible",
+                api_key="test-key",
+                base_url="https://example.test/v1",
+                timeout_s=10,
+            )
+        )
+        try:
+            return await provider.complete(
+                PolishCompletionRequest(
+                    model="mimo-v2.5-pro",
+                    messages=[{"role": "user", "content": "原文"}],
+                )
+            )
+        finally:
+            await provider.close()
+
+    result = asyncio.run(run_case())
+    assert result.text == "润色完成"
+    assert result.usage is not None
+    assert result.usage.prompt_tokens == 1000
+    assert result.usage.cached_tokens == 768
+    assert result.usage.cache_write_tokens == 128
+    assert result.usage.completion_tokens == 4
+
+
+def test_openai_compatible_provider_saves_nonstream_cache_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import src.polish.providers.openai_compatible as compatible_provider
+
+    class _EmptyEventSource:
+        response = SimpleNamespace(status_code=200)
+
+        async def aiter_sse(self):
+            if False:
+                yield None
+
+    class _EmptySSEContext:
+        async def __aenter__(self):
+            return _EmptyEventSource()
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+    class _FakeResponse:
+        status_code = 200
+        text = ""
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "choices": [{"message": {"content": "非流式结果"}}],
+                "usage": {
+                    "prompt_tokens": 900,
+                    "completion_tokens": 3,
+                    "prompt_tokens_details": {"cached_tokens": 896},
+                },
+            }
+
+    class _FakeFallbackClient(_FakeAsyncClient):
+        async def post(self, *_args: Any, **_kwargs: Any) -> _FakeResponse:
+            return _FakeResponse()
+
+    monkeypatch.setattr(
+        compatible_provider.httpx,
+        "AsyncClient",
+        _FakeFallbackClient,
+    )
+    monkeypatch.setattr(
+        compatible_provider,
+        "aconnect_sse",
+        lambda *_args, **_kwargs: _EmptySSEContext(),
+    )
+
+    async def run_case() -> PolishCompletionResult:
+        provider = OpenAICompatiblePolishProvider(
+            PolishProviderConfig(
+                name="openai_compatible",
+                api_key="test-key",
+                base_url="https://example.test/v1",
+                timeout_s=10,
+            )
+        )
+        try:
+            return await provider.complete(
+                PolishCompletionRequest(
+                    model="mimo-v2.5-pro",
+                    messages=[{"role": "user", "content": "原文"}],
+                )
+            )
+        finally:
+            await provider.close()
+
+    result = asyncio.run(run_case())
+    assert result.text == "非流式结果"
+    assert result.usage is not None
+    assert result.usage.prompt_tokens == 900
+    assert result.usage.cached_tokens == 896
+    assert result.usage.completion_tokens == 3
 
 
 def test_openrouter_provider_falls_back_to_nonstream(

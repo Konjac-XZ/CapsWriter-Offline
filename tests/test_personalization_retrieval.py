@@ -8,8 +8,9 @@ from src.personalization.retrieval import (
 )
 from src.personalization.store import RetrievedPreference
 from src.polish import llm_polish
+from src.polish.active_textbox_state import ActiveTextBoxState
 from src.polish.llm_polish import PolishRequestContext, _build_messages
-from src.polish.providers.base import PolishCompletionResult
+from src.polish.providers.base import PolishCompletionResult, PolishUsage
 
 
 def test_personalization_is_opt_in():
@@ -49,6 +50,43 @@ def test_rendered_preferences_are_bounded_data_before_asr():
     assert messages[-1]["content"].endswith("ASR 原文")
 
 
+def test_stable_lexicon_precedes_dynamic_context_and_preferences_follow_history():
+    messages = _build_messages(
+        "系统规则",
+        "ASR 原文",
+        "文本框上下文",
+        "视觉摘要",
+        history=["第一条历史"],
+        lexicon_message="固定用户词库",
+        session_constraint="当前任务约束",
+        learned_preference_message="本次命中的长期偏好",
+        active_textbox_state=ActiveTextBoxState(
+            source="test",
+            process_name="Code.exe",
+        ),
+    )
+    contents = [message["content"] for message in messages]
+
+    lexicon_index = contents.index("固定用户词库")
+    active_state_index = next(
+        index for index, content in enumerate(contents) if "Code.exe" in content
+    )
+    vision_index = next(
+        index for index, content in enumerate(contents) if "视觉摘要" in content
+    )
+    history_index = next(
+        index for index, content in enumerate(contents) if "第一条历史" in content
+    )
+    preference_index = contents.index("本次命中的长期偏好")
+    textbox_index = next(
+        index for index, content in enumerate(contents) if "文本框上下文" in content
+    )
+
+    assert lexicon_index < active_state_index < vision_index
+    assert history_index < preference_index < textbox_index
+    assert messages[-1]["content"].endswith("ASR 原文")
+
+
 def test_rendering_drops_whole_entries_instead_of_truncating_data():
     preference = RetrievedPreference(
         id=1,
@@ -63,13 +101,24 @@ def test_rendering_drops_whole_entries_instead_of_truncating_data():
     assert render_preference_message([preference], 200) is None
 
 
-def test_every_polish_request_retrieves_and_attaches_matching_preferences(monkeypatch):
+def test_every_polish_request_retrieves_and_attaches_matching_preferences(
+    monkeypatch,
+    caplog,
+):
     captured_messages = []
 
     class FakeProvider:
         async def complete(self, request, **_kwargs):
             captured_messages.extend(request.messages)
-            return PolishCompletionResult("润色结果", 200)
+            return PolishCompletionResult(
+                "润色结果",
+                200,
+                PolishUsage(
+                    prompt_tokens=1000,
+                    cached_tokens=750,
+                    completion_tokens=20,
+                ),
+            )
 
     async def fake_get_provider(config):
         return FakeProvider()
@@ -106,6 +155,7 @@ def test_every_polish_request_retrieves_and_attaches_matching_preferences(monkey
     monkeypatch.setattr(llm_polish, "get_polish_provider", fake_get_provider)
     monkeypatch.setattr(retrieval, "retrieve_preference_message", fake_retrieve)
     monkeypatch.setattr(llm_polish, "is_smart_quotes_enabled", lambda: False)
+    caplog.set_level("INFO", logger="capswriter.polish.llm")
 
     result = asyncio.run(
         llm_polish.polish_text("Type Script", prepared_context=context)
@@ -114,3 +164,5 @@ def test_every_polish_request_retrieves_and_attaches_matching_preferences(monkey
     assert result == "润色结果"
     assert any(message["content"] == "命中的长期偏好" for message in captured_messages)
     assert captured_messages[-1]["content"].endswith("Type Script")
+    assert "cached_tokens=750" in caplog.text
+    assert "cache_hit_ratio=0.7500" in caplog.text

@@ -13,7 +13,9 @@ from src.polish.providers.base import (
     PolishCompletionResult,
     PolishProviderConfig,
     PolishStreamCallback,
+    extract_polish_usage,
     invoke_callback,
+    merge_polish_usage,
 )
 
 
@@ -135,6 +137,7 @@ class OpenAICompatiblePolishProvider:
         streamed_body = dict(body)
         streamed_body["stream"] = True
         current_text = ""
+        usage = None
 
         async with aconnect_sse(
             self._client,
@@ -157,6 +160,7 @@ class OpenAICompatiblePolishProvider:
                     text_part = extract_text_from_body(data)
                     is_delta = True
                 else:
+                    usage = merge_polish_usage(usage, extract_polish_usage(obj))
                     text_part, is_delta = _extract_stream_text(obj)
 
                 if not isinstance(text_part, str) or not text_part:
@@ -175,7 +179,7 @@ class OpenAICompatiblePolishProvider:
                 await invoke_callback(on_text, current_text)
 
         text = current_text if current_text.strip() else None
-        return PolishCompletionResult(text, status_code)
+        return PolishCompletionResult(text, status_code, usage)
 
     async def _nonstream(
         self,
@@ -188,11 +192,14 @@ class OpenAICompatiblePolishProvider:
         response = await self._client.post(url, headers=headers, json=nonstream_body)
         if response.status_code >= 400:
             return PolishCompletionResult(None, response.status_code)
+        usage = None
         try:
-            body_text = json.dumps(response.json(), ensure_ascii=False)
+            payload = response.json()
+            usage = extract_polish_usage(payload)
+            body_text = json.dumps(payload, ensure_ascii=False)
         except Exception:
             body_text = response.text
         text = extract_text_from_body(body_text)
         if not isinstance(text, str) or not text.strip():
             text = None
-        return PolishCompletionResult(text, response.status_code)
+        return PolishCompletionResult(text, response.status_code, usage)

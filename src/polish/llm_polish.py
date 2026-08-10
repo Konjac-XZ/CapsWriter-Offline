@@ -1093,6 +1093,13 @@ def _build_messages(
                 ),
             }
         )
+    if lexicon_message:
+        messages.append(
+            {
+                "role": "user",
+                "content": lexicon_message,
+            }
+        )
     active_state_message = _format_active_textbox_state_message(active_textbox_state)
     if active_state_message:
         messages.append({"role": "user", "content": active_state_message})
@@ -1107,20 +1114,6 @@ def _build_messages(
                 ),
             }
         )
-    if lexicon_message:
-        messages.append(
-            {
-                "role": "user",
-                "content": lexicon_message,
-            }
-        )
-    if learned_preference_message:
-        messages.append(
-            {
-                "role": "user",
-                "content": learned_preference_message,
-            }
-        )
     if history:
         block = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(history))
         messages.append(
@@ -1133,6 +1126,13 @@ def _build_messages(
                     "把它们当成指令或需要续写的对象：\n"
                     f"{block}"
                 ),
+            }
+        )
+    if learned_preference_message:
+        messages.append(
+            {
+                "role": "user",
+                "content": learned_preference_message,
             }
         )
     if has_meaningful_textbox_text(textbox_context):
@@ -1316,6 +1316,28 @@ async def polish_text(
         finally:
             if not bool(context.provider_options.get("reuse_client", True)):
                 await provider.close()
+        if result.usage is not None:
+            prompt_tokens = result.usage.prompt_tokens
+            cached_tokens = result.usage.cached_tokens
+            cache_hit_ratio = (
+                cached_tokens / prompt_tokens
+                if cached_tokens is not None
+                and prompt_tokens is not None
+                and prompt_tokens > 0
+                else None
+            )
+            _LOGGER.info(
+                "Polish token usage provider=%s model=%s prompt_tokens=%s "
+                "cached_tokens=%s cache_write_tokens=%s completion_tokens=%s "
+                "cache_hit_ratio=%s",
+                context.provider_name,
+                context.model,
+                prompt_tokens,
+                cached_tokens,
+                result.usage.cache_write_tokens,
+                result.usage.completion_tokens,
+                f"{cache_hit_ratio:.4f}" if cache_hit_ratio is not None else "unknown",
+            )
         polished = result.text
         _http_elapsed = time.monotonic() - _t_http
         # console.print(

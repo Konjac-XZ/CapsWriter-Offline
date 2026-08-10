@@ -15,7 +15,9 @@ from src.polish.providers.base import (
     PolishCompletionResult,
     PolishProviderConfig,
     PolishStreamCallback,
+    extract_polish_usage,
     invoke_callback,
+    merge_polish_usage,
 )
 
 
@@ -154,7 +156,9 @@ class OpenRouterPolishProvider:
         try:
             stream = await self._client.chat.send_async(stream=True, **kwargs)
             current_text = ""
+            usage = None
             async for chunk in stream:
+                usage = merge_polish_usage(usage, extract_polish_usage(chunk))
                 delta = _extract_delta(chunk)
                 if not delta:
                     continue
@@ -168,7 +172,7 @@ class OpenRouterPolishProvider:
                     f"elapsed={time.perf_counter() - stream_started_at:.2f}s, "
                     f"chars={len(current_text)}）"
                 )
-                return PolishCompletionResult(current_text, 200)
+                return PolishCompletionResult(current_text, 200, usage)
         except Exception as exc:
             # Match the legacy transport behavior: retry once without streaming.
             _emit_error(
@@ -200,6 +204,7 @@ class OpenRouterPolishProvider:
             )
             raise
         text = _extract_result_text(result)
+        usage = extract_polish_usage(result)
         if not text or not text.strip():
             _emit_error(
                 "[LLM 润色][OpenRouter] 非流式响应未包含可用文本"
@@ -213,7 +218,7 @@ class OpenRouterPolishProvider:
                 f"elapsed={time.perf_counter() - fallback_started_at:.2f}s, "
                 f"chars={len(text)}）"
             )
-        return PolishCompletionResult(text, 200)
+        return PolishCompletionResult(text, 200, usage)
 
     def _build_kwargs(self, request: PolishCompletionRequest) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
