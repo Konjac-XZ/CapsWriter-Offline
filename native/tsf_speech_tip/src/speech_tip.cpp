@@ -569,7 +569,10 @@ public:
             return S_OK;
         }
         ++tracking_end_edit_events_;
-        if (HasActiveComposition(context)) {
+        const auto text_update_relevance = caps_writer::tsf::InspectTextUpdates(
+            edit_record, tracked_range_, read_cookie);
+        if (HasForeignCompositionIntersectingRange(
+                context, tracked_range_, read_cookie)) {
             if (!tracked_foreign_composition_seen_) {
                 SendTrackingDiagnostic(
                     tracked_session_,
@@ -592,8 +595,16 @@ public:
                 L"tracking_resumed foreign_composition_completed");
         }
         if (!resumed_foreign_composition &&
-            !caps_writer::tsf::MayContainTextUpdates(edit_record)) {
-            ++tracking_non_text_events_skipped_;
+            (text_update_relevance ==
+                 caps_writer::tsf::TextUpdateRelevance::None ||
+             text_update_relevance ==
+                 caps_writer::tsf::TextUpdateRelevance::Unrelated)) {
+            if (text_update_relevance ==
+                caps_writer::tsf::TextUpdateRelevance::None) {
+                ++tracking_non_text_events_skipped_;
+            } else {
+                ++tracking_unrelated_text_events_skipped_;
+            }
             MaybeSendTrackingPerformanceSummary();
             return S_OK;
         }
@@ -629,12 +640,14 @@ public:
                     shifted == -static_cast<LONG>(missing)) {
                     expand_result = ReadRangeText(expanded, read_cookie, &candidate);
                 }
-                SafeRelease(expanded);
-                if (SUCCEEDED(expand_result) &&
-                    candidate.size() == text.size() + missing) {
+                if (SUCCEEDED(expand_result) && candidate == tracked_text_) {
+                    tracked_range_->Release();
+                    tracked_range_ = expanded;
+                    expanded = nullptr;
                     text = std::move(candidate);
                     recovered_prefix = true;
                 }
+                SafeRelease(expanded);
             }
         }
         if (text == tracked_text_) {
@@ -1694,6 +1707,17 @@ private:
                 L"tracking_start missing_context_or_range");
             return;
         }
+        const HRESULT gravity_result = range->SetGravity(
+            edit_cookie, TF_GRAVITY_FORWARD, TF_GRAVITY_BACKWARD);
+        if (FAILED(gravity_result)) {
+            SendTrackingDiagnostic(
+                session_id,
+                revision,
+                Status::EditSessionFailed,
+                L"tracking_start inward_gravity_failed hr=" +
+                    std::to_wstring(static_cast<std::int64_t>(gravity_result)));
+            return;
+        }
         ITfSource* source = nullptr;
         if (FAILED(context->QueryInterface(IID_PPV_ARGS(&source))) || source == nullptr) {
             SendTrackingDiagnostic(
@@ -1734,7 +1758,8 @@ private:
             tracked_session_,
             tracked_revision_,
             Status::Applied,
-            L"tracking_started chars=" + std::to_wstring(tracked_text_.size()));
+            L"tracking_started chars=" + std::to_wstring(tracked_text_.size()) +
+                L" inward_gravity=true");
     }
 
     void ClearTrackedTextState() noexcept {
@@ -1790,8 +1815,11 @@ private:
         }
     }
 
-    static bool HasActiveComposition(ITfContext* context) {
-        if (context == nullptr) {
+    static bool HasForeignCompositionIntersectingRange(
+        ITfContext* context,
+        ITfRange* tracked_range,
+        TfEditCookie edit_cookie) {
+        if (context == nullptr || tracked_range == nullptr) {
             return false;
         }
         ITfContextComposition* context_composition = nullptr;
@@ -1800,17 +1828,50 @@ private:
             return false;
         }
         IEnumITfCompositionView* enumeration = nullptr;
-        const HRESULT enum_result = context_composition->EnumCompositions(&enumeration);
+        const HRESULT enum_result = context_composition->FindComposition(
+            edit_cookie, tracked_range, &enumeration);
         context_composition->Release();
         if (FAILED(enum_result) || enumeration == nullptr) {
             return false;
         }
-        ITfCompositionView* view = nullptr;
-        ULONG fetched = 0;
-        const HRESULT next_result = enumeration->Next(1, &view, &fetched);
+        bool found_foreign_intersection = false;
+        while (true) {
+            ITfCompositionView* view = nullptr;
+            ULONG fetched = 0;
+            const HRESULT next_result = enumeration->Next(1, &view, &fetched);
+            if (next_result == S_FALSE || fetched == 0) {
+                SafeRelease(view);
+                break;
+            }
+            if (FAILED(next_result) || view == nullptr) {
+                SafeRelease(view);
+                found_foreign_intersection = true;
+                break;
+            }
+
+            ITfRange* composition_range = nullptr;
+            const HRESULT range_result = view->GetRange(&composition_range);
+            CLSID owner{};
+            const HRESULT owner_result = view->GetOwnerClsid(&owner);
+            view->Release();
+            if (FAILED(range_result) || composition_range == nullptr) {
+                SafeRelease(composition_range);
+                found_foreign_intersection = true;
+                break;
+            }
+            const auto relation = caps_writer::tsf::CompareRangeToTracked(
+                composition_range, tracked_range, edit_cookie);
+            composition_range->Release();
+            if (!caps_writer::tsf::IntersectsTrackedInterior(relation)) {
+                continue;
+            }
+            if (FAILED(owner_result) || !IsEqualCLSID(owner, kTextServiceClsid)) {
+                found_foreign_intersection = true;
+                break;
+            }
+        }
         enumeration->Release();
-        SafeRelease(view);
-        return SUCCEEDED(next_result) && fetched == 1;
+        return found_foreign_intersection;
     }
 
     void SendTrackingDiagnostic(
@@ -1883,6 +1944,8 @@ private:
                 L" end_edits=" + std::to_wstring(tracking_end_edit_events_) +
                 L" non_text_skipped=" +
                 std::to_wstring(tracking_non_text_events_skipped_) +
+                L" unrelated_text_skipped=" +
+                std::to_wstring(tracking_unrelated_text_events_skipped_) +
                 L" text_processed=" +
                 std::to_wstring(tracking_text_events_processed_) +
                 L" snapshots=" +
@@ -1901,6 +1964,7 @@ private:
     void ResetTrackingPerformanceMetrics() noexcept {
         tracking_end_edit_events_ = 0;
         tracking_non_text_events_skipped_ = 0;
+        tracking_unrelated_text_events_skipped_ = 0;
         tracking_text_events_processed_ = 0;
         tracking_snapshots_generated_ = 0;
         tracking_snapshots_coalesced_ = 0;
@@ -2272,6 +2336,7 @@ private:
     bool tracked_foreign_composition_seen_ = false;
     std::uint64_t tracking_end_edit_events_ = 0;
     std::uint64_t tracking_non_text_events_skipped_ = 0;
+    std::uint64_t tracking_unrelated_text_events_skipped_ = 0;
     std::uint64_t tracking_text_events_processed_ = 0;
     std::uint64_t tracking_snapshots_generated_ = 0;
     std::uint64_t tracking_snapshots_coalesced_ = 0;
