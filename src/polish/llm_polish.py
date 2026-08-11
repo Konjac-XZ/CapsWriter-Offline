@@ -7,6 +7,7 @@ import os
 import sys
 import threading
 import time
+import unicodedata
 from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -243,6 +244,20 @@ def _personalization_enabled() -> bool:
     return bool(personalization.get("enabled", False))
 
 
+def _is_trailing_punctuation_only_edit(original: str, current: str) -> bool:
+    """Return whether only the trailing Unicode punctuation run changed."""
+
+    def without_trailing_punctuation(text: str) -> str:
+        end = len(text)
+        while end and unicodedata.category(text[end - 1]).startswith("P"):
+            end -= 1
+        return text[:end]
+
+    return original != current and (
+        without_trailing_punctuation(original) == without_trailing_punctuation(current)
+    )
+
+
 def record_finalized_text(
     text: str,
     session_id: str | None = None,
@@ -294,7 +309,10 @@ def record_finalized_text(
                 asr_text=(asr_text or text).strip(),
                 session_id=session_id,
                 tracking_status=(
-                    "unchanged" if current_text == text.strip() else "edited"
+                    "unchanged"
+                    if current_text == text.strip()
+                    or _is_trailing_punctuation_only_edit(text.strip(), current_text)
+                    else "edited"
                 ),
                 committed_at=time.time(),
             )
@@ -302,7 +320,12 @@ def record_finalized_text(
         if len(_finalized_history) > max_size:
             _finalized_history = _finalized_history[-max_size:]
         save_finalized_history(_finalized_history)
-        if personalization_enabled and session_id and current_text != text.strip():
+        if (
+            personalization_enabled
+            and session_id
+            and current_text != text.strip()
+            and not _is_trailing_punctuation_only_edit(text.strip(), current_text)
+        ):
             try:
                 from src.personalization import record_correction
 
@@ -366,13 +389,24 @@ def update_finalized_text(session_id: str, current_text: str) -> bool:
             normalized = current_text.strip()
             if not normalized:
                 return False
+            was_edited = item.tracking_status == "edited"
+            punctuation_only = _is_trailing_punctuation_only_edit(
+                item.original_text, normalized
+            )
             item.current_text = normalized
             item.tracking_status = (
-                "unchanged" if normalized == item.original_text else "edited"
+                "unchanged"
+                if normalized == item.original_text or punctuation_only
+                else "edited"
             )
             item.modified_at = time.time()
             save_finalized_history(_finalized_history)
-            if _personalization_enabled():
+            should_update_correction = (
+                item.tracking_status == "edited"
+                or normalized == item.original_text
+                or (punctuation_only and was_edited)
+            )
+            if _personalization_enabled() and should_update_correction:
                 try:
                     from src.personalization import record_correction
 
@@ -380,7 +414,9 @@ def update_finalized_text(session_id: str, current_text: str) -> bool:
                         session_id=session_id,
                         asr_text=item.asr_text,
                         committed_text=item.original_text,
-                        corrected_text=normalized,
+                        corrected_text=(
+                            item.original_text if punctuation_only else normalized
+                        ),
                         observed_at=item.modified_at,
                     )
                 except Exception:

@@ -110,6 +110,113 @@ def test_tsf_edit_updates_history_and_exposes_before_after(monkeypatch, tmp_path
     ]
 
 
+@pytest.mark.parametrize(
+    ("original", "current"),
+    [
+        ("只是删除句号。", "只是删除句号"),
+        ("把句号换成问号。", "把句号换成问号？"),
+        ("保留正文。”", "保留正文"),
+        ("原本没有标点", "原本没有标点！"),
+    ],
+)
+def test_trailing_punctuation_only_edit_is_not_captured(
+    monkeypatch, original: str, current: str
+):
+    monkeypatch.setattr(
+        llm_polish,
+        "_cfg",
+        lambda: {
+            "history": {"enabled": True, "max_size": 5},
+            "personalization": {"enabled": True},
+        },
+    )
+    monkeypatch.setattr(llm_polish, "_qwen_asr_history_settings", lambda: (False, 0))
+    monkeypatch.setattr(llm_polish, "_finalized_history", [])
+    monkeypatch.setattr(llm_polish, "_history_loaded", True)
+    corrections = []
+    monkeypatch.setattr(
+        "src.personalization.record_correction",
+        lambda **kwargs: corrections.append(kwargs),
+    )
+
+    llm_polish.record_finalized_text(original, "session-1")
+    assert llm_polish.update_finalized_text("session-1", current)
+
+    item = llm_polish._finalized_history[0]
+    assert item.current_text == current
+    assert item.tracking_status == "unchanged"
+    assert llm_polish.get_finalized_history() == [current]
+    assert corrections == []
+
+
+@pytest.mark.parametrize(
+    ("original", "current"),
+    [
+        ("正文，仍然相同。", "正文仍然相同。"),
+        ("正文相同。", "正文已经不同。"),
+        ("version 1.0。", "version 1.1。"),
+    ],
+)
+def test_non_terminal_edit_is_still_captured(monkeypatch, original: str, current: str):
+    monkeypatch.setattr(
+        llm_polish,
+        "_cfg",
+        lambda: {
+            "history": {"enabled": True, "max_size": 5},
+            "personalization": {"enabled": True},
+        },
+    )
+    monkeypatch.setattr(llm_polish, "_qwen_asr_history_settings", lambda: (False, 0))
+    monkeypatch.setattr(llm_polish, "_finalized_history", [])
+    monkeypatch.setattr(llm_polish, "_history_loaded", True)
+    corrections = []
+    monkeypatch.setattr(
+        "src.personalization.record_correction",
+        lambda **kwargs: corrections.append(kwargs),
+    )
+
+    llm_polish.record_finalized_text(original, "session-1")
+    assert llm_polish.update_finalized_text("session-1", current)
+
+    item = llm_polish._finalized_history[0]
+    assert item.tracking_status == "edited"
+    assert llm_polish.get_finalized_history() == [
+        f"语音上屏：{original}\n用户改为：{current}"
+    ]
+    assert corrections[-1]["corrected_text"] == current
+
+
+def test_trailing_punctuation_only_edit_withdraws_pending_correction(monkeypatch):
+    monkeypatch.setattr(
+        llm_polish,
+        "_cfg",
+        lambda: {
+            "history": {"enabled": True, "max_size": 5},
+            "personalization": {"enabled": True},
+        },
+    )
+    monkeypatch.setattr(llm_polish, "_qwen_asr_history_settings", lambda: (False, 0))
+    monkeypatch.setattr(llm_polish, "_finalized_history", [])
+    monkeypatch.setattr(llm_polish, "_history_loaded", True)
+    corrections = []
+    monkeypatch.setattr(
+        "src.personalization.record_correction",
+        lambda **kwargs: corrections.append(kwargs),
+    )
+
+    llm_polish.record_finalized_text("原始正文。", "session-1")
+    assert llm_polish.update_finalized_text("session-1", "中间修改。")
+    assert llm_polish.update_finalized_text("session-1", "原始正文")
+
+    item = llm_polish._finalized_history[0]
+    assert item.current_text == "原始正文"
+    assert item.tracking_status == "unchanged"
+    assert [event["corrected_text"] for event in corrections] == [
+        "中间修改。",
+        "原始正文。",
+    ]
+
+
 def test_empty_tsf_update_is_ignored(monkeypatch):
     monkeypatch.setattr(
         llm_polish,
@@ -238,3 +345,41 @@ def test_correction_observed_before_history_binding_is_journaled(monkeypatch):
             "SELECT asr_text, committed_text, corrected_text FROM correction_events"
         ).fetchone()
     assert tuple(correction) == ("泰普斯克瑞普特", "Type Script", "TypeScript")
+
+
+def test_trailing_punctuation_edit_before_history_binding_is_not_captured(monkeypatch):
+    class AlreadyEditedBridge:
+        def get_tracked_text(self, session_id):
+            assert session_id == "session-race"
+            return "删掉句末标点"
+
+    monkeypatch.setattr(
+        "src.tsf_ipc.get_tsf_speech_tip_bridge",
+        lambda: AlreadyEditedBridge(),
+    )
+    monkeypatch.setattr(
+        llm_polish,
+        "_cfg",
+        lambda: {
+            "history": {"enabled": True, "max_size": 20},
+            "personalization": {"enabled": True},
+        },
+    )
+    monkeypatch.setattr(llm_polish, "_qwen_asr_history_settings", lambda: (False, 0))
+    monkeypatch.setattr(llm_polish, "_finalized_history", [])
+    monkeypatch.setattr(llm_polish, "_history_loaded", False)
+
+    llm_polish.record_finalized_text(
+        "删掉句末标点。",
+        "session-race",
+        asr_text="删掉句末标点",
+    )
+
+    item = llm_polish._finalized_history[0]
+    assert item.current_text == "删掉句末标点"
+    assert item.tracking_status == "unchanged"
+    with state_db.connection() as database:
+        correction_count = database.execute(
+            "SELECT COUNT(*) FROM correction_events"
+        ).fetchone()[0]
+    assert correction_count == 0
