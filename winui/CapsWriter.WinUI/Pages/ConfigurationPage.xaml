@@ -159,7 +159,7 @@
                         <ToggleSwitch x:Name="HistoryToggle" Header="最近上屏内容" Toggled="ContextToggle_Toggled" OnContent="启用" OffContent="关闭" />
                         <ToggleSwitch x:Name="TextboxToggle" Grid.Column="1" Header="当前文本框" Toggled="ContextToggle_Toggled" OnContent="启用" OffContent="关闭" />
                         <ToggleSwitch x:Name="TextboxStateToggle" Grid.Column="2" Header="活动输入控件状态" Toggled="ContextToggle_Toggled" OnContent="启用" OffContent="关闭" />
-                        <ToggleSwitch x:Name="VisionToggle" Grid.Column="3" Header="活动窗口视觉摘要" Toggled="ContextToggle_Toggled" OnContent="启用" OffContent="关闭" />
+                        <ToggleSwitch x:Name="VisionToggle" Grid.Column="3" Header="活动窗口视觉摘要" Toggled="ContextToggle_Toggled" OnContent="启用" OffContent="关闭" Visibility="Collapsed" />
                     </Grid>
                 </StackPanel>
             </Border>
