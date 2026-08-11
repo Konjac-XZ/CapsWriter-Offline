@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+import re
 import sqlite3
 import threading
 import time
+import unicodedata
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -14,7 +17,7 @@ from src.infra.runtime_logging import application_data_directory
 
 STATE_DIRECTORY_NAME = "State"
 DATABASE_FILE_NAME = "capswriter.db"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _schema_lock = threading.Lock()
 _initialized_paths: set[Path] = set()
 
@@ -160,6 +163,14 @@ def _initialize(database: sqlite3.Connection, path: Path) -> None:
             "asr_text",
             "TEXT NOT NULL DEFAULT ''",
         )
+        schema_version_row = database.execute(
+            "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+        ).fetchone()
+        previous_schema_version = (
+            int(schema_version_row["value"]) if schema_version_row is not None else 0
+        )
+        if previous_schema_version < 3:
+            _split_preference_line_break_values(database)
         database.execute(
             "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -167,6 +178,79 @@ def _initialize(database: sqlite3.Connection, path: Path) -> None:
         )
         database.commit()
         _initialized_paths.add(resolved)
+
+
+def _split_preference_line_break_values(database: sqlite3.Connection) -> None:
+    """Repair list values saved as one item by the WinUI CR line separator."""
+    preference_rows = database.execute(
+        "SELECT id, avoid_values_json FROM learned_preferences"
+    ).fetchall()
+    for row in preference_rows:
+        try:
+            values = json.loads(str(row["avoid_values_json"]))
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(values, list):
+            continue
+        repaired = _split_string_values(values)
+        if repaired != values:
+            database.execute(
+                "UPDATE learned_preferences SET avoid_values_json = ? WHERE id = ?",
+                (json.dumps(repaired, ensure_ascii=False), int(row["id"])),
+            )
+
+    keyword_rows = database.execute(
+        "SELECT preference_id, keyword, normalized_keyword, weight "
+        "FROM preference_keywords"
+    ).fetchall()
+    for row in keyword_rows:
+        keyword = str(row["keyword"])
+        repaired = _split_text_value(keyword)
+        if repaired == [keyword]:
+            continue
+        database.execute(
+            "DELETE FROM preference_keywords "
+            "WHERE preference_id = ? AND normalized_keyword = ?",
+            (int(row["preference_id"]), str(row["normalized_keyword"])),
+        )
+        database.executemany(
+            "INSERT INTO preference_keywords("
+            "preference_id, keyword, normalized_keyword, weight) "
+            "VALUES(?, ?, ?, ?) "
+            "ON CONFLICT(preference_id, normalized_keyword) DO UPDATE SET "
+            "keyword = excluded.keyword, weight = MAX(weight, excluded.weight)",
+            [
+                (
+                    int(row["preference_id"]),
+                    value,
+                    _normalize_preference_keyword(value),
+                    float(row["weight"]),
+                )
+                for value in repaired
+                if _normalize_preference_keyword(value)
+            ],
+        )
+
+
+def _split_string_values(values: list[object]) -> list[object]:
+    repaired: list[object] = []
+    for value in values:
+        if not isinstance(value, str):
+            repaired.append(value)
+            continue
+        repaired.extend(_split_text_value(value))
+    return repaired
+
+
+def _split_text_value(value: str) -> list[str]:
+    if not re.search(r"[\r\n]", value):
+        return [value]
+    return [part.strip() for part in re.split(r"[\r\n]+", value) if part.strip()]
+
+
+def _normalize_preference_keyword(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    return re.sub(r"\s+", " ", normalized).strip()
 
 
 def _ensure_column(

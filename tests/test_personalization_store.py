@@ -111,6 +111,58 @@ def test_manual_preference_can_be_created_and_retrieved():
         )
 
 
+def test_manual_formatting_preference_preserves_explicit_retrieval_triggers():
+    preference_id = create_learned_preference(
+        kind="formatting",
+        preferred_value="使用全角空格包裹反引号代码块",
+        avoid_values=("`data`", "`src`"),
+        keywords=("JSON 文件", "子目录", "目录"),
+        status="active",
+    )
+
+    update_learned_preference(
+        preference_id=preference_id,
+        kind="formatting",
+        preferred_value="使用全角空格包裹反引号代码块",
+        avoid_values=("`data`", "`src`"),
+        keywords=("JSON 文件", "子目录", "目录"),
+        status="active",
+    )
+
+    item = cast(list[dict[str, object]], get_learned_preferences_snapshot()["items"])[0]
+    assert item["avoid_values"] == ["`data`", "`src`"]
+    assert item["keywords"] == ["JSON 文件", "子目录", "目录"]
+    assert search_preferences("JSON 文件")
+    assert search_preferences("`data`") == []
+
+
+def test_manual_exact_preference_uses_avoid_values_when_keywords_are_empty():
+    create_learned_preference(
+        kind="terminology",
+        preferred_value="dnsmasq",
+        avoid_values=("DNS mask", "DNSMask"),
+        keywords=(),
+        status="active",
+    )
+
+    item = cast(list[dict[str, object]], get_learned_preferences_snapshot()["items"])[0]
+    assert item["keywords"] == ["DNS mask", "DNSMask"]
+
+
+def test_manual_preference_splits_embedded_line_breaks():
+    create_learned_preference(
+        kind="formatting",
+        preferred_value="使用上下文格式",
+        avoid_values=("旧格式一\r旧格式二\n旧格式三",),
+        keywords=("上下文一\r\n上下文二",),
+        status="active",
+    )
+
+    item = cast(list[dict[str, object]], get_learned_preferences_snapshot()["items"])[0]
+    assert item["avoid_values"] == ["旧格式一", "旧格式二", "旧格式三"]
+    assert item["keywords"] == ["上下文一", "上下文二"]
+
+
 def test_correction_is_durable_and_multiple_edits_coalesce():
     assert record_correction(
         session_id="session-1",

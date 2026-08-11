@@ -794,7 +794,12 @@ def _prepare_manual_preference(
         raise ValueError("preferred_value must contain 1 to 200 characters")
     safe_avoid = _validated_values(avoid_values, max_items=8, max_chars=80)
     safe_keywords = _validated_values(keywords, max_items=12, max_chars=80)
-    trigger_values = _dedupe_values((*safe_keywords, *safe_avoid))
+    requested_triggers = safe_keywords
+    if not requested_triggers and safe_kind in EXACT_REPLACEMENT_KINDS:
+        requested_triggers = safe_avoid
+    trigger_values = tuple(
+        value for value in requested_triggers if _valid_keyword(value)
+    )
     if safe_status == "active" and not trigger_values:
         raise ValueError("active preference must contain retrieval keywords")
     proposal = PreferenceProposal(
@@ -993,14 +998,19 @@ def clear_personalization_data() -> dict[str, int]:
 def _validated_values(
     values: Sequence[str], *, max_items: int, max_chars: int
 ) -> tuple[str, ...]:
-    if len(values) > max_items:
-        raise ValueError("too many preference values")
     cleaned: list[str] = []
     for value in values:
         if not isinstance(value, str):
             raise ValueError("preference values must be strings")
-        item = value.strip()
-        if not item or len(item) > max_chars:
+        if not value.strip():
             raise ValueError("preference value has an invalid length")
-        cleaned.append(item)
+        for part in re.split(r"[\r\n]+", value):
+            item = part.strip()
+            if not item:
+                continue
+            if len(item) > max_chars:
+                raise ValueError("preference value has an invalid length")
+            cleaned.append(item)
+    if len(cleaned) > max_items:
+        raise ValueError("too many preference values")
     return _dedupe_values(cleaned)

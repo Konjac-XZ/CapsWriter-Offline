@@ -158,19 +158,21 @@ public sealed partial class ReflectionPage : Page
         TextBox avoidValuesBox = new()
         {
             Header = "避免内容（每行一项）",
-            Text = string.Join(Environment.NewLine, preference.AvoidValues),
             AcceptsReturn = true,
             TextWrapping = TextWrapping.Wrap,
             MinHeight = 72,
         };
+        // Assign Text only after AcceptsReturn is enabled. Setting multiline text
+        // while the control is still single-line truncates it at the first break.
+        avoidValuesBox.Text = string.Join(Environment.NewLine, preference.AvoidValues);
         TextBox keywordsBox = new()
         {
             Header = "检索触发词（每行一项）",
-            Text = string.Join(Environment.NewLine, preference.Keywords),
             AcceptsReturn = true,
             TextWrapping = TextWrapping.Wrap,
             MinHeight = 72,
         };
+        keywordsBox.Text = string.Join(Environment.NewLine, preference.Keywords);
         ComboBox kindBox = BuildOptionBox(
             "类型",
             new (string Value, string Label)[]
@@ -287,7 +289,7 @@ public sealed partial class ReflectionPage : Page
         (comboBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? string.Empty;
 
     private static List<string> ParseLines(string text) =>
-        text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)
+        text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
             .Select(value => value.Trim())
             .Where(value => value.Length > 0)
             .Distinct(StringComparer.OrdinalIgnoreCase)
