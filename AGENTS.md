@@ -23,6 +23,7 @@
 - Use `python test_replicate.py <audio>` to exercise external provider uploads; mock network calls when promoting these flows to automated tests.
 - Place new automated checks in `tests/` and target async flows with `pytest` plus `pytest-asyncio`; mirror filenames from `src/` for traceability.
 - Verify GUI edits by running `start_client_gui.py`, then capture before/after screenshots of modified dialogs.
+- Unless the user gives different instructions or an exceptional obstacle prevents it (for example, a required resource is in use), always rebuild, deploy, and launch the new version before reporting that the work is complete.
 - Computer Use is optional and should be used only when GUI interaction is
   necessary for the requested task and the user has not asked to keep control
   of the desktop. A build or deployment alone does not require Computer Use.
